@@ -42,25 +42,33 @@ def _chat_body(payload: dict[str, object]) -> dict[str, object]:
 
 
 def _importance_items(n: int) -> list[OllamaImportance]:
-    return [
-        OllamaImportance(
-            object_id=generate_ksuid(),
-            content=f"item {i} content",
-            captured_importance=5,
+    items: list[OllamaImportance] = []
+    for i in range(n):
+        object_id = generate_ksuid()
+        items.append(
+            OllamaImportance(
+                object_id=object_id,
+                content=f"item {i} content",
+                captured_importance=5,
+                correlation_id=f"importance:{i}",
+            )
         )
-        for i in range(n)
-    ]
+    return items
 
 
 def _topic_items(n: int) -> list[OllamaTopic]:
-    return [
-        OllamaTopic(
-            object_id=generate_ksuid(),
-            content=f"item {i} content",
-            existing_tags=[],
+    items: list[OllamaTopic] = []
+    for i in range(n):
+        object_id = generate_ksuid()
+        items.append(
+            OllamaTopic(
+                object_id=object_id,
+                content=f"item {i} content",
+                correlation_id=f"topic:{i}",
+                existing_tags=[],
+            )
         )
-        for i in range(n)
-    ]
+    return items
 
 
 def _client() -> HttpxOllamaClient:
@@ -80,14 +88,14 @@ async def test_score_importance_happy_path(httpx_mock: HTTPXMock) -> None:
         json=_chat_body(
             {
                 "items": [
-                    {"id": items[0].object_id, "importance": 7},
-                    {"id": items[1].object_id, "importance": 3},
+                    {"id": items[0].correlation_id, "importance": 7},
+                    {"id": items[1].correlation_id, "importance": 3},
                 ]
             }
         ),
     )
     result = await _client().score_importance(items)
-    assert result == {items[0].object_id: 7, items[1].object_id: 3}
+    assert result == {items[0].correlation_id: 7, items[1].correlation_id: 3}
 
 
 async def test_score_importance_posts_chat_payload(httpx_mock: HTTPXMock) -> None:
@@ -95,7 +103,7 @@ async def test_score_importance_posts_chat_payload(httpx_mock: HTTPXMock) -> Non
     httpx_mock.add_response(
         url=f"{_BASE_URL}/api/chat",
         method="POST",
-        json=_chat_body({"items": [{"id": items[0].object_id, "importance": 6}]}),
+        json=_chat_body({"items": [{"id": items[0].correlation_id, "importance": 6}]}),
     )
     await _client().score_importance(items)
     req = httpx_mock.get_request()
@@ -124,7 +132,7 @@ async def test_score_importance_posts_chat_payload(httpx_mock: HTTPXMock) -> Non
     parsed_payload = json.loads(extracted)
 
     assert "items" in parsed_payload
-    assert parsed_payload["items"][0]["id"] == str(items[0].object_id)
+    assert parsed_payload["items"][0]["id"] == items[0].correlation_id
     assert parsed_payload["items"][0]["content"] == items[0].content
 
 
@@ -136,16 +144,19 @@ async def test_infer_topics_happy_path(httpx_mock: HTTPXMock) -> None:
         json=_chat_body(
             {
                 "items": [
-                    {"id": items[0].object_id, "topics": ["code/python", "project/musubi"]},
-                    {"id": items[1].object_id, "topics": []},
+                    {
+                        "id": items[0].correlation_id,
+                        "topics": ["code/python", "project/musubi"],
+                    },
+                    {"id": items[1].correlation_id, "topics": []},
                 ]
             }
         ),
     )
     result = await _client().infer_topics(items)
     assert result == {
-        items[0].object_id: ["code/python", "project/musubi"],
-        items[1].object_id: [],
+        items[0].correlation_id: ["code/python", "project/musubi"],
+        items[1].correlation_id: [],
     }
 
 
@@ -233,7 +244,7 @@ async def test_score_importance_returns_none_on_validation_failure(
     httpx_mock.add_response(
         url=f"{_BASE_URL}/api/chat",
         method="POST",
-        json=_chat_body({"items": [{"id": items[0].object_id, "importance": 42}]}),
+        json=_chat_body({"items": [{"id": items[0].correlation_id, "importance": 42}]}),
     )
     result = await _client().score_importance(items)
     assert result is None
@@ -244,7 +255,7 @@ async def test_debug_dir_receives_failed_response(httpx_mock: HTTPXMock, tmp_pat
     httpx_mock.add_response(
         url=f"{_BASE_URL}/api/chat",
         method="POST",
-        json=_chat_body({"items": [{"id": items[0].object_id, "importance": 999}]}),
+        json=_chat_body({"items": [{"id": items[0].correlation_id, "importance": 999}]}),
     )
     client = HttpxOllamaClient(base_url=_BASE_URL, model=_MODEL, debug_dir=tmp_path)
     result = await client.score_importance(items)
@@ -270,14 +281,14 @@ async def test_score_importance_partial_response_returns_matched_ids(
         json=_chat_body(
             {
                 "items": [
-                    {"id": items[0].object_id, "importance": 4},
-                    {"id": items[2].object_id, "importance": 8},
+                    {"id": items[0].correlation_id, "importance": 4},
+                    {"id": items[2].correlation_id, "importance": 8},
                 ]
             }
         ),
     )
     result = await _client().score_importance(items)
-    assert result == {items[0].object_id: 4, items[2].object_id: 8}
+    assert result == {items[0].correlation_id: 4, items[2].correlation_id: 8}
 
 
 async def test_score_importance_drops_hallucinated_ids(
@@ -291,14 +302,14 @@ async def test_score_importance_drops_hallucinated_ids(
         json=_chat_body(
             {
                 "items": [
-                    {"id": items[0].object_id, "importance": 6},
+                    {"id": items[0].correlation_id, "importance": 6},
                     {"id": fake_ksuid, "importance": 9},
                 ]
             }
         ),
     )
     result = await _client().score_importance(items)
-    assert result == {items[0].object_id: 6}
+    assert result == {items[0].correlation_id: 6}
 
 
 async def test_infer_topics_drops_invalid_ksuids(httpx_mock: HTTPXMock) -> None:
@@ -309,14 +320,14 @@ async def test_infer_topics_drops_invalid_ksuids(httpx_mock: HTTPXMock) -> None:
         json=_chat_body(
             {
                 "items": [
-                    {"id": items[0].object_id, "topics": ["code/python"]},
+                    {"id": items[0].correlation_id, "topics": ["code/python"]},
                     {"id": "not-a-ksuid", "topics": ["junk"]},
                 ]
             }
         ),
     )
     result = await _client().infer_topics(items)
-    assert result == {items[0].object_id: ["code/python"]}
+    assert result == {items[0].correlation_id: ["code/python"]}
 
 
 # ---------------------------------------------------------------------------

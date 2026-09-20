@@ -58,6 +58,14 @@ async def lifecycle_transition(
         qdrant,
         coordinator=coordinator,
         object_id=body.object_id,
+        # DELIBERATELY unqualified: `TransitionRequest` carries no namespace, so this
+        # endpoint genuinely does not have one to pass. `None` is explicit rather than
+        # omitted -- the signature has no default, so this is a decision recorded at the
+        # call site. An unqualified lookup REFUSES an ambiguous object_id rather than
+        # resolving to whichever row scrolls first, so the unsafe outcome is a 4xx and
+        # not a silent cross-namespace write. Adding `namespace` to the request body
+        # would be the real fix and is an API change, not this PR (musubi#771).
+        namespace=None,
         target_state=body.to_state,  # type: ignore[arg-type]
         actor=body.actor,
         reason=body.reason,

@@ -675,6 +675,10 @@ def test_ensure_schema_tolerates_two_process_duplicate_intent_kind_race(tmp_path
         def commit(self) -> None:
             self._real.commit()
 
+        @property
+        def in_transaction(self) -> bool:
+            return self._real.in_transaction
+
     real = store.connect(tmp_path / "race.db")
     store.ensure_schema(real)  # intent_kind now exists
 

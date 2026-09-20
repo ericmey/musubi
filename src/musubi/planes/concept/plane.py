@@ -450,6 +450,7 @@ class ConceptPlane:
             self._client,
             coordinator=coordinator,
             object_id=object_id,
+            namespace=namespace,
             target_state=to_state,
             actor=actor,
             reason=reason,

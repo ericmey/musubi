@@ -137,8 +137,19 @@ CREATE TABLE IF NOT EXISTS lifecycle_outbox (
     failure_class TEXT,
     intent_kind TEXT
 );
+-- Active-intent uniqueness is scoped to the FULL identity. `object_id` is not
+-- globally unique -- the same id legitimately exists under a different namespace --
+-- so a `(collection, object_id)` index rejected two independent rows' concurrent
+-- transitions as `active_intent_exists` and one of them could never proceed
+-- (Copilot, musubi#771). See `_migrate_active_intent_index` for existing DBs.
+-- COALESCE is load-bearing, not defensive noise. SQLite treats NULLs as DISTINCT in a
+-- unique index, so a single row with a NULL namespace would not collide with ANYTHING --
+-- widening the index from two columns to three would silently switch the constraint OFF
+-- for such rows instead of tightening it. Folding NULL onto '' keeps legacy rows
+-- constrained exactly as they were before, so the widening can only ever add precision.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent
-    ON lifecycle_outbox (collection, object_id) WHERE state IN ('PENDING','APPLIED');
+    ON lifecycle_outbox (collection, COALESCE(namespace, ''), object_id)
+    WHERE state IN ('PENDING','APPLIED');
 
 CREATE TABLE IF NOT EXISTS lifecycle_apply_markers (
     operation_key TEXT PRIMARY KEY,
@@ -286,7 +297,118 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             # OperationalError (a genuine schema/lock fault must still surface).
             if "duplicate column name" not in str(exc).lower():
                 raise
+    # End the schema-setup transaction BEFORE the migration, which owns its own.
     conn.commit()
+    _migrate_active_intent_index(conn)
+
+
+def _normalise_sql(sql: str) -> str:
+    """Lowercase with all whitespace removed, so the comparison is about STRUCTURE.
+
+    SQLite stores an index definition as written, so formatting differences are not
+    evidence of anything -- matching on the raw text would make the guard depend on how
+    somebody typed it."""
+    return "".join(sql.lower().split())
+
+
+_EXPECTED_ACTIVE_INTENT_KEY = "(collection,coalesce(namespace,''),object_id)"
+_EXPECTED_ACTIVE_INTENT_PREDICATE = "wherestatein('pending','applied')"
+_EXPECTED_ACTIVE_INTENT_DEFINITIONS = frozenset(
+    {
+        "createuniqueindexux_active_intentonlifecycle_outbox"
+        + _EXPECTED_ACTIVE_INTENT_KEY
+        + _EXPECTED_ACTIVE_INTENT_PREDICATE,
+        "createuniqueindexifnotexistsux_active_intentonlifecycle_outbox"
+        + _EXPECTED_ACTIVE_INTENT_KEY
+        + _EXPECTED_ACTIVE_INTENT_PREDICATE,
+    }
+)
+"""The exact ordered key expression ``ux_active_intent`` must have.
+
+Checking for the WORD `coalesce` was not enough: an index that coalesces the wrong
+field -- `COALESCE(collection,'')` -- contains it and would be accepted as current,
+leaving the NULL hazard exactly where it was. Testing for the presence of a mechanism
+instead of the mechanism being applied TO THE RIGHT OBJECT is the defect this whole
+change is about, and it reappeared inside the guard against it (Tama, musubi#771)."""
+
+
+def _active_intent_index_is_current(conn: sqlite3.Connection) -> bool:
+    """Return whether ``ux_active_intent`` has the complete required semantics.
+
+    SQLite exposes uniqueness and partiality as index metadata; neither property should
+    be inferred from a convenient substring in stored DDL. The expression key and exact
+    partial predicate still come from the normalized definition because SQLite's index
+    pragmas identify an expression column but do not reconstruct that expression.
+    """
+    metadata = next(
+        (
+            row
+            for row in conn.execute("PRAGMA index_list(lifecycle_outbox)").fetchall()
+            if str(row[1]) == "ux_active_intent"
+        ),
+        None,
+    )
+    if metadata is None or int(metadata[2]) != 1 or int(metadata[4]) != 1:
+        return False
+    definition = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+    ).fetchone()
+    if definition is None or definition[0] is None:
+        return False
+    normalized = _normalise_sql(str(definition[0]))
+    return normalized in _EXPECTED_ACTIVE_INTENT_DEFINITIONS
+
+
+def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
+    """Re-scope ``ux_active_intent`` to the full identity, atomically.
+
+    `CREATE UNIQUE INDEX IF NOT EXISTS` is a NO-OP when an index of that name already
+    exists, whatever its columns -- so a schema edit alone silently leaves every
+    pre-existing database on the old index. The defect would persist exactly where it
+    matters (deployments with data) and vanish in tests (fresh DBs).
+
+    **The lock is taken BEFORE the shape is read, and both statements share it.** Two
+    faults, and the second is the one that bites in production:
+
+    1. Deciding from an unlocked `sqlite_master` read lets two processes both see the
+       old shape and both migrate, the second acting on a decision already stale.
+    2. `DROP INDEX` outside a transaction COMMITS. Between it and the `CREATE`, the
+       partial unique index does not exist at all -- and any admission landing in that
+       window can insert a second active intent for one identity. A migration that
+       installs a constraint must never open a hole in it (Copilot/Yua, musubi#771).
+
+    Widening a unique index can never fail on existing rows: more columns means fewer
+    collisions, so any set legal under the old key is legal under the new one.
+    """
+    # This function OWNS its transaction from BEGIN to COMMIT and must be entered with
+    # none open. Committing a caller's in-flight transaction from in here would durably
+    # land unrelated work as a side effect of a schema check -- the caller ends its own
+    # (Yua, musubi#771).
+    if conn.in_transaction:
+        raise LifecycleStoreError(
+            "_migrate_active_intent_index requires no open transaction; the caller must "
+            "commit or roll back its own work before the index is replaced"
+        )
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not _active_intent_index_is_current(conn):
+            conn.execute("DROP INDEX ux_active_intent")
+            conn.execute(
+                "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+                "(collection, COALESCE(namespace, ''), object_id) "
+                "WHERE state IN ('PENDING','APPLIED')"
+            )
+        # COMMIT belongs INSIDE the try. A commit can fail -- disk full, I/O error, a
+        # lock lost -- and outside it that exception escapes with no rollback, leaving
+        # the connection in-transaction for whatever runs next. The rollback is guarded
+        # on `in_transaction` because after a failed COMMIT there may be nothing left to
+        # roll back, and an unconditional ROLLBACK would then raise over the real error
+        # (Yua, musubi#771).
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 __all__ = ["DEFAULT_BUSY_TIMEOUT_MS", "LifecycleStoreError", "connect", "ensure_schema"]

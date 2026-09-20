@@ -72,8 +72,13 @@ from musubi.lifecycle.coordinator import (
 )
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
-from musubi.lifecycle.transitions import LineageUpdates, TransitionError, transition
-from musubi.types.common import KSUID, Ok, epoch_of, utc_now
+from musubi.lifecycle.transitions import (
+    LineageUpdates,
+    TransitionError,
+    TransitionResult,
+    transition,
+)
+from musubi.types.common import KSUID, Ok, epoch_of, generate_ksuid, utc_now
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +117,15 @@ _DEFAULT_LLM_BATCH = 10
 _LIFECYCLE_ACTOR = "lifecycle-worker"
 """Actor recorded on every transition this module emits — matches the spec."""
 
+
+@dataclass(frozen=True)
+class _SupersessionCandidate:
+    """The exact predecessor snapshot selected by the semantic seam."""
+
+    object_id: KSUID
+    version: int
+
+
 # ---------------------------------------------------------------------------
 # OllamaClient — Protocol + production stub
 # ---------------------------------------------------------------------------
@@ -124,6 +138,7 @@ class OllamaImportance:
     object_id: KSUID
     content: str
     captured_importance: int
+    correlation_id: str
 
 
 @dataclass(frozen=True)
@@ -132,6 +147,7 @@ class OllamaTopic:
 
     object_id: KSUID
     content: str
+    correlation_id: str
     existing_tags: list[str] = field(default_factory=list)
 
 
@@ -140,12 +156,14 @@ class OllamaClient(Protocol):
 
     Both methods return ``None`` to signal "Ollama is unavailable" — the
     spec's failure-mode contract. A successful call returns a mapping of
-    ``object_id`` to enrichment value (importance int, or topics list).
+    each input's opaque ``correlation_id`` to its enrichment value (importance
+    int, or topics list). The sweep supplies a per-row key because object IDs
+    are not globally unique across namespaces.
     """
 
-    async def score_importance(self, items: list[OllamaImportance]) -> dict[KSUID, int] | None: ...
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None: ...
 
-    async def infer_topics(self, items: list[OllamaTopic]) -> dict[KSUID, list[str]] | None: ...
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None: ...
 
 
 class _NotConfiguredOllama:
@@ -159,7 +177,7 @@ class _NotConfiguredOllama:
     that reads ``Settings.ollama_url``.
     """
 
-    async def score_importance(self, items: list[OllamaImportance]) -> dict[KSUID, int] | None:
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
         raise NotImplementedError(
             "OllamaClient is not configured. The maturation sweep cannot run "
             "in production without a real OllamaClient wired in (see the "
@@ -167,7 +185,7 @@ class _NotConfiguredOllama:
             "instantiate a real client."
         )
 
-    async def infer_topics(self, items: list[OllamaTopic]) -> dict[KSUID, list[str]] | None:
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
         raise NotImplementedError(
             "OllamaClient is not configured. The maturation sweep cannot run "
             "in production without a real OllamaClient wired in (see the "
@@ -408,8 +426,9 @@ async def episodic_maturation_sweep(
             object_id=row["object_id"],
             content=row.get("content", ""),
             captured_importance=int(row.get("importance", 5)),
+            correlation_id=f"row:{index}",
         )
-        for row in candidates
+        for index, row in enumerate(candidates)
     ]
     importance_by_id = await _ollama_score_in_batches(ollama, importance_inputs)
 
@@ -418,8 +437,9 @@ async def episodic_maturation_sweep(
             object_id=row["object_id"],
             content=row.get("content", ""),
             existing_tags=list(row.get("tags", [])),
+            correlation_id=f"row:{index}",
         )
-        for row in candidates
+        for index, row in enumerate(candidates)
     ]
     topics_by_id = await _ollama_topics_in_batches(ollama, topic_inputs)
 
@@ -429,17 +449,18 @@ async def episodic_maturation_sweep(
     deferred: list[TransitionPending] = []
     max_epoch = cursor_value
 
-    for row in candidates:
+    for row_index, row in enumerate(candidates):
         object_id: KSUID = row["object_id"]
+        correlation_id = f"row:{row_index}"
         normalized = normalize_tags(row.get("tags", []), aliases=cfg.tag_aliases)
         new_importance = (
-            importance_by_id[object_id]
-            if importance_by_id is not None and object_id in importance_by_id
+            importance_by_id[correlation_id]
+            if importance_by_id is not None and correlation_id in importance_by_id
             else int(row.get("importance", 5))
         )
         new_topics = (
-            topics_by_id[object_id]
-            if topics_by_id is not None and object_id in topics_by_id
+            topics_by_id[correlation_id]
+            if topics_by_id is not None and correlation_id in topics_by_id
             else list(row.get("linked_to_topics", []))
         )
 
@@ -456,12 +477,12 @@ async def episodic_maturation_sweep(
         # ``_TEICompositeEmbedder`` (LIFE-009 production wiring).
         # ------------------------------------------------------------------
         lineage_updates: LineageUpdates | None = None
-        superseded_target_id: KSUID | None = None
+        superseded_target: _SupersessionCandidate | None = None
 
         _hint = detect_supersession_hint(row.get("content", ""))
         if _hint:
             seam_embedder: Embedder = embedder if embedder is not None else _NoopEmbedder()
-            superseded_target_id = await _find_supersession_candidate(
+            superseded_target = await _find_supersession_candidate(
                 client,
                 collection=_EPISODIC_COLLECTION,
                 namespace=row["namespace"],
@@ -470,8 +491,8 @@ async def episodic_maturation_sweep(
                 embedder=seam_embedder,
                 topics=new_topics,
             )
-            if superseded_target_id is not None:
-                lineage_updates = LineageUpdates(supersedes=[superseded_target_id])
+            if superseded_target is not None:
+                lineage_updates = LineageUpdates(supersedes=[superseded_target.object_id])
 
         # ------------------------------------------------------------------
         # Step 6 — canonical state transition.
@@ -485,6 +506,13 @@ async def episodic_maturation_sweep(
             reason="maturation-sweep",
             lineage_updates=lineage_updates,
             sink=sink,
+            # Qualify the canonical lookup: `object_id` is not globally unique, and an
+            # unqualified transition could mature a stranger's row and count it here.
+            namespace=row["namespace"],
+            # The candidate payload is the snapshot every enrichment value above was
+            # computed from. Refuse if another writer moved it after selection instead
+            # of maturing a newer row with stale derived data (Copilot, musubi#771).
+            expected_version=int(row["version"]),
         )
         if not isinstance(result, Ok):
             failed += 1
@@ -497,19 +525,33 @@ async def episodic_maturation_sweep(
         if is_transition_pending(result.value):
             deferred.append(result.value)
             continue
+        # The version this sweep just established. Captured here, where the outcome
+        # is known final, so the enrichment fence below can name the exact row this
+        # transition produced rather than any row that happens to read `matured`.
+        assert isinstance(result.value, TransitionResult)  # narrowed by the check above
+        matured_version = result.value.version
 
         # If we marked an old row as the predecessor, flip it to
         # "superseded" with the back-pointer. Bullet 13 covers both sides.
-        if superseded_target_id is not None:
+        if superseded_target is not None:
             back_result = transition(
                 client,
                 coordinator=coordinator,
-                object_id=superseded_target_id,
+                object_id=superseded_target.object_id,
+                # The predecessor is, by construction, in the same namespace:
+                # `_find_supersession_candidate` returns "the unique matured row in the
+                # SAME namespace". This back-link was one of four identical unqualified
+                # sites, one per plane (Aoi's enumeration, musubi#771).
+                namespace=row["namespace"],
                 target_state="superseded",
                 actor=_LIFECYCLE_ACTOR,
                 reason="maturation-sweep-supersession",
                 lineage_updates=LineageUpdates(superseded_by=object_id),
                 sink=sink,
+                # The semantic seam scored a particular predecessor payload. Refuse
+                # to supersede a newer row if another writer patches it before this
+                # back-link transition (Copilot, musubi#771).
+                expected_version=superseded_target.version,
             )
             if not isinstance(back_result, Ok):
                 # Roll-forward: the new row is matured, the old is
@@ -517,7 +559,7 @@ async def episodic_maturation_sweep(
                 log.warning(
                     "supersession-back-link-failed new=%s old=%s err=%r",
                     object_id,
-                    superseded_target_id,
+                    superseded_target.object_id,
                     back_result.error,
                 )
             elif is_transition_pending(back_result.value):
@@ -527,20 +569,49 @@ async def episodic_maturation_sweep(
         # Enrichment write — non-state fields, applied via set_payload on
         # the same point id. Not a state change → no separate ledger entry.
         # ------------------------------------------------------------------
-        importance_scored = importance_by_id is not None and object_id in importance_by_id
+        importance_scored = importance_by_id is not None and correlation_id in importance_by_id
         if _enrichment_changed(
             row, normalized, new_importance, new_topics, importance_scored=importance_scored
         ):
-            _apply_enrichment(
+            applied = _apply_enrichment(
                 client,
                 collection=_EPISODIC_COLLECTION,
+                point_id=row["_qdrant_point_id"],
+                namespace=row["namespace"],
                 object_id=object_id,
+                expected_version=matured_version,
                 tags=normalized,
                 importance=new_importance,
                 topics=new_topics,
                 importance_scored=importance_scored,
             )
-            enriched += 1
+            if applied:
+                enriched += 1
+            else:
+                # The version fence refused: something moved the row between this
+                # sweep's transition and its enrichment write. The transition itself
+                # stands, so the row is no longer `provisional` and will NOT be
+                # re-selected by a later sweep -- this enrichment is lost, not deferred.
+                #
+                # Recorded rather than swallowed. `enriched` must not count it (the
+                # write did not happen) and silence would make the loss invisible in
+                # the one report an operator reads (Copilot/Yua, musubi#771).
+                failed += 1
+                log.warning(
+                    # The fence has FOUR conditions and this path cannot tell which one
+                    # refused -- `state`/`version` movement and a concurrent mutation
+                    # lease produce the identical zero-match result. Naming one of them
+                    # sends an operator looking for a retraction when the real cause was
+                    # a lease, so the message names the OBSERVATION and lists the
+                    # possible causes (Copilot, musubi#771).
+                    "maturation-enrichment-refused object_id=%s namespace=%s version=%s "
+                    "(fence matched no row: the row moved state/version after the "
+                    "transition, or a concurrent mutation lease was held; enrichment "
+                    "not applied and not retried)",
+                    object_id,
+                    row["namespace"],
+                    matured_version,
+                )
 
         transitioned += 1
         row_epoch = float(row.get("updated_epoch", 0.0))
@@ -606,6 +677,7 @@ async def provisional_ttl_sweep(
             client,
             coordinator=coordinator,
             object_id=object_id,
+            namespace=row["namespace"],
             target_state="archived",
             actor=_LIFECYCLE_ACTOR,
             reason="provisional-ttl",
@@ -678,6 +750,7 @@ async def episodic_demotion_sweep(
             client,
             coordinator=coordinator,
             object_id=row["object_id"],
+            namespace=row["namespace"],
             target_state="demoted",
             actor=_LIFECYCLE_ACTOR,
             reason="maturation-demotion",
@@ -751,6 +824,7 @@ async def concept_maturation_sweep(
             client,
             coordinator=coordinator,
             object_id=row["object_id"],
+            namespace=row["namespace"],
             target_state="matured",
             actor=_LIFECYCLE_ACTOR,
             reason="concept-maturation",
@@ -802,6 +876,7 @@ async def concept_demotion_sweep(
             client,
             coordinator=coordinator,
             object_id=row["object_id"],
+            namespace=row["namespace"],
             target_state="demoted",
             actor=_LIFECYCLE_ACTOR,
             reason="concept-demotion",
@@ -870,7 +945,12 @@ def _scroll_eligible(
     out: list[dict[str, Any]] = []
     for rec in records:
         if rec.payload:
-            out.append(dict(rec.payload))
+            row = dict(rec.payload)
+            # Preserve the exact physical row selected by the sweep. Identity payload
+            # fields are not unique under corruption, so the later enrichment write
+            # must address this point as well as re-checking its logical fences.
+            row["_qdrant_point_id"] = rec.id
+            out.append(row)
     return out
 
 
@@ -885,8 +965,8 @@ async def _find_supersession_candidate(
     topics: list[str],
     similarity_threshold: float = 0.88,
     max_candidates: int = 20,
-) -> KSUID | None:
-    """Return the unique matured row in the same namespace that passes
+) -> _SupersessionCandidate | None:
+    """Return the unique matured-row snapshot in the same namespace that passes
     BOTH the semantic similarity AND the topic-compatibility checks
     (Issue #532 / LIFE-009).
 
@@ -938,12 +1018,15 @@ async def _find_supersession_candidate(
     # Topic-filter candidates first (no embedding needed; the topic
     # check is cheap). Surviving topic-compatible candidates are the
     # only rows whose dense vectors we will ever need.
-    candidate_pairs: list[tuple[KSUID, str]] = []
+    candidate_pairs: list[tuple[_SupersessionCandidate, str]] = []
     for rec in records:
         if not rec.payload:
             continue
         candidate_id = rec.payload.get("object_id")
         if not isinstance(candidate_id, str) or candidate_id == self_id:
+            continue
+        candidate_version = rec.payload.get("version")
+        if not isinstance(candidate_version, int) or isinstance(candidate_version, bool):
             continue
         candidate_content = (rec.payload.get("content") or "").strip().lower()
         if not candidate_content:
@@ -957,7 +1040,15 @@ async def _find_supersession_candidate(
         candidate_topics = rec.payload.get("linked_to_topics") or []
         if not any(t in topics for t in candidate_topics):
             continue
-        candidate_pairs.append((candidate_id, candidate_content))
+        candidate_pairs.append(
+            (
+                _SupersessionCandidate(
+                    object_id=candidate_id,
+                    version=candidate_version,
+                ),
+                candidate_content,
+            )
+        )
 
     # ONE batched embed_dense call (discriminator: at most one network
     # roundtrip per seam invocation). The needle rides in the SAME
@@ -989,7 +1080,7 @@ async def _find_supersession_candidate(
     needle_vec = vectors[0]
     needle_norm = math.sqrt(sum(x * x for x in needle_vec)) or 1.0
 
-    candidates: list[KSUID] = []
+    candidates: list[_SupersessionCandidate] = []
     for (cid, _), candidate_vec in zip(candidate_pairs, vectors[1:], strict=True):
         # The Embedder Protocol doesn't guarantee fixed-length vectors.
         # A misbehaving embedder returning a different-length candidate
@@ -1050,12 +1141,15 @@ def _apply_enrichment(
     client: QdrantClient,
     *,
     collection: str,
+    point_id: models.ExtendedPointId,
+    namespace: str,
     object_id: KSUID,
+    expected_version: int,
     tags: list[str],
     importance: int,
     topics: list[str],
     importance_scored: bool = False,
-) -> None:
+) -> bool:
     """Apply non-state enrichment fields to one row.
 
     ``importance_scored`` records the LLM score-audit timestamp. The field
@@ -1066,23 +1160,161 @@ def _apply_enrichment(
     the ``importance_last_scored_epoch`` float index in store/specs.py).
     """
     now = utc_now()
+    # An UNGUESSABLE per-attempt marker, written inside the same fenced `set_payload`
+    # and read back to attribute the write. `updated_epoch` could not do this job: the
+    # transition immediately before also writes it, and two `utc_now()` calls can land
+    # in the same microsecond -- so the readback could match the TRANSITION's write and
+    # report an enrichment that never landed (Copilot, musubi#771). A timestamp is a
+    # measurement of when, never proof of who. This marker is unique by construction.
+    attempt = generate_ksuid()
     payload: dict[str, Any] = {
         "tags": tags,
         "importance": importance,
         "linked_to_topics": topics,
         "updated_at": now.isoformat(),
         "updated_epoch": epoch_of(now),
+        "enrichment_attempt": attempt,
     }
     if importance_scored:
         payload["importance_last_scored_at"] = now.isoformat()
         payload["importance_last_scored_epoch"] = epoch_of(now)
-    client.set_payload(
+    # FENCED on the state this sweep just established. The transition and this
+    # enrichment are two writes, so anything that moves the row in between --
+    # a retraction quarantining it to `archived`/importance 1 is the live case --
+    # was previously overwritten here, giving a retracted row a rescored
+    # importance and a post-retraction `updated_at` (musubi#732, 2026-09-20).
+    #
+    # The state term protects the selected anchor from a concurrent archive; the
+    # between-read-and-write interleaving cell below pins that responsibility.
+    # Immutable v2 content siblings are excluded independently by the preflight's
+    # `point_kind` condition and by the selected anchor's physical point id.
+    logical_conditions: list[models.Condition] = [
+        # `object_id` is NOT globally unique -- the same id can exist under a
+        # different namespace, and an unqualified filter would enrich a
+        # stranger's row (Copilot, musubi#771).
+        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+        models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+        models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
+        # VERSION is the transition identity; `state` alone is not. An archived or
+        # demoted row can be restored to `matured`, and a stale snapshot would then
+        # satisfy a state-only fence and write enrichment computed for a row that
+        # has since moved (Copilot/Yua, musubi#771). A restore bumps the version, so
+        # this condition refuses anything that is not the exact row this sweep
+        # transitioned.
+        models.FieldCondition(key="version", match=models.MatchValue(value=expected_version)),
+    ]
+
+    # Refuse ambiguity BEFORE writing, matching the coordinator's canonical policy.
+    # The physical id captured at candidate selection is then included in the server
+    # fence to close the insertion-after-count race without deriving an id (converted
+    # legacy anchors do not necessarily use the current deterministic id scheme).
+    authoritative, _ = client.scroll(
         collection_name=collection,
-        payload=payload,
-        points=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+        scroll_filter=models.Filter(
+            must=logical_conditions,
+            must_not=[
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="content"))
+            ],
         ),
+        limit=2,
+        with_payload=False,
     )
+    if len(authoritative) != 1 or authoritative[0].id != point_id:
+        return False
+    conditions: list[models.Condition] = [
+        models.HasIdCondition(has_id=[point_id]),
+        *logical_conditions,
+    ]
+
+    # THE LEASE CHECK IS THE WRITE'S OWN CONDITION, not a preceding read.
+    #
+    # This was a python pre-read -- scroll, inspect `update_lease_token`, then
+    # `set_payload` on a fence that did not mention the lease. That is a TOCTOU: a
+    # writer acquiring the lease between the scroll and the write sails straight
+    # through, because the thing that was checked is not the thing that gated the
+    # write. Same defect class as enriching on `state` while `version` identifies the
+    # row -- right check, wrong object (Tama, musubi#771).
+    #
+    # Refusal here is STRICT: any token present, fresh or expired, refuses. That is
+    # sound only because expired-ordinary-token TAKEOVER happens in the coordinator
+    # BEFORE the transition, so by the time enrichment runs the row is known to have
+    # been lease-free at transition time. A token observed now was therefore acquired
+    # AFTER the transition -- genuinely concurrent, never a crashed-patch fossil -- and
+    # the liveness argument for tolerating expired tokens (Aoi's, and correct) does not
+    # reach this call site.
+    write_fence = models.Filter(
+        must=[
+            *conditions,
+            models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")),
+        ]
+    )
+    client.set_payload(collection_name=collection, payload=payload, points=write_fence)
+    # Success is read back from DURABLE STATE, never inferred from having issued the
+    # write. A pre-write count cannot prove a post-write outcome: count sees `matured`,
+    # a retraction archives the row, the fenced write then matches zero rows, and the
+    # caller is told an enrichment happened (Yua, musubi#771). `set_payload` reports
+    # operation status, not how many points it matched, so the only honest signal is
+    # to look afterwards.
+    #
+    # The discriminator is the per-attempt marker, which only THIS call could have
+    # written. It rides in the same fenced payload, so a row carrying it is a row this
+    # write landed on -- no clock, no coincidence.
+    applied = models.Filter(
+        must=[
+            *conditions,
+            models.FieldCondition(key="enrichment_attempt", match=models.MatchValue(value=attempt)),
+        ]
+    )
+    landed = client.count(collection_name=collection, count_filter=applied, exact=True).count == 1
+
+    # Remove the marker behind its own exact value, so the payload does not accumulate
+    # a field that means nothing after the answer is read. Fenced on the marker rather
+    # than on identity: if the row moved on between the readback and here, the delete
+    # must not touch it.
+    #
+    # CRASH RESIDUE IS SAFE BY DESIGN, and that is a claim with a cell. A process that
+    # dies between the write and this cleanup leaves a stale `enrichment_attempt`
+    # behind. Nothing reads the field except a count fenced on a freshly generated
+    # value, so a residual marker can never be mistaken for a later attempt's -- and
+    # the next enrichment overwrites it in the same `set_payload`.
+    # BEST-EFFORT, and skipped entirely when nothing landed. The authoritative answer is
+    # already determined above; cleanup is hygiene. Letting it raise would turn a
+    # DURABLE SUCCESS into a reported failure -- the caller would count `failed += 1`
+    # and log a refusal for enrichment that is sitting in the collection (Yua,
+    # musubi#771).
+    #
+    # Yes, this is the broad catch I just deleted from `_scroll_by_object_id`. The
+    # difference is what the result is used for, and it is worth stating rather than
+    # relying on: there, an exception was converted into an ANSWER ("no rows"), so
+    # failing open changed a decision. Here the decision is already made and recorded;
+    # suppressing this one cannot make `landed` wrong. It is logged rather than
+    # silenced, because repeated failures mean something systemic even though each one
+    # is harmless.
+    if landed:
+        try:
+            client.delete_payload(
+                collection_name=collection,
+                keys=["enrichment_attempt"],
+                points=models.Filter(
+                    must=[
+                        *conditions,
+                        models.FieldCondition(
+                            key="enrichment_attempt", match=models.MatchValue(value=attempt)
+                        ),
+                    ]
+                ),
+            )
+        except Exception:
+            log.warning(
+                "maturation-enrichment-marker-cleanup-failed object_id=%s namespace=%s "
+                "attempt=%s (enrichment DID apply; a residual marker is inert because "
+                "every readback is fenced on a freshly generated value)",
+                object_id,
+                namespace,
+                attempt,
+                exc_info=True,
+            )
+    return landed
 
 
 # ---------------------------------------------------------------------------
@@ -1093,7 +1325,7 @@ def _apply_enrichment(
 async def _ollama_score_in_batches(
     ollama: OllamaClient,
     items: list[OllamaImportance],
-) -> dict[KSUID, int]:
+) -> dict[str, int]:
     """Call ``score_importance`` in batches; failed batches are isolated."""
     return await _batched_call(items, ollama.score_importance, kind="importance")
 
@@ -1101,7 +1333,7 @@ async def _ollama_score_in_batches(
 async def _ollama_topics_in_batches(
     ollama: OllamaClient,
     items: list[OllamaTopic],
-) -> dict[KSUID, list[str]]:
+) -> dict[str, list[str]]:
     """Call ``infer_topics`` in batches; failed batches are isolated."""
     return await _batched_call(items, ollama.infer_topics, kind="topics")
 
@@ -1112,7 +1344,7 @@ async def _batched_call[T, R](
     *,
     kind: str,
     batch_size: int = _DEFAULT_LLM_BATCH,
-) -> dict[KSUID, R]:
+) -> dict[str, R]:
     """Drive ``call`` in batches and merge results, isolating failures
     PER BATCH.
 
@@ -1131,7 +1363,7 @@ async def _batched_call[T, R](
     """
     if not items:
         return {}
-    merged: dict[KSUID, R] = {}
+    merged: dict[str, R] = {}
     failed = 0
     for start in range(0, len(items), batch_size):
         batch = items[start : start + batch_size]

@@ -1996,3 +1996,91 @@ def test_patch_omitted_field_is_still_omitted(
     assert after.importance == 9
     assert after.content == "keep me", "an omitted field must not be nulled"
     assert after.summary == "keep this too", "an omitted field must not be nulled"
+
+
+def test_lifecycle_transition_refuses_an_ambiguous_object_id(
+    client: TestClient,
+    operator_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """THE FALSIFIER FOR THE `namespace=None` COMMENT AT writes_lifecycle.py.
+
+    That call site passes `namespace=None` deliberately -- `TransitionRequest` carries
+    no namespace, so the endpoint genuinely has none to pass -- and the comment asserts
+    the unsafe outcome is "a 4xx and not a silent cross-namespace write". An asserting
+    comment with no cell is just a claim (Aoi's rule), and this one has a specific way
+    of being false: `AmbiguousObjectId` is an EXCEPTION, so if `transition()` did not
+    convert it to an `Err` it would escape as a 500 -- or, worse, before the refusal
+    existed at all, resolve to whichever row scrolled first and return 200.
+
+    `namespace: str | None` with no default guarantees every caller MADE a decision.
+    It does not guarantee every caller passes a value, and exactly one passes `None`.
+    This is what makes that one safe (Aoi, musubi#771)."""
+    from qdrant_client import models as qmodels
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace="eric/claude-code/episodic", content="ambiguous-target")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    qc = episodic._client
+    records, _ = qc.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=oid))]
+        ),
+        limit=2,
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert len(records) == 1, f"seed is not unique before planting the twin: {len(records)}"
+    original = records[0]
+
+    # The twin: same object_id, DIFFERENT namespace. This is the state the production
+    # data model permits -- object_id is not globally unique -- and the one an
+    # unqualified lookup used to resolve by scroll order.
+    twin_payload = dict(original.payload or {})
+    twin_payload["namespace"] = "someone-else/claude-code/episodic"
+    qc.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            qmodels.PointStruct(
+                id="00000000-0000-4000-8000-00000000beef",
+                vector=original.vector,  # type: ignore[arg-type]
+                payload=twin_payload,
+            )
+        ],
+    )
+
+    r = client.post(
+        "/v1/lifecycle/transition",
+        headers={"Authorization": f"Bearer {operator_token}"},
+        json={
+            "object_id": oid,
+            "to_state": "matured",
+            "actor": "operator-test",
+            "reason": "ambiguous-should-refuse",
+        },
+    )
+
+    assert r.status_code == 400, (
+        f"expected a 4xx refusal, got {r.status_code}: an unhandled AmbiguousObjectId "
+        f"would be a 500, and a 200 would mean it picked a namespace for the operator"
+    )
+
+    # ...and neither row moved. A refusal that still wrote would be the worse failure.
+    after, _ = qc.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=oid))]
+        ),
+        limit=4,
+        with_payload=True,
+    )
+    states = sorted(str((rec.payload or {}).get("state")) for rec in after)
+    assert states == ["provisional", "provisional"], (
+        f"the refusal was not clean -- states are {states}; one of the two rows was "
+        f"transitioned despite the endpoint returning an error"
+    )

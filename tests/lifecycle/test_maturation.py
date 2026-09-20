@@ -32,10 +32,12 @@ Architecture notes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -44,8 +46,9 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
-from musubi.lifecycle import LifecycleEventSink, file_lock
-from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.embedding.base import Embedder
+from musubi.lifecycle import LifecycleEventSink, file_lock, maturation
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.maturation import (
     DEFAULT_TAG_ALIASES,
     MaturationConfig,
@@ -60,8 +63,10 @@ from musubi.lifecycle.maturation import (
     provisional_ttl_sweep,
 )
 from musubi.planes.episodic import EpisodicPlane
+from musubi.planes.episodic.plane import episodic_point_id
 from musubi.store import bootstrap
-from musubi.types.common import KSUID
+from musubi.store.specs import DENSE_SIZE
+from musubi.types.common import Err, Ok, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
@@ -141,17 +146,32 @@ class FakeOllama:
         self.score_calls.append(list(items))
         if not self.available:
             return None
-        return {item.object_id: self.importance for item in items}
+        return {item.correlation_id: self.importance for item in items}
 
     async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
         self.topic_calls.append(list(items))
         if not self.available:
             return None
-        return {item.object_id: self.topic_map.get(item.content, []) for item in items}
+        return {item.correlation_id: self.topic_map.get(item.content, []) for item in items}
 
 
 # Sanity: FakeOllama satisfies the OllamaClient Protocol.
 _: OllamaClient = FakeOllama()
+
+
+class _ConstantDenseEmbedder(Embedder):
+    """Make every non-empty supersession candidate semantically identical."""
+
+    _vector = [1.0, 0.0] + [0.0] * (DENSE_SIZE - 2)
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector for _ in texts]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return [{} for _ in texts]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return [0.0 for _ in candidates]
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +382,92 @@ async def test_importance_rescored_via_llm(
     assert refreshed.importance_last_scored_epoch is not None
 
 
+async def test_llm_results_remain_bound_to_same_id_rows_across_namespaces(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """Opaque correlation IDs keep content-derived results on their input row.
+
+    ``object_id`` is namespace-scoped, not globally unique. Keying either LLM
+    response map by object ID silently collapsed these two inputs: both
+    transitions and both enrichment writes succeeded, but one namespace got
+    topics and importance inferred from the other namespace's content
+    (Copilot, musubi#771 round 19).
+    """
+    from qdrant_client import models as qmodels
+
+    mine = await _seed_provisional(plane, ns, content="mine-content")
+    records, _ = qdrant.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(mine.object_id))
+                ),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert len(records) == 1
+    original = records[0]
+    stranger_ns = "someone/else/episodic"
+    stranger_payload = dict(original.payload or {})
+    stranger_payload.update(
+        namespace=stranger_ns,
+        content="stranger-content",
+        importance=1,
+        linked_to_topics=[],
+    )
+    qdrant.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            qmodels.PointStruct(
+                id="00000000-0000-4000-8000-00000019ba7c",
+                vector=original.vector,  # type: ignore[arg-type]
+                payload=stranger_payload,
+            )
+        ],
+        wait=True,
+    )
+
+    class DistinctOllama:
+        async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
+            return {
+                item.correlation_id: 3 if item.content == "mine-content" else 9 for item in items
+            }
+
+        async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
+            return {
+                item.correlation_id: [f"topic/{item.content.removesuffix('-content')}"]
+                for item in items
+            }
+
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=DistinctOllama(),
+        cursor=cursor,
+        config=_config(),
+    )
+
+    mine_after = await plane.get(namespace=ns, object_id=mine.object_id)
+    stranger_after = await plane.get(namespace=stranger_ns, object_id=mine.object_id)
+    assert report.transitioned == 2
+    assert mine_after is not None and stranger_after is not None
+    assert (mine_after.importance, mine_after.linked_to_topics) == (3, ["topic/mine"])
+    assert (stranger_after.importance, stranger_after.linked_to_topics) == (
+        9,
+        ["topic/stranger"],
+    )
+
+
 async def test_importance_fallback_on_ollama_unavailable(
     plane: EpisodicPlane,
     qdrant: QdrantClient,
@@ -560,25 +666,9 @@ async def test_supersession_sets_both_sides_of_link(
     seam requires."""
     from qdrant_client import models as qmodels
 
-    from musubi.embedding.base import Embedder
     from musubi.planes.episodic.plane import episodic_point_id
-    from musubi.store.specs import DENSE_SIZE
 
-    class _CtrlEmbedder(Embedder):
-        def __init__(self, vec: list[float]) -> None:
-            self._v = vec
-
-        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-            return [self._v for _ in texts]
-
-        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
-            return [{} for _ in texts]
-
-        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
-            return [0.0 for _ in candidates]
-
-    vec = [1.0, 0.0] + [0.0] * (DENSE_SIZE - 2)
-    plane._embedder = _CtrlEmbedder(vec)
+    plane._embedder = _ConstantDenseEmbedder()
 
     # Seed the original matured row with content the new one can hint at.
     original = await plane.create(
@@ -630,6 +720,102 @@ async def test_supersession_sets_both_sides_of_link(
     assert original.object_id in new_after.supersedes
     assert old_after.superseded_by == new_row.object_id
     assert old_after.state == "superseded"
+
+
+async def test_supersession_back_link_refuses_a_newer_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """The back-link identifies the predecessor snapshot the seam scored.
+
+    Patch that predecessor after semantic selection, while the new row's transition
+    is running, and before the predecessor transition. Without ``expected_version``
+    on the back-link, the newer row is legally superseded even though the seam never
+    analyzed its content (Copilot, musubi#771).
+    """
+    from qdrant_client import models as qmodels
+
+    original = await plane.create(
+        EpisodicMemory(
+            namespace=ns,
+            content="GPU pin: nvidia driver 470",
+            topics=["hardware/gpu"],
+        )
+    )
+    await plane.transition(
+        namespace=ns,
+        object_id=original.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(original.object_id)]),
+        wait=True,
+    )
+    selected = await plane.get(namespace=ns, object_id=original.object_id)
+    assert selected is not None
+
+    new_row = await _seed_provisional(
+        plane,
+        ns,
+        content="Update: GPU pin: nvidia driver 575",
+        tags=["hardware/gpu"],
+    )
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(new_row.object_id)]),
+        wait=True,
+    )
+
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    raced = False
+
+    def patch_predecessor_after_selection(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        result = real_transition(*args, **kwargs)
+        if not raced and kwargs.get("object_id") == new_row.object_id:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={
+                    "content": "newer writer changed the predecessor",
+                    "version": selected.version + 1,
+                },
+                points=qmodels.PointIdsList(points=[episodic_point_id(original.object_id)]),
+                wait=True,
+            )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", patch_predecessor_after_selection)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(),
+        embedder=_ConstantDenseEmbedder(),
+    )
+
+    assert raced, "the predecessor was not patched in the selection/back-link window"
+    new_after = await plane.get(namespace=ns, object_id=new_row.object_id)
+    old_after = await plane.get(namespace=ns, object_id=original.object_id)
+    assert new_after is not None and old_after is not None
+    assert new_after.state == "matured"
+    assert original.object_id in new_after.supersedes
+    assert old_after.state == "matured", "the back-link superseded a newer predecessor"
+    assert old_after.version == selected.version + 1
+    assert old_after.content == "newer writer changed the predecessor"
+    assert old_after.superseded_by is None
 
 
 # ---------------------------------------------------------------------------
@@ -1267,17 +1453,17 @@ async def test_batched_call_isolates_failed_batches() -> None:
         # Fail exactly the middle batch.
         if items[2].object_id in {i.object_id for i in batch}:
             return None
-        return {i.object_id: 9 for i in batch}
+        return {i.correlation_id: 9 for i in batch}
 
     before = _metric_value("importance")
-    merged: dict[KSUID, int] = await _batched_call(items, flaky, kind="importance", batch_size=2)
+    merged: dict[str, int] = await _batched_call(items, flaky, kind="importance", batch_size=2)
 
     assert len(calls) == 3  # all three batches attempted — no early return
     assert set(merged) == {
-        items[0].object_id,
-        items[1].object_id,
-        items[4].object_id,
-        items[5].object_id,
+        items[0].correlation_id,
+        items[1].correlation_id,
+        items[4].correlation_id,
+        items[5].correlation_id,
     }
     assert _metric_value("importance") == before + 1
 
@@ -1289,7 +1475,7 @@ async def test_batched_call_all_batches_failing_returns_empty_not_none() -> None
     async def down(_batch: list[OllamaImportance]) -> dict[str, int] | None:
         return None
 
-    merged: dict[KSUID, int] = await _batched_call(
+    merged: dict[str, int] = await _batched_call(
         _importance_items_for_batch_test(4), down, kind="importance", batch_size=2
     )
     assert merged == {}
@@ -1299,6 +1485,1469 @@ def _importance_items_for_batch_test(n: int) -> list[OllamaImportance]:
     from musubi.types.common import generate_ksuid
 
     return [
-        OllamaImportance(object_id=generate_ksuid(), content=f"row {i}", captured_importance=5)
+        OllamaImportance(
+            object_id=generate_ksuid(),
+            content=f"row {i}",
+            captured_importance=5,
+            correlation_id=f"row:{i}",
+        )
         for i in range(n)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Enrichment fencing (RET-012 prerequisite)
+# ---------------------------------------------------------------------------
+#
+# An in-flight sweep must never enrich a row that left `matured` under it.
+#
+# `_apply_enrichment` wrote `importance`, `updated_at` and `updated_epoch` fenced on
+# `object_id` ALONE — no state, no version, no lease. The sweep transitions a row to
+# `matured` and enriches it as two separate writes, so anything that moves the row in
+# between is overwritten by the second one.
+#
+# The case that made this urgent (Copilot on musubi#732, 2026-09-20): a retraction
+# quarantines the row to `archived`/importance 1 in that gap. The enrichment write then
+# lands anyway and the retraction finishes with a **rescored importance and a
+# post-retraction `updated_at`** — breaking RET-012's terminal-state guarantee and
+# IDEM-008's "the retraction timestamp is the retraction's" in one `set_payload`.
+#
+# The fence is `state == "matured"`: only a row still in the state this sweep just put
+# it in may be enriched. That single condition also excludes v2 immutable content points
+# for free, because they carry no `state` field at all — a `FieldCondition` cannot match
+# a point that lacks the key. `test_v2_content_point_is_never_enriched` pins that, so if
+# `state` is ever added to content payloads the exclusion stops being accidental.
+#
+# The canonical transition is fenced on the selected candidate's version, and the
+# enrichment write is fenced on the exact post-transition version returned by it. A
+# concurrent writer therefore cannot turn stale derived data into a valid write merely
+# by leaving the row in (or restoring it to) the same state.
+#
+# Shiori, 2026-09-20.
+
+
+def _payload(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:
+    from qdrant_client import models as qmodels
+
+    rows, _ = client.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=object_id))
+            ]
+        ),
+        limit=8,
+        with_payload=True,
+    )
+    return [dict(r.payload or {}) for r in rows]
+
+
+async def test_a_row_archived_mid_sweep_is_not_enriched(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """THE DEFECT. Archive the row in the exact gap between the sweep's transition
+    and its enrichment write, which is the window a retraction quarantine occupies."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="retract me", age_seconds=7200)
+
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    archived_at: dict[str, Any] = {}
+
+    def transition_then_archive(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        # The quarantine CAS lands here: after the sweep matured the row, before it
+        # enriches. Written directly so the test does not depend on the retraction API.
+        quarantined = utc_now()
+        archived_at["updated_at"] = quarantined.isoformat()
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={
+                "state": "archived",
+                "importance": 1,
+                "updated_at": quarantined.isoformat(),
+                "updated_epoch": epoch_of(quarantined),
+            },
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_archive)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "archived", "the quarantine itself did not hold"
+    assert after.importance == 1, (
+        f"the sweep re-scored a retracted row to importance {after.importance}; "
+        f"RET-012's terminal state is not terminal"
+    )
+    assert after.updated_at.isoformat() == archived_at["updated_at"], (
+        f"the sweep stamped a post-retraction updated_at ({after.updated_at}); "
+        f"the retraction timestamp must remain the retraction's "
+        f"({archived_at['updated_at']})"
+    )
+
+
+async def test_a_candidate_changed_after_selection_is_not_transitioned(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """The canonical transition must identify the snapshot selected by the sweep.
+
+    Move the row after candidate selection but before ``transition``. Without the
+    candidate's ``expected_version``, the transition reads the newer row and legally
+    matures it, allowing enrichment computed from the stale snapshot to follow.
+    """
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="old candidate", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    raced = False
+
+    def change_candidate_then_transition(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        if not raced:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={"content": "newer writer", "version": row.version + 1},
+                points=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                        ),
+                        qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+                    ]
+                ),
+                wait=True,
+            )
+        return real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(maturation, "transition", change_candidate_then_transition)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"old candidate": ["stale/topic"]}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert raced, "the race plant never reached the canonical transition"
+    assert report.transitioned == 0 and report.enriched == 0
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "provisional"
+    assert after.version == row.version + 1
+    assert after.content == "newer writer"
+    assert "stale/topic" not in after.linked_to_topics
+
+
+async def test_enrichment_addresses_only_the_selected_anchor_point(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """A duplicate inserted after transition must not share the enrichment write."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="selected anchor", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    duplicate_id = "00000000-0000-4000-8000-00000000e11e"
+    duplicate_before: dict[str, Any] = {}
+
+    def transition_then_duplicate(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        points, _ = qdrant.scroll(
+            collection_name="musubi_episodic",
+            scroll_filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    ),
+                    qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+                ],
+                must_not=[
+                    qmodels.FieldCondition(
+                        key="point_kind", match=qmodels.MatchValue(value="content")
+                    )
+                ],
+            ),
+            limit=2,
+            with_payload=True,
+        )
+        assert len(points) == 1, "the duplicate plant did not start from one anchor"
+        duplicate_before.update(dict(points[0].payload or {}))
+        qdrant.upsert(
+            collection_name="musubi_episodic",
+            points=[
+                qmodels.PointStruct(
+                    id=duplicate_id,
+                    vector={},
+                    payload=dict(duplicate_before),
+                )
+            ],
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_duplicate)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"selected anchor": ["selected/topic"]}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert duplicate_before, "the duplicate plant never reached the post-transition gap"
+    assert report.transitioned == 1 and report.enriched == 0 and report.failed == 1
+    anchors, _ = qdrant.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ],
+            must_not=[
+                qmodels.FieldCondition(key="point_kind", match=qmodels.MatchValue(value="content"))
+            ],
+        ),
+        limit=3,
+        with_payload=True,
+    )
+    assert len(anchors) == 2, "the duplicate plant did not land"
+    assert all(dict(anchor.payload or {}) == duplicate_before for anchor in anchors), (
+        "enrichment mutated an ambiguous anchor before refusing the duplicate identity"
+    )
+
+
+async def test_enrichment_point_id_closes_the_post_count_insertion_window(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """Insert a duplicate after the authoritative count but before the fenced write."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="post-count duplicate"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+    anchors, _ = qdrant.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ],
+            must_not=[
+                qmodels.FieldCondition(key="point_kind", match=qmodels.MatchValue(value="content"))
+            ],
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert len(anchors) == 1
+    anchor_before = dict(anchors[0].payload or {})
+    anchor_id = anchors[0].id
+    duplicate_id = "00000000-0000-4000-8000-00000000e11f"
+    real_scroll = qdrant.scroll
+    planted = False
+
+    def count_then_duplicate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal planted
+        result = real_scroll(*args, **kwargs)
+        if kwargs.get("with_payload") is False and not planted:
+            assert len(result[0]) == 1, "the TOCTOU plant did not observe one anchor"
+            planted = True
+            qdrant.upsert(
+                collection_name="musubi_episodic",
+                points=[
+                    qmodels.PointStruct(id=duplicate_id, vector={}, payload=dict(anchor_before))
+                ],
+                wait=True,
+            )
+        return result
+
+    monkeypatch.setattr(qdrant, "scroll", count_then_duplicate)
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        point_id=anchor_id,
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["selected"],
+        importance=3,
+        topics=["selected/topic"],
+    )
+
+    assert planted, "the duplicate was not inserted after the authoritative count"
+    assert applied, "the exact selected anchor was not enriched"
+    duplicate = qdrant.retrieve(
+        collection_name="musubi_episodic", ids=[duplicate_id], with_payload=True
+    )
+    assert len(duplicate) == 1
+    assert dict(duplicate[0].payload or {}) == anchor_before, (
+        "a duplicate inserted after the count shared the selected anchor's write"
+    )
+
+
+async def test_an_ordinary_row_is_still_enriched(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """THE POSITIVE CONTROL. Without it, a fence that refuses everything passes the
+    cell above — and the sweep would silently stop enriching anything at all."""
+    row = await _seed_provisional(plane, ns, content="GPU pin: nvidia driver 575", age_seconds=7200)
+
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert report.transitioned == 1
+    assert report.enriched == 1, "the fence refused an ordinary, still-matured row"
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None and after.state == "matured"
+    assert "hardware/gpu" in after.linked_to_topics
+
+
+async def test_v2_content_point_is_never_enriched(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """The selected anchor's write must not reach its immutable content sibling.
+
+    This cell pins the physical-point and content-kind exclusions. It deliberately
+    does not claim to prove the logical `state` fence: the write's HasId condition
+    already excludes the sibling even if that term is removed. The state term is
+    instead falsified by `test_a_row_archived_between_the_fence_and_the_write_is_not_reported`,
+    where the same physical point changes state in the read/write window (Copilot,
+    musubi#771)."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="two-point row"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+
+    qdrant.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            qmodels.PointStruct(
+                id="00000000-0000-4000-8000-00000000c0de",
+                vector={},
+                payload={
+                    "object_id": str(row.object_id),
+                    "namespace": ns,
+                    "point_kind": "content",
+                    "importance": 8,
+                    # Matching version, so the version term cannot be what excludes it.
+                    "version": live.version,
+                },
+            )
+        ],
+        wait=True,
+    )
+    before = next(
+        p for p in _payload(qdrant, str(row.object_id)) if p.get("point_kind") == "content"
+    )
+
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["enriched"],
+        importance=3,
+        topics=["hardware/gpu"],
+    )
+
+    assert applied, "the fence refused the anchor; this cell would prove nothing"
+    after = next(
+        p for p in _payload(qdrant, str(row.object_id)) if p.get("point_kind") == "content"
+    )
+    assert after == before, "enrichment wrote to the immutable content point"
+
+
+async def test_a_refused_enrichment_is_not_counted_as_enriched(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """The report must not claim a write the fence refused.
+
+    `enriched` was incremented unconditionally after the call, so once the fence
+    started refusing rows the sweep reported enrichments it had not performed --
+    and the sweep's own report is the record an operator reads first."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="retract me", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_archive(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        quarantined = utc_now()
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={
+                "state": "archived",
+                "importance": 1,
+                "updated_at": quarantined.isoformat(),
+                "updated_epoch": epoch_of(quarantined),
+            },
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_archive)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert report.enriched == 0, (
+        f"the sweep reported {report.enriched} enrichment(s) for a write the fence refused"
+    )
+
+
+async def test_a_row_archived_between_the_fence_and_the_write_is_not_reported(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """The state-fence window a pre-write count cannot see (Yua, musubi#771).
+
+    The first version counted under the fence BEFORE writing and returned True on a
+    non-zero count. That proves the row was eligible a moment ago, not that the write
+    landed: count sees `matured`, a retraction archives the row, the fenced write then
+    matches zero points, and the caller is told an enrichment happened.
+
+    Here the archive lands on the same physical point, without changing its version,
+    between the fence being built and `set_payload` running. Removing the `state`
+    condition makes this cell red while the content-sibling cell stays green: HasId,
+    identity and version still match, so only state can refuse the write. A post-write
+    readback is then what reports that refusal honestly."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="racer"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+
+    real_set_payload = qdrant.set_payload
+
+    def archive_then_write(*args: Any, **kwargs: Any) -> Any:
+        # The retraction quarantine lands in the window.
+        real_set_payload(
+            collection_name="musubi_episodic",
+            payload={"state": "archived", "importance": 1},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        monkeypatch.undo()
+        return real_set_payload(*args, **kwargs)
+
+    monkeypatch.setattr(qdrant, "set_payload", archive_then_write)
+
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["enriched"],
+        importance=3,
+        topics=["hardware/gpu"],
+    )
+
+    assert applied is False, (
+        "the enrichment reported success for a write that matched zero rows; "
+        "success must come from durable state, not from having issued the write"
+    )
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None and after.state == "archived"
+    assert after.importance == 1, "the archived row was enriched anyway"
+
+
+async def test_enrichment_does_not_cross_namespaces_at_runtime(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """`object_id` is not globally unique — two namespaces may carry the same id
+    (`tests/api/test_data001_episodic_patch_fence.py:113` relies on exactly that).
+
+    Behavioural rather than structural. My first attempt at this concluded the cell was
+    inert, but the plant I judged it with deleted the OTHER `key="namespace"` condition
+    in the module — right check, wrong object — so the cell was never given a fair
+    trial. Anchored correctly it reds."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="mine"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    stranger_ns = "someone/else/episodic"
+    qdrant.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            qmodels.PointStruct(
+                id="00000000-0000-4000-8000-0000005747a1",
+                vector={},
+                payload={
+                    "object_id": str(row.object_id),
+                    "namespace": stranger_ns,
+                    "state": "matured",
+                    # VERSION, without which this cell proves nothing. The fence is
+                    # namespace + object_id + state + version, and a `FieldCondition`
+                    # cannot match a point that LACKS the field -- so a stranger with no
+                    # `version` was unreachable whatever the namespace condition did.
+                    # Delete the namespace term entirely and the cell still passed
+                    # (Copilot, musubi#771).
+                    #
+                    # It is set below, once the anchor's version is known, because
+                    # hard-coding a number here is how it silently drifts out of range
+                    # again.
+                    "importance": 9,
+                    "tags": ["untouched"],
+                    "updated_epoch": 1.0,
+                },
+            )
+        ],
+        wait=True,
+    )
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+
+    # Give the stranger the anchor's EXACT version, so the only thing standing between
+    # the write and it is the namespace condition. This is what arms the cell.
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"version": live.version},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="namespace", match=qmodels.MatchValue(value=stranger_ns)
+                ),
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                ),
+            ]
+        ),
+        wait=True,
+    )
+    before = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
+    assert before["version"] == live.version, (
+        "the stranger does not share the anchor's version, so the version fence -- not "
+        "the namespace guard -- is what excludes it, and this cell is inert"
+    )
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["enriched"],
+        importance=3,
+        topics=["hardware/gpu"],
+    )
+
+    # THE CLAIM FIRST, then the sentinel. Ordered the other way round, deleting the
+    # namespace condition makes the fence match TWO rows, the readback count is 2, and
+    # `applied` is False -- so the sentinel fires and the cell reds for the wrong reason
+    # while the stranger IS being corrupted right next to it. A red on "this cell would
+    # prove nothing" looks like a working falsifier and hides the actual evidence
+    # (musubi#771).
+    after = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
+    assert after == before, (
+        "enrichment wrote to a row in another namespace that shares this object_id"
+    )
+    assert applied, "the fence refused my own matured row; this cell would prove nothing"
+
+
+async def test_a_row_restored_to_matured_does_not_accept_stale_enrichment(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """`state == "matured"` is not a transition identity (Copilot/Yua, musubi#771).
+
+    An archived or demoted row can be restored to `matured`. A state-only fence would
+    then accept enrichment computed against the OLD snapshot -- tags, importance and
+    topics derived from content the row no longer has. The version this sweep
+    established is the identity; a restore bumps it, so the stale write is refused."""
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="round trip"))
+    coordinator = _coordinator(qdrant, sink)
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=coordinator,
+    )
+    matured = await plane.get(namespace=ns, object_id=row.object_id)
+    assert matured is not None
+    stale_version = matured.version
+
+    # The row leaves `matured` and comes back, exactly as a demote/restore would.
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="demoted",
+        actor="test",
+        reason="round-trip",
+        coordinator=coordinator,
+    )
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="round-trip",
+        coordinator=coordinator,
+    )
+    restored = await plane.get(namespace=ns, object_id=row.object_id)
+    assert restored is not None and restored.state == "matured"
+    assert restored.version != stale_version, "fixture drift: the restore did not bump version"
+
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=stale_version,
+        tags=["stale"],
+        importance=9,
+        topics=["stale/topic"],
+    )
+
+    assert applied is False, "a stale-version enrichment was applied to a restored row"
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert "stale" not in after.tags, "the restored row accepted enrichment from an old snapshot"
+
+
+async def test_a_leased_row_cannot_be_transitioned_by_lifecycle(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """A row under a LIVE mutation lease belongs to another writer.
+
+    The token must be live, not merely present. `update_lease_token` is the GENERIC
+    lease every `owned_update` takes, so an EXPIRED ordinary token is takeover-eligible
+    and must NOT block the lifecycle forever -- see the companion cell below.
+
+    `_apply_conditional` fenced on namespace/object/version and ignored
+    `update_lease_token`, so the lease the retraction saga fences its CAS with was
+    honoured by the retraction path and ignored by the lifecycle path: a pre-RET-012
+    row could be matured between the adoption read and the repair, the version-fenced
+    repair would then lose, and the retracted row would stay active
+    (Copilot via Aoi, musubi#732)."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="leased"))
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": f"done:{int(utc_now().timestamp() * 1_000_000)}:live"},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    transition(
+        qdrant,
+        coordinator=_coordinator(qdrant, sink),
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "provisional", (
+        f"a leased row was transitioned to {after.state!r}; the lifecycle CAS ignored "
+        f"another writer's mutation lease"
+    )
+
+
+async def test_an_unleased_row_still_transitions(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """THE CONTROL. A lease condition that refused every write would satisfy the cell
+    above while stopping the lifecycle entirely."""
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="ordinary"))
+
+    transition(
+        qdrant,
+        coordinator=_coordinator(qdrant, sink),
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None and after.state == "matured", (
+        "the lease condition refused an ordinary token-empty write"
+    )
+
+
+async def test_a_refused_enrichment_is_recorded_as_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """A refused enrichment must be visible in the report.
+
+    The version fence can refuse after a successful transition. The row is no longer
+    `provisional`, so no later sweep re-selects it -- the enrichment is LOST, not
+    deferred. Counting it nowhere made that loss invisible in the only record an
+    operator reads (Copilot/Yua, musubi#771)."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="racer", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_archive(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        quarantined = utc_now()
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={
+                "state": "archived",
+                "importance": 1,
+                "updated_at": quarantined.isoformat(),
+                "updated_epoch": epoch_of(quarantined),
+            },
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_archive)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert report.enriched == 0, "a refused write was counted as an enrichment"
+    assert report.failed == 1, (
+        "a refused enrichment was not recorded anywhere; the loss is invisible to the "
+        "operator reading this report"
+    )
+
+
+@pytest.mark.parametrize("token", ["", "done:1:long-expired", "own:1:crashed-before-commit"])
+async def test_an_unowned_or_expired_ordinary_lease_does_not_block_the_lifecycle_forever(
+    token: str,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """THE LIVENESS CONTROL, and the reason the fence is not a bare `IsEmpty`.
+
+    The mutation seam treats every falsy token as absent. The lifecycle path once
+    checked only for ``None``, so a persisted empty string became a live lease here and
+    fenced the row forever even though an ordinary writer would ignore it (Copilot,
+    musubi#771).
+
+    Parametrized over BOTH lease phases, because the helper's parity cell cannot see
+    which function the coordinator actually calls. `own:*` is the phase a writer holds
+    BEFORE committing, and `is_expired_done_token` rejects it by prefix -- so a crash
+    there fenced the row forever while `owned_update`'s own acquire would have taken it
+    over. A helper cell would stay green through that; only driving the real transition
+    can tell (Tama, musubi#771).
+
+    `update_lease_token` is the generic mutation lease. A crashed ORDINARY patch on any
+    row leaves a `done:*` token behind with no retraction saga coming to clear it. A
+    fence that refused every non-empty token would block that row's lifecycle
+    permanently. An expired token with no retraction evidence is takeover-eligible, so
+    the coordinator clears that exact token behind its own fence and proceeds.
+
+    Aoi raised this; I argued it away with a premise that was checkable and false, and
+    she deferred to it. Her first instinct was right (musubi#771)."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="crashed ordinary patch"))
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": token},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    transition(
+        qdrant,
+        coordinator=_coordinator(qdrant, sink),
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "matured", (
+        "an EXPIRED ordinary lease blocked the lifecycle; a crashed patch would strand "
+        "this row permanently because no saga is coming to clear it"
+    )
+    # The takeover must CLEAR the token, not transition around it: a surviving token
+    # would fence the next writer for the same reason (Yua, musubi#771).
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    assert live[0].get("update_lease_token") is None, (
+        f"the expired token survived the takeover: {live[0].get('update_lease_token')!r}"
+    )
+
+
+async def test_an_expired_own_token_with_retraction_evidence_stays_saga_fenced(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """Widening takeover to `own:*` must NOT widen it past a retraction.
+
+    The takeover rule is about age; `retraction_evidence` is about OWNERSHIP, and it is
+    checked first. A saga's row is never stolen however old its token -- otherwise
+    fixing the strand would have opened a worse hole than the one it closed."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="saga owns this"))
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "update_lease_token": "own:1:crashed-mid-retraction",
+            "retraction_evidence": {"reason": "user-requested"},
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    coordinator = _coordinator(qdrant, sink)
+    first = transition(
+        qdrant,
+        coordinator=coordinator,
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+    assert isinstance(first, Err) and first.error.code == "terminal_apply_failure"
+
+    # Raw payload, not `plane.get`: the fence only needs `retraction_evidence` to be
+    # PRESENT, so this plants a sentinel rather than a full valid `RetractionEvidence`.
+    # Building a real one would test the model instead of the fence.
+    rows = _payload(qdrant, str(row.object_id))
+    assert len(rows) == 1
+    assert rows[0].get("state") != "matured", (
+        "the lifecycle took over a row whose retraction saga still owns it; age is not ownership"
+    )
+    assert rows[0].get("update_lease_token") == "own:1:crashed-mid-retraction", (
+        "the saga's token was cleared by the lifecycle takeover path"
+    )
+    qdrant.delete_payload(
+        collection_name="musubi_episodic",
+        keys=["update_lease_token"],
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+    replay = coordinator.reconcile_once()
+    assert replay.finalized == 0 and replay.pending == 0
+    assert _payload(qdrant, str(row.object_id))[0].get("state") != "matured", (
+        "the reconciler reactivated the retraction after its saga cleared the lease"
+    )
+
+
+async def test_a_non_scalar_mutation_token_fails_closed_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """A corrupt mapping lease fails the shared string-token contract.
+
+    The shared helper once classified every truthy malformed value as ancient, while
+    the coordinator passed the raw value into ``MatchValue``. A dict therefore raised
+    ValidationError instead of recovering or refusing. Both consumers must fail closed
+    before constructing a fence for an unsupported token shape (Copilot, musubi#771).
+    """
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="corrupt lease token"))
+    corrupt = {"junk": True}
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": corrupt},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    coordinator = _coordinator(qdrant, sink)
+    observed: dict[str, object] = {}
+    real_apply = coordinator._apply_conditional
+
+    def observe_apply(*args: Any, **kwargs: Any) -> str:
+        try:
+            status = real_apply(*args, **kwargs)
+        except Exception as exc:
+            observed["raised"] = type(exc).__name__
+            raise
+        observed["status"] = status
+        return status
+
+    monkeypatch.setattr(coordinator, "_apply_conditional", observe_apply)
+    result = transition(
+        qdrant,
+        coordinator=coordinator,
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+    assert observed == {"status": "contended"}, (
+        "the corrupt token reached Qdrant instead of failing the shared token contract"
+    )
+    assert isinstance(result, Ok) and is_transition_pending(result.value)
+
+    rows = _payload(qdrant, str(row.object_id))
+    assert len(rows) == 1
+    assert rows[0].get("state") != "matured", "a corrupt lease was treated as recoverable"
+    assert rows[0].get("update_lease_token") == corrupt, (
+        "the coordinator cleared a token shape it cannot fence exactly"
+    )
+
+
+async def test_a_lease_taken_between_transition_and_enrichment_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """THE INTERLEAVING CELL. Tama's, and the one a pre-read cannot pass.
+
+    The regression she stopped: a Python scroll for `update_lease_token`, then a write
+    fenced on namespace/object/state/version. That CAS is real but CANNOT SEE A LEASE --
+    taking one does not bump `version` -- so a writer acquiring the token between the
+    read and the write sails through. Right check, wrong object, again.
+
+    So take the lease in exactly that gap, using the same post-transition hook
+    `test_a_row_archived_mid_sweep_is_not_enriched` uses, and require enrichment to
+    lose. Nothing here is satisfiable by reading first; only the server-side
+    `IsEmptyCondition` in the write's own `must` list can win it.
+
+    The token is FRESH. Its expired sibling,
+    `test_an_expired_ordinary_lease_does_not_block_the_lifecycle_forever`, must stay
+    green: ordinary takeover happens in the coordinator, BEFORE the transition."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="enrich me", age_seconds=7200)
+    # The discriminator is DERIVED from the seed, never a literal: a hard-coded 5
+    # silently collided with the row's own captured importance and the cell could not
+    # have failed for its own reason. Assert they differ so it can never go inert.
+    seed_importance = _payload(qdrant, str(row.object_id))[0]["importance"]
+    enriched_importance = seed_importance + 3
+    assert enriched_importance != seed_importance
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    planted: dict[str, Any] = {}
+
+    def transition_then_take_the_lease(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        # The window: matured, not yet enriched. A concurrent `owned_update` acquires
+        # the generic mutation lease here and bumps nothing the old fence reads.
+        planted["token"] = f"done:{int(utc_now().timestamp() * 1_000_000)}:racer"
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={"update_lease_token": planted["token"]},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_take_the_lease)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=enriched_importance),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert planted, (
+        "the hook never fired -- the sweep did not transition this row, so the cell "
+        "proved nothing about the fence (inert, not passing)"
+    )
+    payloads = _payload(qdrant, str(row.object_id))
+    assert payloads, "row vanished"
+    live = [p for p in payloads if p.get("state") == "matured"]
+    assert len(live) == 1, f"expected exactly one matured row, got {len(live)}"
+    assert live[0].get("update_lease_token") == planted["token"], (
+        "the lease was cleared by the enrichment path; enrichment must refuse a "
+        "concurrent lease, never take it over -- takeover belongs in the coordinator"
+    )
+    assert live[0].get("importance") == seed_importance, (
+        f"enrichment wrote importance {live[0].get('importance')} onto a row whose "
+        f"lease was taken after the transition (seed was {seed_importance}); the "
+        f"pre-read saw an empty token and the write never re-checked it"
+    )
+
+
+async def test_the_enrichment_refusal_log_does_not_assert_a_cause_it_cannot_know(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """THE DIAGNOSTIC CELL. The message said `row moved after transition` -- always.
+
+    The fence has four conditions plus the lease term, and a zero-match result is
+    identical for all of them. So when a concurrent MUTATION LEASE refused the write,
+    the operator was told the row had moved: they go looking for a retraction that never
+    happened, and the real cause is invisible (Copilot, musubi#771).
+
+    This drives the LEASE path specifically -- the one the old wording misdiagnosed --
+    and requires the message to state what was observed rather than assert one cause."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="diagnose me", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_take_the_lease(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={"update_lease_token": f"done:{int(utc_now().timestamp() * 1_000_000)}:racer"},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_take_the_lease)
+    with caplog.at_level(logging.WARNING, logger=maturation.log.name):
+        await episodic_maturation_sweep(
+            client=qdrant,
+            sink=sink,
+            coordinator=_coordinator(qdrant, sink),
+            ollama=FakeOllama(importance=9),
+            cursor=cursor,
+            config=_config(min_age_sec=3600),
+        )
+
+    refusals = [r.getMessage() for r in caplog.records if "enrichment-refused" in r.getMessage()]
+    assert len(refusals) == 1, (
+        f"expected exactly one refusal record, got {len(refusals)}: {refusals} -- without "
+        f"one the assertions below would pass vacuously"
+    )
+    message = refusals[0]
+
+    assert "row moved after transition" not in message, (
+        f"the log states a cause this path cannot determine; the refusal here was a "
+        f"concurrent LEASE, not row movement: {message!r}"
+    )
+    # It must still be actionable: name the observation and both candidate causes.
+    assert "lease" in message, f"the lease cause is not mentioned at all: {message!r}"
+    assert "fence matched no row" in message, (
+        f"the message does not state what was actually observed: {message!r}"
+    )
+    assert str(row.object_id) in message and ns in message, (
+        f"the refusal does not identify which row it is about: {message!r}"
+    )
+
+
+async def test_enrichment_attribution_survives_a_colliding_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """THE ATTRIBUTION CELL. A timestamp says WHEN, never WHO.
+
+    `updated_epoch` was the readback discriminator, and the transition immediately
+    before this call writes it too. Two `utc_now()` calls can land in the same
+    microsecond, so the readback could match the TRANSITION's write and report an
+    enrichment that never landed (Copilot, musubi#771).
+
+    This freezes the clock so every write shares one epoch -- the coincidence made
+    certain instead of waited for -- and takes the lease so enrichment must refuse.
+    With epoch attribution, the transition's own write satisfies the readback and the
+    refusal is reported as a success. With a per-attempt marker it cannot, because only
+    this call could have written that value."""
+    from qdrant_client import models as qmodels
+
+    # BOTH module clocks. Patching only `maturation.utc_now` left the transition
+    # stamping its own epoch from `transitions.utc_now`, so no collision was created and
+    # this cell could pass against the OLD discriminator -- claiming a property it never
+    # produced. Caught pre-push by Tama; the inert shape again (musubi#771).
+    from musubi.lifecycle import transitions as transitions_mod
+
+    frozen = utc_now()
+    monkeypatch.setattr(maturation, "utc_now", lambda: frozen)
+    monkeypatch.setattr(transitions_mod, "utc_now", lambda: frozen)
+
+    row = await _seed_provisional(plane, ns, content="attribute me", age_seconds=7200)
+    seed_importance = _payload(qdrant, str(row.object_id))[0]["importance"]
+    enriched_importance = seed_importance + 3
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_take_the_lease(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={"update_lease_token": f"done:{int(frozen.timestamp() * 1_000_000)}:racer"},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_take_the_lease)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=enriched_importance),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    # THE COLLISION, asserted rather than assumed. If the transition's epoch is not the
+    # frozen one, no collision exists and everything below passes vacuously.
+    assert live[0].get("updated_epoch") == epoch_of(frozen), (
+        f"the transition stamped {live[0].get('updated_epoch')}, not the frozen "
+        f"{epoch_of(frozen)} -- the collision this cell depends on was never created"
+    )
+    assert live[0].get("importance") == seed_importance, "enrichment landed despite the lease"
+    assert report.enriched == 0, (
+        f"the refusal was counted as {report.enriched} enrichment(s): the readback "
+        f"attributed the TRANSITION's write to this call because their epochs collide"
+    )
+
+
+async def test_a_crashed_enrichment_leaves_no_marker_that_can_be_mistaken(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """CRASH RESIDUE. The marker is cleaned up, and residue is harmless if it is not.
+
+    A process dying between the fenced write and the cleanup leaves a stale
+    `enrichment_attempt` on the row. That is safe by construction -- every readback is
+    fenced on a freshly generated value, so no later attempt can match an older marker
+    -- but "safe by construction" is a claim, and claims get cells.
+
+    Normal path first: after a successful sweep the marker is gone, so the payload does
+    not accumulate a field that means nothing once the answer has been read."""
+    row = await _seed_provisional(plane, ns, content="clean up after yourself", age_seconds=7200)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=7),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    assert live[0].get("importance") == 7, "the control did not enrich; the cell proves nothing"
+    assert "enrichment_attempt" not in live[0], (
+        f"the per-attempt marker outlived the answer it existed to give: {live[0]}"
+    )
+
+    # Now the residue: plant a stale marker as a crash would, and require the NEXT
+    # enrichment to be unaffected by it.
+    from qdrant_client import models as qmodels
+
+    second = await _seed_provisional(plane, ns, content="after a crash", age_seconds=7200)
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"enrichment_attempt": "stale-marker-from-a-dead-process"},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(second.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=4),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+    after = [p for p in _payload(qdrant, str(second.object_id)) if p.get("state") == "matured"]
+    assert len(after) == 1
+    assert after[0].get("importance") == 4, (
+        "a residual marker from a crashed attempt blocked a later enrichment"
+    )
+    assert after[0].get("enrichment_attempt") != "stale-marker-from-a-dead-process", (
+        "the stale marker survived a successful later attempt"
+    )
+
+
+async def test_a_cleanup_failure_does_not_turn_a_durable_success_into_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """The failure surface the marker INTRODUCED, and it had to be decided explicitly.
+
+    Cleanup runs after the authoritative answer is already determined. If it raises, an
+    enrichment that durably applied gets counted as failed and logged as a refusal --
+    the marker would have made reporting worse than the bug it fixed (Yua, musubi#771).
+
+    So cleanup is best-effort. The row must still show the enrichment, and the sweep
+    must still count it."""
+    row = await _seed_provisional(plane, ns, content="cleanup explodes", age_seconds=7200)
+    real_delete = qdrant.delete_payload
+
+    def delete_payload_that_fails(*args: Any, **kwargs: Any) -> Any:
+        if "enrichment_attempt" in (kwargs.get("keys") or []):
+            raise RuntimeError("qdrant unavailable during cleanup")
+        return real_delete(*args, **kwargs)
+
+    qdrant.delete_payload = delete_payload_that_fails  # type: ignore[method-assign]
+    try:
+        report = await episodic_maturation_sweep(
+            client=qdrant,
+            sink=sink,
+            coordinator=_coordinator(qdrant, sink),
+            ollama=FakeOllama(importance=6),
+            cursor=cursor,
+            config=_config(min_age_sec=3600),
+        )
+    finally:
+        qdrant.delete_payload = real_delete  # type: ignore[method-assign]
+
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    assert live[0].get("importance") == 6, "the enrichment did not apply; cell proves nothing"
+    assert report.enriched == 1, (
+        f"a durable enrichment was reported as {report.enriched}; a cleanup fault was "
+        f"allowed to change the answer"
+    )
+    # ...and the residue it left behind is inert: a later attempt generates its own
+    # marker and cannot match this one.
+    assert live[0].get("enrichment_attempt") is not None, "expected residue for this cell"
+
+    # INERT MUST MEAN INERT, INCLUDING FOR TYPED READS. The models are `extra="forbid"`,
+    # so a marker left on the row by a crash or a cleanup fault would make every
+    # subsequent `plane.get` raise a ValidationError -- the hygiene field would break
+    # reads it was never meant to touch. It belongs in the read-internal strip set
+    # (Yua, musubi#771).
+    readable = await plane.get(namespace=ns, object_id=row.object_id)
+    assert readable is not None, "the row became unreadable with marker residue on it"
+    assert readable.importance == 6

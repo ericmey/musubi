@@ -123,6 +123,7 @@ async def archive_artifact(
         qdrant,
         coordinator=coordinator,
         object_id=object_id,
+        namespace=namespace,
         target_state="archived",
         actor="api-archive",
         reason="api-archive",

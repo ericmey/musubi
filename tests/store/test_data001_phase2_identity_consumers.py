@@ -93,7 +93,7 @@ def test_transition_identity_lookup_excludes_content(
     from musubi.store.immutable_vectors import ANCHOR_KIND, anchor_point_id
 
     _make_v2(qdrant, coord, "tr-1")
-    payloads = _scroll_by_object_id(qdrant, collection=_COLL, object_id="tr-1")
+    payloads = _scroll_by_object_id(qdrant, collection=_COLL, object_id="tr-1", namespace=None)
     assert len(payloads) == 1 and payloads[0].get("point_kind") == ANCHOR_KIND
     assert str(_lookup_point_id(qdrant, collection=_COLL, object_id="tr-1")) == anchor_point_id(
         _NS, "tr-1"

@@ -138,6 +138,29 @@ def test_owned_update_publishes_narrow_change_and_bumps_version(real_qdrant: Qdr
     assert "update_lease_token" not in published  # released by removal, never persisted null
 
 
+def test_owned_update_recovers_a_present_empty_string_token(qdrant: QdrantClient) -> None:
+    """A present empty string is not Qdrant-empty and must be fenced by exact value."""
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    _set_token(qdrant, oid, "")
+    assert _payload(qdrant, oid).get("update_lease_token") == "", (
+        "the empty-string residue plant did not land"
+    )
+
+    published = _run_owned(
+        qdrant,
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(changes={"importance": 9}),
+    )
+
+    assert published["importance"] == 9
+    assert published["version"] == 2
+    assert "update_lease_token" not in published
+
+
 @pytest.mark.integration
 def test_unrelated_concurrent_field_composes(real_qdrant: QdrantClient) -> None:
     """The DATA-001 invariant at the seam: a narrow owned_update writes ONLY its intended field, so
