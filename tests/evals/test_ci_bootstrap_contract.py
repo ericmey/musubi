@@ -437,7 +437,17 @@ def _assert_scheduled_incident_contract(content: str) -> None:
 
     permissions = reporter.get("permissions", {})
     assert permissions.get("issues") == "write", "Reporter MUST receive job-scoped issues: write"
-    assert permissions.get("contents") == "read", "Reporter MUST retain least-privilege contents: read"
+    assert permissions.get("contents") == "read", (
+        "Reporter MUST retain least-privilege contents: read"
+    )
+
+    concurrency = reporter.get("concurrency", {})
+    assert concurrency.get("group") == "scheduled-evals-incident", (
+        "Reporter MUST serialize reconciliation so concurrent runs cannot create duplicate incidents"
+    )
+    assert concurrency.get("cancel-in-progress") is False, (
+        "Reporter MUST not cancel an in-flight reconciliation when a newer run starts"
+    )
 
     steps = reporter.get("steps", [])
     scripts = [
@@ -543,6 +553,7 @@ jobs:
     needs: scheduled
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     permissions: {contents: read, issues: write}
+    concurrency: {group: scheduled-evals-incident, cancel-in-progress: false}
     steps:
       - uses: actions/github-script@v7
         env:

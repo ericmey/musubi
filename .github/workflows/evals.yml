@@ -74,3 +74,92 @@ jobs:
         if: always()
         run: |
           docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals down -v --remove-orphans
+
+  # A failed scheduled run is otherwise visible only to someone who inspects Actions history.
+  # Reconcile one owner-assigned Issue so the failure becomes durable operator work, while a
+  # subsequent green run records recovery and closes it. This job is deliberately outside the
+  # pull_request path: PR smoke results must never create or close the production-quality incident.
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: scheduled-evals-incident
+      cancel-in-progress: false
+    steps:
+      - name: Reconcile scheduled Evals incident
+        uses: actions/github-script@v7
+        env:
+          RESULT: ${{ needs.scheduled.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const marker = '<!-- scheduled-evals-incident -->';
+            const result = process.env.RESULT;
+            const runUrl = process.env.RUN_URL;
+            const title = 'Scheduled Evals live-quality gate is failing';
+
+            try {
+              const issues = await github.paginate(github.rest.issues.listForRepo, {
+                ...context.repo,
+                state: 'all',
+                per_page: 100,
+              });
+              const incidents = issues
+                .filter((issue) => !issue.pull_request && issue.body?.includes(marker))
+                .sort((left, right) => left.number - right.number);
+
+              if (incidents.length > 1) {
+                throw new Error(`expected at most one scheduled Evals incident, found ${incidents.length}`);
+              }
+
+              const incident = incidents[0];
+              const evidence = `Scheduled Evals result: **${result}** — ${runUrl}`;
+
+              if (result === 'success') {
+                if (incident?.state === 'open') {
+                  await github.rest.issues.createComment({
+                    ...context.repo,
+                    issue_number: incident.number,
+                    body: `Recovery observed. ${evidence}`,
+                  });
+                  await github.rest.issues.update({
+                    ...context.repo,
+                    issue_number: incident.number,
+                    state: 'closed',
+                    state_reason: 'completed',
+                  });
+                }
+                return;
+              }
+
+              if (!incident) {
+                await github.rest.issues.create({
+                  ...context.repo,
+                  title,
+                  assignees: [context.repo.owner],
+                  labels: ['bug', 'infrastructure', 'tests', 'status:in-progress'],
+                  body: `${marker}\n${evidence}\n\nThis Issue is maintained by the scheduled Evals workflow. ` +
+                    'It remains open until a later scheduled or manually dispatched run succeeds.',
+                });
+                return;
+              }
+
+              if (incident.state !== 'open') {
+                await github.rest.issues.update({
+                  ...context.repo,
+                  issue_number: incident.number,
+                  state: 'open',
+                });
+              }
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: incident.number,
+                body: evidence,
+              });
+            } catch (error) {
+              core.setFailed(`failed to reconcile scheduled Evals incident: ${error.message}`);
+            }
