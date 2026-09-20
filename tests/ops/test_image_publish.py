@@ -10,8 +10,8 @@ Scope:
 - Triggers: tag push `v*`, branch push `main`, `workflow_dispatch`.
 - Permissions: `packages: write` (the GHCR push) + `contents: read`.
 - One job named `publish-core-image`.
-- Uses `docker/login-action` → GHCR, `docker/build-push-action` with
-  `push: true` and at least one `ghcr.io/ericmey/musubi-core` tag.
+- Uses `docker/login-action` → GHCR, builds one local scan candidate,
+  and publishes that exact image only after the CRITICAL gate.
 - Builds for `linux/amd64`.
 - Does NOT mutate `deploy/ansible/group_vars/all.yml` — digest bumps
   are separate, human-reviewed PRs.
@@ -182,13 +182,39 @@ def test_critical_gate_runs_before_any_registry_push() -> None:
         for i, step in enumerate(steps)
         if step.get("name") == "Trivy vulnerability scan (SARIF — CRITICAL gate)"
     )
-    push_index = next(i for i, step in enumerate(steps) if step.get("name") == "Build and push")
-    assert gate_index < push_index, "registry push occurs before the CRITICAL gate"
+    registry_writers: list[int] = []
+    for index, step in enumerate(steps):
+        with_block = step.get("with") or {}
+        if (
+            "docker/build-push-action" in str(step.get("uses", ""))
+            and with_block.get("push") is True
+        ):
+            registry_writers.append(index)
+        run = str(step.get("run", ""))
+        if any(token in run for token in ("docker push", "--push", "oras push", "skopeo copy")):
+            registry_writers.append(index)
+
+    assert registry_writers, "workflow has no registry publication step"
+    assert all(gate_index < index for index in registry_writers), (
+        "a registry write occurs before the CRITICAL gate"
+    )
 
     candidate = next(step for step in steps if step.get("name") == "Build local scan candidate")
-    run = str(candidate.get("run", ""))
-    assert "--load" in run
-    assert "--push" not in run
+    with_block = candidate.get("with") or {}
+    assert with_block.get("load") is True
+    assert with_block.get("push") is False
+
+
+def test_publisher_retags_the_exact_scanned_image_without_rebuilding() -> None:
+    steps = _job_steps()
+    builds = [s for s in steps if "docker/build-push-action" in str(s.get("uses", ""))]
+    assert len(builds) == 1, "workflow must build exactly once"
+
+    publisher = next(step for step in steps if step.get("name") == "Publish scanned image")
+    run = str(publisher.get("run", ""))
+    assert 'docker tag "$SCAN_IMAGE" "$tag"' in run
+    assert 'docker push "$tag"' in run
+    assert "docker build" not in run
 
 
 def test_workflow_grants_security_events_write_for_sarif_upload() -> None:
@@ -217,12 +243,13 @@ def test_workflow_logs_into_ghcr() -> None:
     assert registry == "ghcr.io", f"login registry is {registry!r}, expected ghcr.io"
 
 
-def test_workflow_uses_build_push_action_with_push_true() -> None:
+def test_workflow_uses_build_push_action_for_local_candidate() -> None:
     steps = _job_steps()
     build = [s for s in steps if "docker/build-push-action" in str(s.get("uses", ""))]
     assert build, "no docker/build-push-action step"
     with_block = build[0].get("with") or {}
-    assert with_block.get("push") is True, "build-push-action must set push: true"
+    assert with_block.get("load") is True, "scan candidate must load into Docker"
+    assert with_block.get("push") is False, "build must not publish before Trivy"
 
 
 def test_workflow_builds_for_linux_amd64() -> None:

@@ -100,20 +100,27 @@ jobs:
             org.opencontainers.image.licenses=Apache-2.0
 
       - name: Build local scan candidate
+        id: candidate
         # The security gate must run before any registry tag is changed.
         # A vulnerable candidate may exist in this runner's Docker store,
         # but it cannot become :main, :latest, or a release tag.
-        run: |
-          set -euo pipefail
-          docker buildx build \
-            --platform linux/amd64 \
-            --load \
-            --tag "musubi-core:scan-${GITHUB_SHA}" \
-            --secret id=hf_token,env=HF_TOKEN \
-            --cache-from type=gha \
-            .
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: musubi-core:scan-${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Docker's local image store cannot load BuildKit's manifest-level
+          # attestations. The exact scanned image is signed and receives a
+          # CycloneDX attestation after publication below.
+          provenance: false
+          sbom: false
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
 
       # ------------------------------------------------------------------
       # Supply-chain hardening. Each step is allowed to fail the job —
@@ -172,21 +179,25 @@ jobs:
           sarif_file: trivy-results.sarif
           category: trivy
 
-      - name: Build and push
+      - name: Publish scanned image
         id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
-          secrets: |
-            hf_token=${{ secrets.HF_TOKEN }}
+        env:
+          PUBLISH_TAGS: ${{ steps.meta.outputs.tags }}
+          SCAN_IMAGE: musubi-core:scan-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          first_tag=""
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            [[ -n "$first_tag" ]] || first_tag="$tag"
+            docker tag "$SCAN_IMAGE" "$tag"
+            docker push "$tag"
+          done <<< "$PUBLISH_TAGS"
+          [[ -n "$first_tag" ]]
+          published_ref=$(docker image inspect --format '{{index .RepoDigests 0}}' "$first_tag")
+          digest=${published_ref##*@}
+          [[ "$digest" == sha256:* ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
