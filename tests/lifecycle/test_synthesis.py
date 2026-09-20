@@ -728,6 +728,8 @@ async def test_contradictory_concepts_link_both_sides(
     assert c1 is not None and c2 is not None
     assert c2.object_id in c1.contradicts
     assert c1.object_id in c2.contradicts
+    assert c1.version == 2
+    assert c2.version == 2
 
 
 @pytest.mark.skip(

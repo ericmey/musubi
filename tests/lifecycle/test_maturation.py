@@ -32,6 +32,7 @@ Architecture notes:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import warnings
 from collections.abc import Iterator
@@ -1355,21 +1356,18 @@ async def test_concept_maturation_refuses_contradiction_added_after_eligibility_
         nonlocal raced
         if not raced:
             raced = True
-            qdrant.set_payload(
-                collection_name="musubi_concept",
-                payload={
-                    "contradicts": [contradiction],
-                    "version": selected.version + 1,
-                },
-                points=qmodels.Filter(
-                    must=[
-                        qmodels.FieldCondition(
-                            key="object_id", match=qmodels.MatchValue(value=saved.object_id)
-                        )
-                    ]
-                ),
-                wait=True,
-            )
+            # ``transition`` is synchronous, so run the real async contradiction writer on a
+            # worker thread.  This plants the production interleaving instead of hand-crafting a
+            # stronger mutation that happens to bump ``version``.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(
+                    asyncio.run,
+                    plane.add_contradiction(
+                        namespace=namespace,
+                        object_id=saved.object_id,
+                        contradicted_id=contradiction,
+                    ),
+                ).result()
         return real_transition(*args, **kwargs)
 
     monkeypatch.setattr(maturation, "transition", contradict_candidate_then_transition)
