@@ -808,29 +808,15 @@ async def synthesis_run(
             if cfg.contradiction_min_similarity <= sim < cfg.contradiction_max_similarity:
                 verdict = await ollama.check_contradiction(ContradictionInput(concept_a, concept_b))
                 if verdict and verdict.verdict == "contradictory":
-                    for cid, other_id in [
-                        (concept_a.object_id, concept_b.object_id),
-                        (concept_b.object_id, concept_a.object_id),
+                    for concept, other in [
+                        (concept_a, concept_b),
+                        (concept_b, concept_a),
                     ]:
-                        curr = await concept_plane.get(
-                            namespace=concept_a.namespace
-                            if cid == concept_a.object_id
-                            else concept_b.namespace,
-                            object_id=cid,
+                        await concept_plane.add_contradiction(
+                            namespace=concept.namespace,
+                            object_id=concept.object_id,
+                            contradicted_id=other.object_id,
                         )
-                        if curr:
-                            new_contradicts = list({*curr.contradicts, other_id})
-                            client.set_payload(
-                                collection_name=collection_for_plane("concept"),
-                                payload={"contradicts": new_contradicts},
-                                points=models.Filter(
-                                    must=[
-                                        models.FieldCondition(
-                                            key="object_id", match=models.MatchValue(value=cid)
-                                        )
-                                    ]
-                                ),
-                            )
                     contradictions_detected += 1
 
     # Step 5: Candidates pool maintenance
