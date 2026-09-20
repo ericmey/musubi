@@ -158,8 +158,8 @@
           - "{{ lookup('pipe', 'id -u') }}:{{ lookup('pipe', 'id -g') }}"
           - --entrypoint
           - python
-          - --env-file
-          - "{{ candidate_preflight_authority_env }}"
+          - --mount
+          - "type=bind,src={{ candidate_preflight_authority_env }},dst=/preflight/authority.env,readonly"
           - --mount
           - "type=bind,src={{ candidate_credential_dir }},dst=/credentials,readonly"
           - --mount
@@ -171,6 +171,8 @@
           - /preflight/manifest.json
           - --credential-dir
           - /credentials
+          - --authority-env
+          - /preflight/authority.env
       delegate_to: localhost
       become: false
       changed_when: false

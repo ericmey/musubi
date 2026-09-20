@@ -147,3 +147,9 @@ validator; the behavior each historical test proves is unchanged.
   deselected, one expected xfail, and 89% total coverage; the focused auth,
   deployment, and release-contract set passed 114/114. Test Contract remains
   10/10 with no deferrals.
+- Copilot closeout removed Docker `--env-file` injection for the authority
+  settings. The candidate now parses a read-only mount and accepts exactly one
+  `JWT_SIGNING_KEY` plus one `OAUTH_AUTHORITY`; unknown, duplicate, incomplete,
+  unreadable, and invalid-UTF-8 files fail with a bounded message. Credential
+  files likewise reject duplicate `MUSUBI_TOKEN` assignments and invalid UTF-8
+  instead of validating a non-effective value.

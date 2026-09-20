@@ -51,20 +51,8 @@ def get_settings() -> Settings:
     return Settings(_env_file=_dotenv_path())  # type: ignore[call-arg]
 
 
-def get_credential_preflight_settings() -> CredentialPreflightSettings:
-    """Load only the auth inputs needed by the candidate-image preflight."""
-
-    return CredentialPreflightSettings.model_validate(
-        {
-            "jwt_signing_key": os.environ.get("JWT_SIGNING_KEY"),
-            "oauth_authority": os.environ.get("OAUTH_AUTHORITY"),
-        }
-    )
-
-
 __all__ = [
     "CredentialPreflightSettings",
     "Settings",
-    "get_credential_preflight_settings",
     "get_settings",
 ]

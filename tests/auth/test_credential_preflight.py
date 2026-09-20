@@ -226,12 +226,8 @@ def test_candidate_preflight_rejects_duplicate_token_assignments(
 ) -> None:
     first = _token(api_settings, "aoi/command-chair")
     second = _token(api_settings, "different/command-chair")
-    (tmp_path / "musubi-mcp-aoi.env").write_text(
-        f"MUSUBI_TOKEN={first}\nMUSUBI_TOKEN={second}\n"
-    )
-    _write_env(
-        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
-    )
+    (tmp_path / "musubi-mcp-aoi.env").write_text(f"MUSUBI_TOKEN={first}\nMUSUBI_TOKEN={second}\n")
+    _write_env(tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair"))
     lines: list[str] = []
 
     assert not run_preflight(
@@ -247,9 +243,7 @@ def test_candidate_preflight_rejects_invalid_utf8_credential(
     tmp_path: Path, api_settings: Settings
 ) -> None:
     (tmp_path / "musubi-mcp-aoi.env").write_bytes(b"MUSUBI_TOKEN=\xff\n")
-    _write_env(
-        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
-    )
+    _write_env(tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair"))
 
     assert not run_preflight(
         manifest_path=_manifest(tmp_path),

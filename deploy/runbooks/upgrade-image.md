@@ -116,13 +116,14 @@ docker pull "${CANDIDATE_IMAGE}"
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   --entrypoint python \
-  --env-file "${MUSUBI_PREFLIGHT_AUTHORITY_ENV}" \
+  --mount "type=bind,src=${MUSUBI_PREFLIGHT_AUTHORITY_ENV},dst=/preflight/authority.env,readonly" \
   --mount "type=bind,src=${MUSUBI_CREDENTIAL_DIR},dst=/credentials,readonly" \
   --mount "type=bind,src=${PWD}/deploy/credential-preflight.json,dst=/preflight/manifest.json,readonly" \
   "${CANDIDATE_IMAGE}" \
   -m musubi.auth.credential_preflight \
   --manifest /preflight/manifest.json \
-  --credential-dir /credentials
+  --credential-dir /credentials \
+  --authority-env /preflight/authority.env
 
 # Merge only after the command above reports every live credential and control PASS.
 gh pr merge <number> --squash
@@ -143,9 +144,10 @@ and is not part of the eligible live set.
 `update.yml` repeats signature verification and the candidate preflight before
 it can recreate Core. This defense is intrinsic to the playbook rather than a
 caller-provided attestation, so direct Core updates run the same gate.
-`MUSUBI_PREFLIGHT_AUTHORITY_ENV` must name a minimal env containing only
-`JWT_SIGNING_KEY` and `OAUTH_AUTHORITY`; `MUSUBI_CREDENTIAL_DIR` may override
-the default `~/.musubi` directory.
+`MUSUBI_PREFLIGHT_AUTHORITY_ENV` must name a minimal env containing exactly one
+`JWT_SIGNING_KEY` and one `OAUTH_AUTHORITY`; it is mounted rather than injected
+wholesale, and duplicate or unknown keys fail closed. `MUSUBI_CREDENTIAL_DIR`
+may override the default `~/.musubi` directory.
 
 **Expected output:** `update.yml` reports one changed task (the
 `docker_compose_v2` task that recreates `core`). Everything else

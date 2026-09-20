@@ -14,7 +14,7 @@ import jwt
 from pydantic import ValidationError
 
 from musubi.auth.tokens import TokenValidationSettings
-from musubi.config import get_credential_preflight_settings
+from musubi.config import CredentialPreflightSettings
 from musubi.types.common import Err, Ok
 
 from .tokens import InvalidTokenError, validate_token
@@ -27,8 +27,10 @@ def _read_token(path: Path) -> str | None:
 
     try:
         lines = path.read_text().splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return None
+    token: str | None = None
+    seen_token = False
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -36,11 +38,50 @@ def _read_token(path: Path) -> str | None:
         key, value = line.split("=", 1)
         if key.strip() != "MUSUBI_TOKEN":
             continue
+        if seen_token:
+            return None
+        seen_token = True
         token = value.strip()
         if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}:
             token = token[1:-1]
-        return token or None
-    return None
+        if not token:
+            return None
+    return token
+
+
+def _load_authority_settings(path: Path) -> CredentialPreflightSettings:
+    """Load exactly the two authorized settings from a mounted env file."""
+
+    allowed = {"JWT_SIGNING_KEY", "OAUTH_AUTHORITY"}
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("authority env is unreadable") from exc
+
+    values: dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError("authority env contains an invalid assignment")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in allowed or key in values:
+            raise ValueError("authority env key set is invalid")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        values[key] = value
+
+    if set(values) != allowed:
+        raise ValueError("authority env key set is incomplete")
+    return CredentialPreflightSettings.model_validate(
+        {
+            "jwt_signing_key": values["JWT_SIGNING_KEY"],
+            "oauth_authority": values["OAUTH_AUTHORITY"],
+        }
+    )
 
 
 def _load_manifest(path: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -193,10 +234,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--credential-dir", type=Path, required=True)
+    parser.add_argument("--authority-env", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        settings = get_credential_preflight_settings()
-    except ValidationError:
+        settings = _load_authority_settings(args.authority_env)
+    except (ValidationError, ValueError):
         _stdout("FAIL preflight settings invalid")
         return 1
     return (

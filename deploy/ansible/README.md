@@ -85,11 +85,12 @@ MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
   scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
-That root-readable env contains only `JWT_SIGNING_KEY` and
-`OAUTH_AUTHORITY`. Before mounting that env or the credential directory, the
-playbook verifies the exact digest's cosign identity. It then runs the candidate
-as the controller UID/GID, inventories every `musubi-mcp*.env`, and fails before
-touching the workload host if any file is unclassified, missing, or rejected.
+That root-readable env contains exactly one `JWT_SIGNING_KEY` and one
+`OAUTH_AUTHORITY`. Before mounting that file or the credential directory, the
+playbook verifies the exact digest's cosign identity. The candidate rejects
+unknown or duplicate authority keys, runs as the controller UID/GID, inventories
+every `musubi-mcp*.env`, and fails before touching the workload host if any file
+is unclassified, ambiguous, missing, or rejected.
 
 Dry-run first whenever possible:
 

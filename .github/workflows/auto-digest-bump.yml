@@ -269,13 +269,14 @@ jobs:
           docker run --rm \\
             --user "\$(id -u):\$(id -g)" \\
             --entrypoint python \\
-            --env-file "\${MUSUBI_PREFLIGHT_AUTHORITY_ENV}" \\
+            --mount "type=bind,src=\${MUSUBI_PREFLIGHT_AUTHORITY_ENV},dst=/preflight/authority.env,readonly" \\
             --mount "type=bind,src=\${MUSUBI_CREDENTIAL_DIR},dst=/credentials,readonly" \\
             --mount "type=bind,src=\${PWD}/deploy/credential-preflight.json,dst=/preflight/manifest.json,readonly" \\
             \${CANDIDATE_IMAGE} \\
             -m musubi.auth.credential_preflight \\
             --manifest /preflight/manifest.json \\
-            --credential-dir /credentials
+            --credential-dir /credentials \\
+            --authority-env /preflight/authority.env
           \`\`\`
 
           ## After merge
