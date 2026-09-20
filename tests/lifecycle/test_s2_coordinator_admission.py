@@ -15,6 +15,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -529,3 +530,206 @@ def test_the_migration_guard_recognises_its_own_index_as_current(tmp_path: Path)
         f"correct index:\n  expected {store._EXPECTED_ACTIVE_INTENT_KEY!r}\n  actual   "
         f"{store._normalise_sql(sql)!r}"
     )
+
+
+def test_a_failed_index_replacement_rolls_back_and_leaves_the_old_index(tmp_path: Path) -> None:
+    """THE TRANSACTION CELL. A migration must never open a hole in its own constraint.
+
+    `DROP INDEX` outside a transaction COMMITS. Between it and the `CREATE`,
+    `ux_active_intent` does not exist at all -- and any admission landing in that window
+    can insert a second active intent for one identity. Worse, if the `CREATE` then
+    fails, the database is left permanently without the constraint (Copilot, musubi#771).
+
+    A deterministic fault beats a thread race here: fail the CREATE and require the OLD
+    index to still be present afterwards. That can only hold if both statements shared
+    one transaction, which is the property under test."""
+    db = tmp_path / "rollback.db"
+    con = sqlite3.connect(db)
+    try:
+        con.executescript(
+            "CREATE TABLE lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT,"
+            " collection TEXT, namespace TEXT, state TEXT);"
+            "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox (collection, object_id)"
+            " WHERE state IN ('PENDING','APPLIED');"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    con = store.connect(db)
+
+    class _FailsTheCreate:
+        """Proxy, because `sqlite3.Connection.execute` is read-only and cannot be
+        monkeypatched. The migration only touches `execute` and `in_transaction`."""
+
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        fired = False
+
+        def execute(self, sql: str, *args: Any) -> Any:
+            if sql.strip().upper().startswith("CREATE UNIQUE INDEX"):
+                type(self).fired = True
+                raise sqlite3.OperationalError("disk I/O error")
+            return self._real.execute(sql, *args)
+
+        @property
+        def in_transaction(self) -> bool:
+            return self._real.in_transaction
+
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            store._migrate_active_intent_index(_FailsTheCreate(con))  # type: ignore[arg-type]
+        # The injected fault must actually have fired, or `pytest.raises` was satisfied
+        # by some unrelated OperationalError and the rollback below proves nothing
+        # (Yua, musubi#771).
+        assert _FailsTheCreate.fired, "the CREATE fault never fired; this cell is inert"
+
+        sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+        ).fetchone()
+        assert sql is not None, (
+            "the DROP committed on its own: the table now has NO active-intent "
+            "constraint at all, which is worse than the old one"
+        )
+        assert not con.in_transaction, "the connection was left mid-transaction"
+    finally:
+        con.close()
+
+
+def test_the_migration_refuses_to_run_inside_a_callers_transaction(tmp_path: Path) -> None:
+    """It owns BEGIN..COMMIT, so it must not be handed an open one.
+
+    An earlier draft called `conn.commit()` when it found a transaction open -- which
+    would durably land a caller's unrelated in-flight work as a side effect of a schema
+    check. Refusing is the honest boundary (Yua, musubi#771)."""
+    con = store.connect(tmp_path / "busy.db")
+    try:
+        store.ensure_schema(con)
+        con.execute("BEGIN IMMEDIATE")
+        assert con.in_transaction
+        with pytest.raises(store.LifecycleStoreError):
+            store._migrate_active_intent_index(con)
+        con.execute("ROLLBACK")
+    finally:
+        con.close()
+
+
+def test_the_shared_takeover_rule_accepts_only_string_tokens(tmp_path: Path) -> None:
+    """Only writer-produced string tokens may enter the shared takeover path.
+
+    Both consumers must classify and fence the same stored object. A mapping cannot
+    build Qdrant's scalar MatchValue; an integer can, but no lease writer produces one.
+    Reject both by contract while retaining takeover for exactly fenceable malformed
+    strings (Yua, musubi#771).
+    """
+    from musubi.store.mutation_lease import is_expired_done_token, is_takeover_eligible_token
+
+    now_us = 1_000_000_000_000_000
+
+    assert is_takeover_eligible_token("done:1:crashed", now_us=now_us)
+    # `own:*` -- a writer that died BEFORE committing. The narrower question says no;
+    # the takeover question says yes, and the row would otherwise be stranded forever.
+    assert is_takeover_eligible_token("own:1:crashed", now_us=now_us)
+    assert not is_expired_done_token("own:1:crashed", now_us=now_us)
+    # Writers produce string lease tokens. A mapping crashes MatchValue construction;
+    # an integer is scalar-matchable but remains outside that schema. Both consumers
+    # reject all non-strings so classification and the exact fence use the same object.
+    # Malformed strings remain safe because their exact value is consistently fenceable.
+    assert not is_takeover_eligible_token(12345, now_us=now_us)
+    assert not is_takeover_eligible_token({"junk": True}, now_us=now_us)
+    assert is_takeover_eligible_token("junk", now_us=now_us)
+    # a live token is nobody else's to take, whatever its shape
+    assert not is_takeover_eligible_token(f"own:{now_us}:live", now_us=now_us)
+    # falsy is "no token", not "an ancient one"
+    assert not is_takeover_eligible_token("", now_us=now_us)
+    assert not is_takeover_eligible_token(None, now_us=now_us)
+
+
+def test_no_admission_can_slip_through_the_index_replacement_gap(tmp_path: Path) -> None:
+    """THE CONCURRENCY CELL. Rollback and exclusion are different properties.
+
+    The sibling cell proves a failed CREATE restores the old index. It says nothing
+    about the window itself: with `DROP INDEX` committing on its own, there is a moment
+    where NO active-intent constraint exists, and a concurrent admission can insert a
+    second intent for one identity -- durable, and never detected afterwards, because
+    the finished index does not re-validate existing rows.
+
+    `BEGIN IMMEDIATE` is what closes it: the migration holds the write lock across both
+    statements, so a second connection cannot write at all during the gap. Proven
+    deterministically from INSIDE the gap rather than with a thread race
+    (Tama, musubi#771)."""
+    db = tmp_path / "gap.db"
+    con = store.connect(db)
+    store.ensure_schema(con)
+    con.execute(
+        "DROP INDEX ux_active_intent"
+    )  # put the DB back on the old shape so the migration runs
+    con.execute(
+        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox (collection, object_id)"
+        " WHERE state IN ('PENDING','APPLIED')"
+    )
+    # Seed the identity the intruder will try to DUPLICATE. Without it the intruder is
+    # attempting a first insert, which the constraint would permit anyway -- the cell
+    # would then prove only that the lock holds, not that it is guarding anything
+    # (Tama, musubi#771).
+    con.execute(
+        "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,namespace,state)"
+        " VALUES ('incumbent','oid','musubi_episodic','tenant/a','PENDING')"
+    )
+    con.commit()
+
+    intruder = store.connect(db, busy_timeout_ms=100)
+    outcome: dict[str, object] = {}
+
+    class _IntrudesInTheGap:
+        """Proxy that attempts a foreign write at the exact moment the index is absent."""
+
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        def execute(self, sql: str, *args: Any) -> Any:
+            if sql.strip().upper().startswith("CREATE UNIQUE INDEX"):
+                outcome["reached_gap"] = True
+                try:
+                    intruder.execute(
+                        "INSERT INTO lifecycle_outbox"
+                        " (operation_key,object_id,collection,namespace,state)"
+                        " VALUES ('intruder','oid','musubi_episodic','tenant/a','PENDING')"
+                    )
+                    intruder.commit()
+                    outcome["landed"] = True
+                except sqlite3.OperationalError as exc:
+                    outcome["landed"] = False
+                    outcome["error"] = str(exc)
+            return self._real.execute(sql, *args)
+
+        @property
+        def in_transaction(self) -> bool:
+            return self._real.in_transaction
+
+    try:
+        store._migrate_active_intent_index(_IntrudesInTheGap(con))  # type: ignore[arg-type]
+        assert outcome.get("reached_gap"), "the migration never ran; the cell is inert"
+        assert outcome.get("landed") is False, (
+            "a concurrent admission landed while the unique index was absent -- the "
+            "migration opened a hole in the constraint it exists to install"
+        )
+        sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+        ).fetchone()[0]
+        assert "COALESCE" in sql.upper(), f"the migration did not complete: {sql}"
+
+        # BEHAVIOURAL, not textual. Index SQL matching a pattern is a claim about a
+        # string; this is the constraint actually refusing a same-full-identity
+        # duplicate once the lock is released.
+        with pytest.raises(sqlite3.IntegrityError):
+            con.execute(
+                "INSERT INTO lifecycle_outbox"
+                " (operation_key,object_id,collection,namespace,state)"
+                " VALUES ('after','oid','musubi_episodic','tenant/a','PENDING')"
+            )
+            con.commit()
+    finally:
+        intruder.close()
+        con.close()

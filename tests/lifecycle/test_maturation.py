@@ -47,7 +47,7 @@ with warnings.catch_warnings():
 
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle import LifecycleEventSink, file_lock, maturation
-from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.maturation import (
     DEFAULT_TAG_ALIASES,
     MaturationConfig,
@@ -63,7 +63,7 @@ from musubi.lifecycle.maturation import (
 )
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
-from musubi.types.common import KSUID, epoch_of, utc_now
+from musubi.types.common import KSUID, Err, Ok, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
@@ -1683,6 +1683,16 @@ async def test_enrichment_does_not_cross_namespaces_at_runtime(
                     "object_id": str(row.object_id),
                     "namespace": stranger_ns,
                     "state": "matured",
+                    # VERSION, without which this cell proves nothing. The fence is
+                    # namespace + object_id + state + version, and a `FieldCondition`
+                    # cannot match a point that LACKS the field -- so a stranger with no
+                    # `version` was unreachable whatever the namespace condition did.
+                    # Delete the namespace term entirely and the cell still passed
+                    # (Copilot, musubi#771).
+                    #
+                    # It is set below, once the anchor's version is known, because
+                    # hard-coding a number here is how it silently drifts out of range
+                    # again.
                     "importance": 9,
                     "tags": ["untouched"],
                     "updated_epoch": 1.0,
@@ -1691,10 +1701,31 @@ async def test_enrichment_does_not_cross_namespaces_at_runtime(
         ],
         wait=True,
     )
-    before = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
-
     live = await plane.get(namespace=ns, object_id=row.object_id)
     assert live is not None
+
+    # Give the stranger the anchor's EXACT version, so the only thing standing between
+    # the write and it is the namespace condition. This is what arms the cell.
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"version": live.version},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="namespace", match=qmodels.MatchValue(value=stranger_ns)
+                ),
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                ),
+            ]
+        ),
+        wait=True,
+    )
+    before = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
+    assert before["version"] == live.version, (
+        "the stranger does not share the anchor's version, so the version fence -- not "
+        "the namespace guard -- is what excludes it, and this cell is inert"
+    )
     applied = _apply_enrichment(
         qdrant,
         collection="musubi_episodic",
@@ -1706,11 +1737,17 @@ async def test_enrichment_does_not_cross_namespaces_at_runtime(
         topics=["hardware/gpu"],
     )
 
-    assert applied, "the fence refused my own matured row; this cell would prove nothing"
+    # THE CLAIM FIRST, then the sentinel. Ordered the other way round, deleting the
+    # namespace condition makes the fence match TWO rows, the readback count is 2, and
+    # `applied` is False -- so the sentinel fires and the cell reds for the wrong reason
+    # while the stranger IS being corrupted right next to it. A red on "this cell would
+    # prove nothing" looks like a working falsifier and hides the actual evidence
+    # (musubi#771).
     after = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
     assert after == before, (
         "enrichment wrote to a row in another namespace that shares this object_id"
     )
+    assert applied, "the fence refused my own matured row; this cell would prove nothing"
 
 
 async def test_a_row_restored_to_matured_does_not_accept_stale_enrichment(
@@ -1919,13 +1956,27 @@ async def test_a_refused_enrichment_is_recorded_as_a_failure(
     )
 
 
-async def test_an_expired_ordinary_lease_does_not_block_the_lifecycle_forever(
+@pytest.mark.parametrize("token", ["", "done:1:long-expired", "own:1:crashed-before-commit"])
+async def test_an_unowned_or_expired_ordinary_lease_does_not_block_the_lifecycle_forever(
+    token: str,
     plane: EpisodicPlane,
     qdrant: QdrantClient,
     ns: str,
     sink: Any,
 ) -> None:
     """THE LIVENESS CONTROL, and the reason the fence is not a bare `IsEmpty`.
+
+    The mutation seam treats every falsy token as absent. The lifecycle path once
+    checked only for ``None``, so a persisted empty string became a live lease here and
+    fenced the row forever even though an ordinary writer would ignore it (Copilot,
+    musubi#771).
+
+    Parametrized over BOTH lease phases, because the helper's parity cell cannot see
+    which function the coordinator actually calls. `own:*` is the phase a writer holds
+    BEFORE committing, and `is_expired_done_token` rejects it by prefix -- so a crash
+    there fenced the row forever while `owned_update`'s own acquire would have taken it
+    over. A helper cell would stay green through that; only driving the real transition
+    can tell (Tama, musubi#771).
 
     `update_lease_token` is the generic mutation lease. A crashed ORDINARY patch on any
     row leaves a `done:*` token behind with no retraction saga coming to clear it. A
@@ -1942,7 +1993,7 @@ async def test_an_expired_ordinary_lease_does_not_block_the_lifecycle_forever(
     row = await plane.create(EpisodicMemory(namespace=ns, content="crashed ordinary patch"))
     qdrant.set_payload(
         collection_name="musubi_episodic",
-        payload={"update_lease_token": "done:1:long-expired"},
+        payload={"update_lease_token": token},
         points=qmodels.Filter(
             must=[
                 qmodels.FieldCondition(
@@ -1968,6 +2019,156 @@ async def test_an_expired_ordinary_lease_does_not_block_the_lifecycle_forever(
     assert after.state == "matured", (
         "an EXPIRED ordinary lease blocked the lifecycle; a crashed patch would strand "
         "this row permanently because no saga is coming to clear it"
+    )
+    # The takeover must CLEAR the token, not transition around it: a surviving token
+    # would fence the next writer for the same reason (Yua, musubi#771).
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    assert live[0].get("update_lease_token") is None, (
+        f"the expired token survived the takeover: {live[0].get('update_lease_token')!r}"
+    )
+
+
+async def test_an_expired_own_token_with_retraction_evidence_stays_saga_fenced(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """Widening takeover to `own:*` must NOT widen it past a retraction.
+
+    The takeover rule is about age; `retraction_evidence` is about OWNERSHIP, and it is
+    checked first. A saga's row is never stolen however old its token -- otherwise
+    fixing the strand would have opened a worse hole than the one it closed."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="saga owns this"))
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "update_lease_token": "own:1:crashed-mid-retraction",
+            "retraction_evidence": {"reason": "user-requested"},
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    coordinator = _coordinator(qdrant, sink)
+    first = transition(
+        qdrant,
+        coordinator=coordinator,
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+    assert isinstance(first, Err) and first.error.code == "terminal_apply_failure"
+
+    # Raw payload, not `plane.get`: the fence only needs `retraction_evidence` to be
+    # PRESENT, so this plants a sentinel rather than a full valid `RetractionEvidence`.
+    # Building a real one would test the model instead of the fence.
+    rows = _payload(qdrant, str(row.object_id))
+    assert len(rows) == 1
+    assert rows[0].get("state") != "matured", (
+        "the lifecycle took over a row whose retraction saga still owns it; age is not ownership"
+    )
+    assert rows[0].get("update_lease_token") == "own:1:crashed-mid-retraction", (
+        "the saga's token was cleared by the lifecycle takeover path"
+    )
+    qdrant.delete_payload(
+        collection_name="musubi_episodic",
+        keys=["update_lease_token"],
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+    replay = coordinator.reconcile_once()
+    assert replay.finalized == 0 and replay.pending == 0
+    assert _payload(qdrant, str(row.object_id))[0].get("state") != "matured", (
+        "the reconciler reactivated the retraction after its saga cleared the lease"
+    )
+
+
+async def test_a_non_scalar_mutation_token_fails_closed_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """A corrupt mapping lease fails the shared string-token contract.
+
+    The shared helper once classified every truthy malformed value as ancient, while
+    the coordinator passed the raw value into ``MatchValue``. A dict therefore raised
+    ValidationError instead of recovering or refusing. Both consumers must fail closed
+    before constructing a fence for an unsupported token shape (Copilot, musubi#771).
+    """
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="corrupt lease token"))
+    corrupt = {"junk": True}
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": corrupt},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    coordinator = _coordinator(qdrant, sink)
+    observed: dict[str, object] = {}
+    real_apply = coordinator._apply_conditional
+
+    def observe_apply(*args: Any, **kwargs: Any) -> str:
+        try:
+            status = real_apply(*args, **kwargs)
+        except Exception as exc:
+            observed["raised"] = type(exc).__name__
+            raise
+        observed["status"] = status
+        return status
+
+    monkeypatch.setattr(coordinator, "_apply_conditional", observe_apply)
+    result = transition(
+        qdrant,
+        coordinator=coordinator,
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+    assert observed == {"status": "contended"}, (
+        "the corrupt token reached Qdrant instead of failing the shared token contract"
+    )
+    assert isinstance(result, Ok) and is_transition_pending(result.value)
+
+    rows = _payload(qdrant, str(row.object_id))
+    assert len(rows) == 1
+    assert rows[0].get("state") != "matured", "a corrupt lease was treated as recoverable"
+    assert rows[0].get("update_lease_token") == corrupt, (
+        "the coordinator cleared a token shape it cannot fence exactly"
     )
 
 
@@ -2318,3 +2519,12 @@ async def test_a_cleanup_failure_does_not_turn_a_durable_success_into_a_refusal(
     # ...and the residue it left behind is inert: a later attempt generates its own
     # marker and cannot match this one.
     assert live[0].get("enrichment_attempt") is not None, "expected residue for this cell"
+
+    # INERT MUST MEAN INERT, INCLUDING FOR TYPED READS. The models are `extra="forbid"`,
+    # so a marker left on the row by a crash or a cleanup fault would make every
+    # subsequent `plane.get` raise a ValidationError -- the hygiene field would break
+    # reads it was never meant to touch. It belongs in the read-internal strip set
+    # (Yua, musubi#771).
+    readable = await plane.get(namespace=ns, object_id=row.object_id)
+    assert readable is not None, "the row became unreadable with marker residue on it"
+    assert readable.importance == 6

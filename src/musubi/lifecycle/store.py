@@ -297,8 +297,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             # OperationalError (a genuine schema/lock fault must still surface).
             if "duplicate column name" not in str(exc).lower():
                 raise
-    _migrate_active_intent_index(conn)
+    # End the schema-setup transaction BEFORE the migration, which owns its own.
     conn.commit()
+    _migrate_active_intent_index(conn)
 
 
 def _normalise_sql(sql: str) -> str:
@@ -321,35 +322,62 @@ change is about, and it reappeared inside the guard against it (Tama, musubi#771
 
 
 def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
-    """Re-scope ``ux_active_intent`` to include ``namespace`` on an existing DB.
+    """Re-scope ``ux_active_intent`` to the full identity, atomically.
 
     `CREATE UNIQUE INDEX IF NOT EXISTS` is a NO-OP when an index of that name already
     exists, whatever its columns -- so a schema edit alone silently leaves every
-    pre-existing database on the old two-column index. The defect would persist exactly
-    where it matters (deployments with data) and disappear in tests (fresh DBs), which
-    is the worst possible split.
+    pre-existing database on the old index. The defect would persist exactly where it
+    matters (deployments with data) and vanish in tests (fresh DBs).
+
+    **The lock is taken BEFORE the shape is read, and both statements share it.** Two
+    faults, and the second is the one that bites in production:
+
+    1. Deciding from an unlocked `sqlite_master` read lets two processes both see the
+       old shape and both migrate, the second acting on a decision already stale.
+    2. `DROP INDEX` outside a transaction COMMITS. Between it and the `CREATE`, the
+       partial unique index does not exist at all -- and any admission landing in that
+       window can insert a second active intent for one identity. A migration that
+       installs a constraint must never open a hole in it (Copilot/Yua, musubi#771).
 
     Widening a unique index can never fail on existing rows: more columns means fewer
-    collisions, so any set of rows legal under `(collection, object_id)` is legal under
-    `(collection, namespace, object_id)`. The reverse would not be safe.
+    collisions, so any set legal under the old key is legal under the new one.
     """
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
-    ).fetchone()
-    if row is None or row[0] is None:
-        return
-    # DETECT THE SHAPE, NOT THE COLUMN NAME. `"namespace" in sql` accepts a PLAIN
-    # three-column index -- which is precisely the unsafe form, because SQLite treats
-    # NULLs as distinct and a NULL-namespace row would then collide with nothing. A
-    # guard that passes the exact variant it exists to replace is the same defect this
-    # whole PR is about: right check, wrong object (Tama, musubi#771).
-    if _EXPECTED_ACTIVE_INTENT_KEY in _normalise_sql(str(row[0])):
-        return
-    conn.execute("DROP INDEX ux_active_intent")
-    conn.execute(
-        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
-        "(collection, COALESCE(namespace, ''), object_id) WHERE state IN ('PENDING','APPLIED')"
-    )
+    # This function OWNS its transaction from BEGIN to COMMIT and must be entered with
+    # none open. Committing a caller's in-flight transaction from in here would durably
+    # land unrelated work as a side effect of a schema check -- the caller ends its own
+    # (Yua, musubi#771).
+    if conn.in_transaction:
+        raise LifecycleStoreError(
+            "_migrate_active_intent_index requires no open transaction; the caller must "
+            "commit or roll back its own work before the index is replaced"
+        )
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+        ).fetchone()
+        if (
+            row is not None
+            and row[0] is not None
+            and _EXPECTED_ACTIVE_INTENT_KEY not in _normalise_sql(str(row[0]))
+        ):
+            conn.execute("DROP INDEX ux_active_intent")
+            conn.execute(
+                "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+                "(collection, COALESCE(namespace, ''), object_id) "
+                "WHERE state IN ('PENDING','APPLIED')"
+            )
+        # COMMIT belongs INSIDE the try. A commit can fail -- disk full, I/O error, a
+        # lock lost -- and outside it that exception escapes with no rollback, leaving
+        # the connection in-transaction for whatever runs next. The rollback is guarded
+        # on `in_transaction` because after a failed COMMIT there may be nothing left to
+        # roll back, and an unconditional ROLLBACK would then raise over the real error
+        # (Yua, musubi#771).
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 __all__ = ["DEFAULT_BUSY_TIMEOUT_MS", "LifecycleStoreError", "connect", "ensure_schema"]

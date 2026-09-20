@@ -1462,6 +1462,20 @@ def test_duplicate_anchors_in_one_namespace_refuse(tmp_path: Path) -> None:
         _locate_object(client, object_id=oid, namespace="ns/a")
     assert "at least 2 authoritative" in str(excinfo.value)
 
+    # THE REMEDIATION MUST FIT THE CAUSE. On the UNQUALIFIED path with both anchors in
+    # one namespace, the old message said "qualify the namespace" -- advice that cannot
+    # work, sending an operator to do something futile while hiding that the data needs
+    # repair (Copilot, musubi#771).
+    with pytest.raises(AmbiguousObjectId) as unqualified:
+        _locate_object(client, object_id=oid, namespace=None)
+    message = str(unqualified.value)
+    assert "qualify the namespace" not in message, (
+        f"both anchors are in ONE namespace; qualifying cannot resolve this: {message!r}"
+    )
+    assert "duplicate anchors" in message and "repair" in message, (
+        f"the refusal does not say what would actually fix it: {message!r}"
+    )
+
 
 def test_the_error_contract_does_not_claim_completeness_it_does_not_have() -> None:
     """A completeness PROMISE is testable even when the prose around it is not.
@@ -1501,3 +1515,90 @@ def test_the_error_contract_does_not_claim_completeness_it_does_not_have() -> No
             "the contract neither claims completeness nor says it is incomplete; a "
             "caller cannot tell whether to expect other codes"
         )
+
+
+@pytest.mark.parametrize("field", ["superseded_by", "supersedes"])
+@pytest.mark.parametrize("where", ["other-namespace", "other-plane"])
+def test_a_supersession_target_outside_the_subjects_identity_is_refused(
+    tmp_path: Path, field: str, where: str
+) -> None:
+    """THE LINEAGE IDENTITY CELL. A unique id is not a valid lineage target.
+
+    The walk used `namespace` only to chase a cycle; it never checked that the id it was
+    handed identifies a row in the subject's collection AND namespace. So on the
+    unqualified path any unique KSUID from another namespace -- or another plane --
+    was accepted as `superseded_by`, against the same-type/same-namespace contract
+    (Copilot, musubi#771).
+
+    The target here is UNIQUE and RESOLVABLE, just not the subject's. That is what makes
+    the cell specific: it cannot pass because of the ambiguity refusal."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.lifecycle.transitions import transition
+    from musubi.types.common import generate_ksuid
+
+    subject, foreign = generate_ksuid(), generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [{"object_id": subject, "namespace": "ns/a", "state": "provisional", "version": 1}],
+    )
+    # Both violations of the SAME contract, and neither is caught by the other's check:
+    # a right-plane/wrong-namespace target, and a right-namespace/wrong-PLANE one.
+    if where == "other-namespace":
+        client.upsert(
+            "musubi_episodic",
+            points=[
+                qmodels.PointStruct(
+                    id=99,
+                    vector=[0.1, 0.2],
+                    payload={
+                        "object_id": foreign,
+                        "namespace": "ns/b",
+                        "state": "matured",
+                        "version": 1,
+                    },
+                )
+            ],
+        )
+    else:
+        _collection_with(
+            client,
+            "musubi_curated",
+            [{"object_id": foreign, "namespace": "ns/a", "state": "matured", "version": 1}],
+        )
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "wk.db")
+
+    result = transition(
+        client,
+        coordinator=coordinator,
+        object_id=subject,
+        target_state="matured",
+        actor="operator",
+        reason="foreign-lineage",
+        namespace="ns/a",
+        lineage_updates=(
+            LineageUpdates(superseded_by=foreign)
+            if field == "superseded_by"
+            else LineageUpdates(supersedes=[foreign])
+        ),
+    )
+
+    assert isinstance(result, Err), (
+        f"a {where} lineage target was accepted via {field}: {result!r} -- `supersedes` "
+        f"was never inspected at all, so one direction cannot certify both"
+    )
+    assert result.error.code == "invariant_violation", (
+        f"refused with {result.error.code!r}; the target is unique and resolvable, so "
+        f"this must not be the ambiguity refusal wearing a different hat"
+    )
+
+    rows, _ = client.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=subject))]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert (rows[0].payload or {})["state"] == "provisional", "the subject moved anyway"

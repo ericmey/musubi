@@ -259,6 +259,42 @@ def transition(
         )
 
     lineage_patch = lineage_updates.to_payload_patch() if lineage_updates else {}
+
+    # SUPERSESSION TARGETS MUST BE THE SAME KIND OF THING, IN THE SAME NAMESPACE.
+    # The walk used `namespace` only to chase a cycle; it never checked that the id it
+    # was handed identifies a row in the subject's collection AND namespace. On the
+    # unqualified path any unique KSUID from another namespace or plane was accepted as
+    # lineage, against the same-type/same-namespace contract for these two fields
+    # (Copilot, musubi#771).
+    #
+    # `merged_from` is deliberately NOT checked here: per
+    # docs/Musubi/04-data-model/relationships.md it crosses types by design -- a
+    # SynthesizedConcept is merged FROM EpisodicMemory rows -- so a same-collection rule
+    # would be wrong rather than merely strict. `promoted_to` and `contradicts` carry
+    # their own contracts (Yua, musubi#771).
+    lineage_targets: list[str] = []
+    if lineage_updates is not None:
+        if lineage_updates.superseded_by:
+            lineage_targets.append(str(lineage_updates.superseded_by))
+        lineage_targets.extend(str(x) for x in lineage_updates.supersedes)
+    for target in lineage_targets:
+        rows = _scroll_by_object_id(
+            client, collection=collection, object_id=target, namespace=str(payload["namespace"])
+        )
+        if len(rows) != 1:
+            return Err(
+                error=TransitionError(
+                    code="invariant_violation",
+                    message=(
+                        f"supersession target {target!r} does not resolve to exactly one "
+                        f"row in {collection}/{payload['namespace']} (found {len(rows)}); "
+                        f"supersedes/superseded_by require the same type and namespace"
+                    ),
+                    from_state=current_state,
+                    to_state=target_state,
+                )
+            )
+
     try:
         cycles = _would_cause_supersession_cycle(
             client,
@@ -439,7 +475,15 @@ def _locate_object(
             raise AmbiguousObjectId(
                 f"object_id={object_id!r} matched at least {len(records)} authoritative "
                 f"rows in {collection}, namespaces {spaces}"
-                + ("; qualify the namespace" if namespace is None else " (duplicate anchors)")
+                # Remediation advice must fit the actual cause. Duplicate ANCHORS within
+                # one namespace are not fixable by qualifying -- telling an operator to
+                # qualify sends them to do something that cannot work, and hides that the
+                # data needs repair (Copilot, musubi#771).
+                + (
+                    "; qualify the namespace"
+                    if namespace is None and len(spaces) > 1
+                    else "; duplicate anchors for one identity -- the data needs repair"
+                )
             )
         found.append((collection, records[0]))
 
@@ -578,7 +622,11 @@ def _would_cause_supersession_cycle(
             raise AmbiguousObjectId(
                 f"supersession chain id {cursor!r} matched at least {len(records)} "
                 f"authoritative rows, namespaces {spaces}"
-                + ("; qualify the namespace" if namespace is None else " (duplicate anchors)")
+                + (
+                    "; qualify the namespace"
+                    if namespace is None and len(spaces) > 1
+                    else "; duplicate anchors for one identity -- the data needs repair"
+                )
             )
         cursor = records[0].get("superseded_by")
     return False

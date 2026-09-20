@@ -2081,9 +2081,16 @@ class _RefCoordinator:
             os.close(fd)
 
     def _key(self, i: _RefIntent) -> str:
+        # NAMESPACE, matching production. The oracle had already been given a namespace
+        # column, a namespace-scoped index and a namespace-bearing insert -- and kept
+        # deriving the old key, so a namespace-duplicate scenario was rejected here for
+        # the WRONG REASON. A reference model that reaches the right verdict by the
+        # wrong route is worse than one that does not model the case at all, because it
+        # reads as corroboration (Copilot, musubi#771).
         return (
             i.operation_key
-            or f"canon:{i.collection}:{i.object_id}:{i.expected_version}:{i.target_state}"
+            or f"canon2:{i.collection}:{i.namespace}:{i.object_id}:"
+            f"{i.expected_version}:{i.target_state}"
         )
 
     def _cur(self, collection: str, object_id: str) -> tuple[object, object]:
@@ -2465,14 +2472,19 @@ class _RefCoordinator:
             con.close()
 
     def _active_intent_for_object(
-        self, collection: str, object_id: str, exclude_opk: str
+        self, collection: str, namespace: str, object_id: str, exclude_opk: str
     ) -> str | None:
         con = sqlite3.connect(self._db)
         try:
             cur = con.execute(
-                "SELECT operation_key FROM lifecycle_outbox WHERE collection=? AND object_id=? "
+                # The `no_unique_index` fallback models what the coordinator does
+                # WITHOUT the DB constraint, so it has to scope identity the same way
+                # the constraint does -- otherwise the deliberately-broken mode is
+                # broken in a second, unintended way and its result means nothing.
+                "SELECT operation_key FROM lifecycle_outbox WHERE collection=? "
+                "AND COALESCE(namespace,'')=? AND object_id=? "
                 "AND state IN ('PENDING','APPLIED') AND operation_key != ?",
-                (collection, object_id, exclude_opk),
+                (collection, namespace, object_id, exclude_opk),
             )
             row = cur.fetchone()
             return row[0] if row else None
@@ -2821,7 +2833,9 @@ class _RefCoordinator:
         # no_unique_index (WRONG): a NAIVE check-then-insert for single-active-intent instead of the atomic
         # partial-unique index -> two simultaneous begins can both pass the check (caught by R11's race).
         if self._mode == "no_unique_index":
-            other = self._active_intent_for_object(intent.collection, intent.object_id, opk)
+            other = self._active_intent_for_object(
+                intent.collection, intent.namespace, intent.object_id, opk
+            )
             if other is not None:
                 return Err(error=_RefError(code="active_intent_exists"))
         event_id = generate_ksuid()
@@ -10875,3 +10889,68 @@ def test_p0c_storage_migration_task_unbuilt() -> None:
             "the unrelated POC->v1 Qdrant migration). The task is downstream + R20-gated; author it per the "
             "§E migration contract before source cutover."
         )
+
+
+# ---------------------------------------------------------------------------
+# The ORACLE's own identity must match production's (Copilot/Tama, musubi#771)
+# ---------------------------------------------------------------------------
+
+
+def _ref_intent(object_id: str, namespace: str) -> _RefIntent:
+    return _RefIntent(
+        collection="musubi_episodic",
+        object_id=object_id,
+        namespace=namespace,
+        expected_version=1,
+        target_state="matured",
+        actor="t",
+        reason="r",
+    )
+
+
+def test_the_reference_coordinator_key_separates_namespaces(tmp_path: Path) -> None:
+    """THE ORACLE FALSIFIER THAT DID NOT EXIST.
+
+    The reference coordinator was given a namespace column, a namespace-scoped index and
+    a namespace-bearing insert, and kept deriving `canon:{collection}:{object_id}:...`.
+    Reverting BOTH of those left the entire c6b file green -- 132 passed -- because
+    nothing in it ever ran a namespace-duplicate scenario through the oracle. **An
+    unguarded oracle is worse than an unmigrated one:** it reaches the right verdict by
+    the wrong route on the cases it does cover, and reads as corroboration.
+
+    So this is the cell whose absence the red-proof discovered. It fails if `_key` stops
+    binding namespace."""
+    coord = _RefCoordinator(db_path=tmp_path / "ref.db", qdrant_path=tmp_path / "q")
+    a = _ref_intent("shared-oid", "tenant/a")
+    b = _ref_intent("shared-oid", "tenant/b")
+    assert coord._key(a) != coord._key(b), (
+        f"the oracle derives one key {coord._key(a)!r} for two independent identities, "
+        f"so it models the identity production no longer has"
+    )
+    assert "tenant/a" in coord._key(a)
+
+
+def test_the_reference_no_index_fallback_excludes_other_namespaces(tmp_path: Path) -> None:
+    """The `no_unique_index` mode models the coordinator WITHOUT the DB constraint.
+
+    It has to scope identity the same way the constraint does, or the deliberately
+    broken mode is broken in a second, unintended way and its result means nothing --
+    a row in tenant/b would be reported as tenant/a's active intent."""
+    db = tmp_path / "ref.db"
+    coord = _RefCoordinator(db_path=db, qdrant_path=tmp_path / "q")
+    con = sqlite3.connect(db)
+    try:
+        con.execute(
+            "INSERT INTO lifecycle_outbox"
+            " (operation_key,object_id,collection,namespace,state)"
+            " VALUES ('other-ns','shared-oid','musubi_episodic','tenant/b','PENDING')"
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    found = coord._active_intent_for_object("musubi_episodic", "tenant/a", "shared-oid", "not-me")
+    assert found is None, (
+        f"the fallback reported {found!r} -- a PENDING intent belonging to tenant/b -- "
+        f"as an active intent for tenant/a"
+    )

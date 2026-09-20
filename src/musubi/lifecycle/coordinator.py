@@ -52,7 +52,7 @@ from qdrant_client import models
 
 from musubi.lifecycle import store
 from musubi.observability.registry import Counter, Gauge, default_registry
-from musubi.store.mutation_lease import is_expired_done_token
+from musubi.store.mutation_lease import is_takeover_eligible_token
 from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
@@ -722,6 +722,15 @@ class LifecycleTransitionCoordinator:
                 return Err(error=TransitionError(code="terminal_apply_failure"))
             # transport/unknown failure -> keep PENDING for the S4 reconciler (correction 6).
             return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+        if status == "retracted":
+            self._mark_terminal(opk)
+            return Err(error=TransitionError(code="terminal_apply_failure"))
+        if status == "contended":
+            # A mutation lease is transient ownership, not evidence that this intent's
+            # version is stale. Keep the canonical intent pending so the reconciler can
+            # retry after the owner releases; abandoning it would permanently poison
+            # this (version, target_state) key (Shiori/Tama, musubi#771).
+            return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
         if status == "fence":
             # a known version fence is terminal (the intent is stale) — abandon, never retry.
             self._mark_terminal(opk)
@@ -1035,9 +1044,10 @@ class LifecycleTransitionCoordinator:
         """Send the EXACT patch fenced server-side (collection + object_id + namespace +
         expected_version), then FULL-readback and confirm (S3 correction 4). ``namespace`` is
         resolved from the stored admission truth (Option A) so this works for a live transition AND a
-        reconcile with no live intent. Returns ``'confirmed'`` | ``'fence'`` | ``'corrupt'``; the
-        fenced ``set_payload`` matches zero points when the object is not at ``expected_version`` (a
-        stale intent) -> the readback proves a fence."""
+        reconcile with no live intent. Returns ``'confirmed'`` | ``'retracted'`` |
+        ``'contended'`` | ``'fence'`` | ``'corrupt'``. ``'retracted'`` protects a
+        saga-owned row terminally; ``'contended'`` means an ordinary mutation lease owns
+        the row temporarily; ``'fence'`` means the write/readback proves this intent stale."""
         namespace = self._namespace_for(opk)
         expected_version = int(str(patch["version"])) - 1
         client = self._require_client()
@@ -1065,10 +1075,23 @@ class LifecycleTransitionCoordinator:
         token = held.get("update_lease_token")
         if token is not None:
             if held.get("retraction_evidence") is not None:
-                # A retraction owns this row's recovery, whatever the token's age.
-                return "fence"
-            if not is_expired_done_token(token):
-                return "fence"  # live or malformed: belongs to someone
+                # A retraction owns this row's recovery while its saga lease is present.
+                # This is not a complete completed-retraction guard: the saga eventually
+                # clears its token, and legitimate archived -> matured restore must remain
+                # distinguishable from reactivation of a retracted row (pre-existing #781).
+                return "retracted"
+            if token == "":
+                # The mutation seam treats a falsy token as absent, but Qdrant's
+                # IsEmpty condition does not: remove the exact empty-string residue so
+                # both consumers act on the same ownership state (Copilot, musubi#771).
+                pass
+            # The SHARED takeover rule, not the narrower "did a done-write finish?"
+            # question. `is_expired_done_token` requires the `done:` prefix, so an
+            # `own:*` token from a writer that crashed BEFORE committing fenced this row
+            # permanently -- the lifecycle path was stricter than `owned_update`'s own
+            # acquire, which takes over any token past the TTL (Copilot, musubi#771).
+            elif not is_takeover_eligible_token(token):
+                return "contended"  # a live or unfenceable owner holds this row
             client.delete_payload(
                 collection_name=collection,
                 keys=["update_lease_token"],
@@ -1980,6 +2003,23 @@ class LifecycleTransitionCoordinator:
                     opk, reschedule=True, failure_class=cls, owner=token, release=True
                 )
                 counts["pending"] += 1
+            return
+        if status == "retracted":
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+            return
+        if status == "contended":
+            self._persist_attempt(
+                opk, reschedule=True, failure_class="transient", owner=token, release=True
+            )
+            counts["pending"] += 1
             return
         if status == "fence":
             self._persist_attempt(

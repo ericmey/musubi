@@ -539,7 +539,7 @@ def test_conflicting_key_full_cap_toctou_returns_conflict(
     assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
 
 
-def test_a_leased_row_fences_server_side(env: tuple[QdrantClient, _Seed, Path]) -> None:
+def test_a_leased_row_stays_pending_and_retries(env: tuple[QdrantClient, _Seed, Path]) -> None:
     # A row carrying `update_lease_token` belongs to another writer mid-saga. The retraction
     # adoption path fences its repair CAS on that token; without the matching condition HERE
     # the lifecycle writer ignores it, matures the row, and the version-fenced repair then
@@ -564,7 +564,25 @@ def test_a_leased_row_fences_server_side(env: tuple[QdrantClient, _Seed, Path]) 
     )
     before = _qdrant_state(client, seed)
 
-    leased = _coord(client, db).transition(_intent(seed, "matured", opk="leased"))
+    coordinator = _coord(client, db)
+    leased = coordinator.transition(_intent(seed, "matured", opk="leased"))
 
-    assert isinstance(leased, Err), f"a leased row was mutated: {leased}"
+    assert isinstance(leased, Ok) and leased.value.kind == "pending", (
+        f"transient lease contention was terminalized: {leased}"
+    )
     assert _qdrant_state(client, seed) == before  # the fence must not mutate
+    client.delete_payload(
+        collection_name=seed.collection,
+        keys=["update_lease_token"],
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                )
+            ]
+        ),
+        wait=True,
+    )
+    replay = coordinator.drive_intent(leased.value.operation_key)
+    assert replay.finalized == 1 and replay.abandoned == 0
+    assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
