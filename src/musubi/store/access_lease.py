@@ -144,7 +144,7 @@ async def lease_increment_access(
         for key in remaining:
             ns, oid = key
             stored = (states[key].payload or {}).get("access_lease_token")
-            if not stored:
+            if stored is None:
                 fence: models.Condition = models.IsEmptyCondition(
                     is_empty=models.PayloadField(key="access_lease_token")
                 )
