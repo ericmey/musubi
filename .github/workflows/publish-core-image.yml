@@ -188,22 +188,24 @@ jobs:
         run: |
           set -euo pipefail
           first_tag=""
+          published_digest=""
           while IFS= read -r tag; do
             [[ -n "$tag" ]] || continue
             [[ -n "$first_tag" ]] || first_tag="$tag"
             docker tag "$SCAN_IMAGE" "$tag"
-            docker push "$tag"
+            push_output="$(docker push "$tag" 2>&1)"
+            printf '%s\n' "$push_output"
+            tag_digest="$(awk '/^digest: sha256:/ {print $2}' <<< "$push_output")"
+            [[ "$tag_digest" == sha256:* ]]
+            if [[ -z "$published_digest" ]]; then
+              published_digest="$tag_digest"
+            else
+              [[ "$tag_digest" == "$published_digest" ]]
+            fi
           done <<< "$PUBLISH_TAGS"
           [[ -n "$first_tag" ]]
-          repository=${first_tag%:*}
-          matching_digests=()
-          while IFS= read -r ref; do
-            [[ "$ref" == "$repository@"* ]] && matching_digests+=("$ref")
-          done < <(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$first_tag")
-          [[ ${#matching_digests[@]} -eq 1 ]]
-          digest=${matching_digests[0]##*@}
-          [[ "$digest" == sha256:* ]]
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          [[ "$published_digest" == sha256:* ]]
+          echo "digest=$published_digest" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

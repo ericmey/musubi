@@ -222,6 +222,19 @@ def test_publisher_retags_the_exact_scanned_image_without_rebuilding() -> None:
     assert "docker build" not in run
 
 
+def test_publisher_uses_each_push_receipt_as_the_digest_source() -> None:
+    publisher = next(
+        step for step in _job_steps() if step.get("name") == "Publish scanned image"
+    )
+    run = str(publisher.get("run", ""))
+    assert 'push_output="$(docker push "$tag" 2>&1)"' in run
+    assert "awk '/^digest: sha256:/ {print $2}'" in run
+    assert '[[ "$tag_digest" == sha256:* ]]' in run
+    assert '[[ "$tag_digest" == "$published_digest" ]]' in run
+    assert 'echo "digest=$published_digest" >> "$GITHUB_OUTPUT"' in run
+    assert "RepoDigests" not in run
+
+
 def test_workflow_grants_security_events_write_for_sarif_upload() -> None:
     """`upload-sarif@v3` requires security-events:write on the job token."""
     perms = _job().get("permissions") or {}
