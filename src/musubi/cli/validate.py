@@ -104,6 +104,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from musubi.planes.artifact.escrow import derive_escrow_address
+from musubi.store import specs as store_specs
 from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import LAYOUT_ONLY_FIELDS, strip_layout_fields
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
@@ -213,6 +214,7 @@ class PlaneResult:
     anchor_count: int = 0
     broken: list[dict[str, Any]] = field(default_factory=list)
     unreferenced_content: list[dict[str, Any]] = field(default_factory=list)
+    internal_residue: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -224,6 +226,7 @@ class PlaneResult:
             "anchor_count": self.anchor_count,
             "broken": len(self.broken),
             "unreferenced_content": len(self.unreferenced_content),
+            "internal_residue": len(self.internal_residue),
             "error": self.error,
         }
 
@@ -282,6 +285,22 @@ def _add_problem(result: PlaneResult, problem: dict[str, Any]) -> None:
         return
     prior["errors"].extend(problem["errors"])
     prior["unknown_keys"] = sorted(set(prior["unknown_keys"]) | set(problem["unknown_keys"]))
+
+
+def _observe_internal_residue(result: PlaneResult, rec: Any, payload: dict[str, Any]) -> None:
+    """Record tolerated read-internal fields outside the strict layout envelope."""
+    fields = sorted(set(payload) & (store_specs.READ_INTERNAL_FIELDS - LAYOUT_ONLY_FIELDS))
+    if not fields:
+        return
+    result.internal_residue.append(
+        {
+            "collection": result.collection,
+            "namespace": payload.get("namespace", "<missing>"),
+            "object_id": payload.get("object_id", "<missing>"),
+            "point_id": str(rec.id),
+            "fields": fields,
+        }
+    )
 
 
 def _custom_problem(
@@ -434,6 +453,7 @@ def _validate_storage_rows(
                 _add_problem(result, _validation_problem(result.collection, rec, payload, exc))
             continue
 
+        _observe_internal_residue(result, rec, payload)
         layout = {key: value for key, value in payload.items() if key in LAYOUT_ONLY_FIELDS}
         try:
             if kind == "anchor":
@@ -723,6 +743,7 @@ def validate_rows(
 
     all_broken = [b for r in results for b in r.broken]
     all_unreferenced_content = [row for r in results for row in r.unreferenced_content]
+    all_internal_residue = [row for r in results for row in r.internal_residue]
     absent = [r for r in results if r.status == "absent"]
     errored = [r for r in results if r.status == "error"]
     unrequested = [r for r in results if r.status == "not_requested"]
@@ -799,10 +820,14 @@ def validate_rows(
                     # Content snapshots are immutable history. A snapshot that no current
                     # anchor names is observable evidence, not automatically corruption.
                     "unreferenced_content_total": len(all_unreferenced_content),
+                    # Read-internal markers are tolerated by domain models but remain
+                    # operationally visible. They do not change the integrity verdict.
+                    "internal_residue_total": len(all_internal_residue),
                     # Every requested plane appears, including the ones that failed.
                     "planes": [r.as_dict() for r in results],
                     "broken": all_broken,
                     "unreferenced_content": all_unreferenced_content,
+                    "internal_residue": all_internal_residue,
                 },
                 indent=2,
             )
@@ -822,10 +847,15 @@ def validate_rows(
                     if r.unreferenced_content
                     else ""
                 )
+                residue = (
+                    f", {len(r.internal_residue)} internal-residue row(s)"
+                    if r.internal_residue
+                    else ""
+                )
                 anchors = f", {r.anchor_count} anchor(s)" if r.plane == "episodic" else ""
                 typer.echo(
                     f"  {mark} {r.plane:15} {r.scanned:>6} rows  "
-                    f"{len(r.broken)} unreadable{history}{anchors}"
+                    f"{len(r.broken)} unreadable{history}{residue}{anchors}"
                 )
         typer.echo("")
 
@@ -916,6 +946,18 @@ def validate_rows(
                 "  Content snapshots are immutable history; an unreferenced snapshot is "
                 "reported for\n  reverse-reachability review and is not, by itself, corruption."
             )
+
+        if all_internal_residue:
+            typer.echo("")
+            typer.echo(f"INTERNAL RESIDUE — {len(all_internal_residue)} row(s).")
+            typer.echo(
+                "  Read paths tolerate these internal fields, so residue does not change the\n"
+                "  integrity verdict. It remains visible for operator cleanup and trend review."
+            )
+            for row in all_internal_residue:
+                fields = ", ".join(row["fields"])
+                typer.echo(f"  {row['collection']}  {row['namespace']}/{row['object_id']}")
+                typer.echo(f"      internal fields: {fields}")
 
     # Coverage outranks integrity: if we did not look, we do not get to report a count.
     if coverage == "incomplete":

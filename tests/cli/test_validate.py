@@ -392,8 +392,8 @@ def test_future_read_internal_field_is_reported_as_unaccounted_residue(
 
     monkeypatch.setattr(
         store_specs,
-        "_READ_INTERNAL_FIELDS",
-        store_specs._READ_INTERNAL_FIELDS | frozenset({"future_internal_marker"}),
+        "READ_INTERNAL_FIELDS",
+        store_specs.READ_INTERNAL_FIELDS | frozenset({"future_internal_marker"}),
     )
     row = {**GOOD_EPISODIC, "future_internal_marker": "left behind"}
     behaviour = dict(ALL_EMPTY)
