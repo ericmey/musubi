@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.26.12](https://github.com/ericmey/musubi/compare/v1.26.11...v1.26.12) (2026-09-20)
+
+
+### Bug Fixes
+
+* **api:** quarantine retracted episodic rows ([#732](https://github.com/ericmey/musubi/issues/732)) ([183c757](https://github.com/ericmey/musubi/commit/183c757eb8b6d6c1f6580d354d496cdc60185a84))
+* **artifact:** refuse ambiguous head publication ([#796](https://github.com/ericmey/musubi/issues/796)) ([73ac985](https://github.com/ericmey/musubi/commit/73ac985c3397640513726abdbcb074ebc848e710))
+* **auth:** enforce REQ-7 token identity consistency ([#799](https://github.com/ericmey/musubi/issues/799)) ([2707937](https://github.com/ericmey/musubi/commit/2707937d52e487ce5feb673c2319d31e6f17aead))
+* **cli:** report internal payload residue ([#789](https://github.com/ericmey/musubi/issues/789)) ([7bdd2a0](https://github.com/ericmey/musubi/commit/7bdd2a08924812f178a490337a8956a2110b9912))
+* **lifecycle:** fence maturation enrichment on the state it just established ([#771](https://github.com/ericmey/musubi/issues/771)) ([e4174d1](https://github.com/ericmey/musubi/commit/e4174d1aa0fc7e1c43ad03f9896d12f8af214a69))
+* **lifecycle:** fence stale maturation sweeps ([#788](https://github.com/ericmey/musubi/issues/788)) ([de5c018](https://github.com/ericmey/musubi/commit/de5c018b3d48af68f9c26273aec314b611ab4abd))
+* **retrieve:** bound Qdrant offload concurrency ([#798](https://github.com/ericmey/musubi/issues/798)) ([5479272](https://github.com/ericmey/musubi/commit/54792729386a749a50f9e66cc41d491e7cde4611))
+* **store:** recover access leases with empty tokens ([#786](https://github.com/ericmey/musubi/issues/786)) ([c70940c](https://github.com/ericmey/musubi/commit/c70940c42ed9ae3f115d65fc1f524a13b7d9da3d))
+* **store:** refuse ambiguous immutable vector identities ([#797](https://github.com/ericmey/musubi/issues/797)) ([ec5a4e9](https://github.com/ericmey/musubi/commit/ec5a4e9979e870b2db106dc061216e4fb1d5f08a))
+* **store:** refuse ambiguous mutation lease identities ([#795](https://github.com/ericmey/musubi/issues/795)) ([0748d17](https://github.com/ericmey/musubi/commit/0748d170a3d30ceebc8f18f3064fe293f5f8268b))
+* **vault:** reconcile ghosts by stored namespace ([#787](https://github.com/ericmey/musubi/issues/787)) ([1fabbe0](https://github.com/ericmey/musubi/commit/1fabbe02f33e298100ab11fb0097e82eef859915))
+
+
+### Documentation
+
+* **store:** adjudicate fenced-write cardinality ([#790](https://github.com/ericmey/musubi/issues/790)) ([4b3a172](https://github.com/ericmey/musubi/commit/4b3a172048f1444045ba6ea6c30f935b141c976c))
+
 ## [1.26.11](https://github.com/ericmey/musubi/compare/v1.26.10...v1.26.11) (2026-09-20)
 
 
