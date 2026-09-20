@@ -17,6 +17,7 @@ import asyncio
 import concurrent.futures
 import json
 import secrets
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -67,6 +68,12 @@ class NonEmbeddingPatchConflict(RuntimeError):
     """
 
 
+class ImmutableVectorIdentityAmbiguous(NonEmbeddingPatchConflict):
+    """More than one authoritative identity row matched one logical object."""
+
+    terminal = True
+
+
 def content_point_id_for(operation_key: str, generation: int = 0) -> str:
     """Deterministic content-point id from the STABLE operation_key (+ generation) — a reconcile
     re-drive of the same operation reuses the SAME id (never the per-claim owner_token)."""
@@ -110,6 +117,106 @@ def _anchor_filter(namespace: str, object_id: str) -> models.Filter:
     )
 
 
+def _authoritative_identity_filter(namespace: str, object_id: str) -> models.Filter:
+    """Select anchor-or-legacy identity rows while excluding immutable content snapshots."""
+    return models.Filter(
+        must=[
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+        ],
+        must_not=[
+            models.FieldCondition(key="point_kind", match=models.MatchValue(value=CONTENT_KIND))
+        ],
+    )
+
+
+def _read_unique_identity_record(
+    client: Any, collection: str, *, namespace: str, object_id: str
+) -> Any | None:
+    """Resolve zero-or-one authoritative row and retain its physical Qdrant ID."""
+    records, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=_authoritative_identity_filter(namespace, object_id),
+        limit=2,
+        with_payload=True,
+        with_vectors=False,
+    )
+    if len(records) > 1:
+        raise ImmutableVectorIdentityAmbiguous(
+            f"immutable vector identity ({namespace!r}, {object_id!r}) matched at least 2 rows"
+        )
+    if not records or not records[0].payload:
+        return None
+    return records[0]
+
+
+def _read_identity_payload_at_id(
+    client: Any,
+    collection: str,
+    *,
+    point_id: models.ExtendedPointId,
+    namespace: str,
+    object_id: str,
+) -> dict[str, Any] | None:
+    """Read a resolved identity by physical ID and reject identity/layout replacement."""
+    records = client.retrieve(
+        collection_name=collection,
+        ids=[point_id],
+        with_payload=True,
+        with_vectors=False,
+    )
+    if not records or not records[0].payload:
+        return None
+    payload = dict(records[0].payload)
+    if (
+        payload.get("namespace") != namespace
+        or payload.get("object_id") != object_id
+        or payload.get("point_kind") == CONTENT_KIND
+    ):
+        return None
+    return payload
+
+
+def _anchor_view_from_payload(payload: dict[str, Any]) -> AnchorView:
+    return AnchorView(
+        object_id=str(payload.get("object_id")),
+        namespace=str(payload.get("namespace")),
+        live_point=payload.get("live_point"),
+        version=int(payload.get("version", 0)),
+        vector_layout_version=int(payload.get("vector_layout_version", VECTOR_LAYOUT_V2)),
+        access_count=int(payload.get("access_count", 0)),
+        pointer_version=int(payload.get("pointer_version", 0)),
+        committed_operation_id=payload.get("committed_operation_id"),
+    )
+
+
+def _resolve_identity_payload(
+    client: Any, collection: str, payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Hydrate one already-resolved identity without a second cardinality query."""
+    if payload.get("point_kind") != ANCHOR_KIND:
+        return dict(payload)
+    live_point = payload.get("live_point")
+    if not live_point:
+        return None
+    points = client.retrieve(
+        collection_name=collection,
+        ids=[live_point],
+        with_payload=True,
+        with_vectors=False,
+    )
+    if not points or not points[0].payload:
+        return None
+    content = dict(points[0].payload)
+    if (
+        content.get("point_kind") != CONTENT_KIND
+        or content.get("namespace") != payload.get("namespace")
+        or content.get("object_id") != payload.get("object_id")
+    ):
+        return None
+    return {**content, **payload}
+
+
 def _legacy_conversion_filter(namespace: str, object_id: str, obs_version: int) -> models.Filter:
     """Fence for the IN-PLACE conversion of a v1 legacy row INTO the v2 anchor (Yua item 1): target the
     identity row (object_id+namespace, neither anchor nor content) AT the observed version, so a
@@ -145,7 +252,12 @@ _PATCH_SEAM_FIELDS = LAYOUT_ONLY_FIELDS | {
 }
 
 
-def _legacy_fence_not_retracted(namespace: str, object_id: str, obs_version: int) -> models.Filter:
+def _legacy_fence_not_retracted(
+    namespace: str,
+    object_id: str,
+    obs_version: int,
+    identity_point_id: models.ExtendedPointId | None = None,
+) -> models.Filter:
     """`_legacy_conversion_filter` plus the evidence predicate.
 
     The v1/legacy branches of both publisher write paths fall through to
@@ -173,7 +285,16 @@ def _legacy_fence_not_retracted(namespace: str, object_id: str, obs_version: int
     # COPY the filter and override one field. Enumerating arms to rebuild it is how the
     # first cut lost `must_not`, and enumerating them correctly would still drop any arm
     # added to the base later -- the failure would be silent and in this same function.
-    return base.model_copy(update={"must": [*(base.must or []), _not_retracted()]})
+    # BOTH obligations, built once and spread, rather than reconstructed per call site:
+    #   `_not_retracted()`  -- this is not a RETRACTED row        (evidence, musubi#732)
+    #   `HasIdCondition`    -- this is EXACTLY ONE physical row    (cardinality, musubi#794/#797)
+    # They are different guarantees and neither implies the other: a filter can satisfy
+    # the evidence predicate and still address two points. Two call sites previously
+    # assembled this themselves, which is how the `must_not` arm got dropped at round 26.
+    extra: list[models.Condition] = [_not_retracted()]
+    if identity_point_id is not None:
+        extra.insert(0, models.HasIdCondition(has_id=[identity_point_id]))
+    return base.model_copy(update={"must": [*(base.must or []), *extra]})
 
 
 def _not_retracted() -> models.Condition:
@@ -222,15 +343,6 @@ def _non_embedding_patch_filter(
     return models.Filter(must=must, must_not=must_not), observed_version, is_anchor
 
 
-def _identity_payload_for_patch(
-    client: Any, collection: str, *, namespace: str, object_id: str, is_anchor: bool
-) -> dict[str, Any] | None:
-    if is_anchor:
-        return read_anchor_payload(client, collection, namespace=namespace, object_id=object_id)
-    legacy = _read_legacy_v1(client, collection, namespace=namespace, object_id=object_id)
-    return dict(legacy.payload or {}) if legacy is not None else None
-
-
 def _publish_non_embedding_payload(
     client: Any,
     collection: str,
@@ -255,8 +367,25 @@ def _publish_non_embedding_payload(
     if overlap:
         raise ValueError(f"non-embedding PATCH cannot modify seam field(s) {sorted(overlap)}")
 
+    identity = _read_unique_identity_record(
+        client, collection, namespace=namespace, object_id=object_id
+    )
+    if identity is None or not identity.payload:
+        raise NonEmbeddingPatchConflict(
+            f"PATCH for ({namespace!r}, {object_id!r}) found no authoritative identity"
+        )
+    identity_payload = dict(identity.payload)
+    identity_point_id = identity.id
     fence, observed_version, is_anchor = _non_embedding_patch_filter(
         namespace=namespace, object_id=object_id, observed_payload=observed_payload
+    )
+    if (identity_payload.get("point_kind") == ANCHOR_KIND) != is_anchor:
+        raise NonEmbeddingPatchConflict(
+            f"PATCH for ({namespace!r}, {object_id!r}) observed a replaced identity layout"
+        )
+    fence = models.Filter(
+        must=[models.HasIdCondition(has_id=[identity_point_id]), *(fence.must or [])],
+        must_not=cast(list[models.Condition], fence.must_not or []),
     )
     if adopted_done_token is not None:
         if (
@@ -298,12 +427,12 @@ def _publish_non_embedding_payload(
         wait=True,
     )
 
-    committed = _identity_payload_for_patch(
+    committed = _read_identity_payload_at_id(
         client,
         collection,
+        point_id=identity_point_id,
         namespace=namespace,
         object_id=object_id,
-        is_anchor=is_anchor,
     )
     if committed is None or committed.get("update_lease_token") != done:
         raise NonEmbeddingPatchConflict(
@@ -327,12 +456,15 @@ def _publish_non_embedding_payload(
     # PATCH had the same defect as the retraction repair path the review named. A finding
     # names a site; the contract has a set (Copilot round 28 on musubi#732; the fast-path
     # sibling was fixed in `_release_adopted_done_token` at round 26).
-    committed_before_release = resolve_committed_content(
-        client, collection, namespace=namespace, object_id=object_id
-    )
+    # Hydrated from the identity row ALREADY resolved above, via #797's
+    # `_resolve_identity_payload`, rather than a second `resolve_committed_content`
+    # scroll -- a re-query here would reintroduce exactly the cardinality ambiguity
+    # #797 closed, on the value this function returns as its receipt.
+    committed_before_release = _resolve_identity_payload(client, collection, committed)
 
     release_filter = models.Filter(
         must=[
+            models.HasIdCondition(has_id=[identity_point_id]),
             models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
             models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
             models.FieldCondition(key="version", match=models.MatchValue(value=next_version)),
@@ -365,12 +497,12 @@ def _publish_non_embedding_payload(
             points=release_filter,
             wait=True,
         )
-        released = _identity_payload_for_patch(
+        released = _read_identity_payload_at_id(
             client,
             collection,
+            point_id=identity_point_id,
             namespace=namespace,
             object_id=object_id,
-            is_anchor=is_anchor,
         )
         if released is not None and "update_lease_token" not in released:
             # Answer from the pre-release snapshot. The read above is the deletion
@@ -822,6 +954,32 @@ class ImmutableVectorPublisher:
         self._stall_after_staging = False  # fault-injection seams (tests only)
         self._fail_cleanup = False
         self._inject_pre_publish: Any | None = None
+        self._inline_lock = threading.Lock()
+        self._inline_waiters: set[str] = set()
+        self._inline_committed: dict[str, dict[str, Any]] = {}
+
+    def _begin_inline(self, operation_key: str) -> None:
+        with self._inline_lock:
+            self._inline_waiters.add(operation_key)
+
+    def _remember_inline_commit(
+        self, operation_key: str, committed: dict[str, Any], outcome: str
+    ) -> str:
+        if outcome == "confirmed":
+            with self._inline_lock:
+                if operation_key in self._inline_waiters:
+                    self._inline_committed[operation_key] = dict(committed)
+        return outcome
+
+    def _take_inline_commit(self, operation_key: str) -> dict[str, Any] | None:
+        with self._inline_lock:
+            committed = self._inline_committed.pop(operation_key, None)
+        return committed
+
+    def _end_inline(self, operation_key: str) -> None:
+        with self._inline_lock:
+            self._inline_waiters.discard(operation_key)
+            self._inline_committed.pop(operation_key, None)
 
     def register(self, coordinator: Any) -> None:
         coordinator.register_intent_handler(INTENT_KIND, self.apply)
@@ -911,41 +1069,46 @@ class ImmutableVectorPublisher:
         self, coordinator: Any, object_id: str, namespace: str, descriptor: dict[str, Any]
     ) -> dict[str, Any]:
         opk = f"{INTENT_KIND}:{object_id}:{secrets.token_hex(8)}"
-        status: str = coordinator.enqueue_custom_intent(
-            kind=INTENT_KIND,
-            object_id=object_id,
-            namespace=namespace,
-            collection=self._collection,
-            patch_json=self._descriptor_json(descriptor),
-            operation_key=opk,
-        )
-        if status == "at_capacity":
-            raise ImmutableVectorPublishPending(f"outbox at capacity for {object_id!r}")
-        if status != "admitted":
-            # ``already_active``: a DIFFERENT operation holds the active intent for this object (our opk is
-            # freshly random and was NOT inserted). NEVER return the current pre-mutation committed row as
-            # if THIS request landed — fail loud pending so the caller sees its write did not commit (Yua
-            # item 3). The other operation's durable intent will drive that object forward on its own.
-            raise ImmutableVectorPublishPending(
-                f"another intent is already active for {object_id!r}; this publish did not land"
+        self._begin_inline(opk)
+        try:
+            status: str = coordinator.enqueue_custom_intent(
+                kind=INTENT_KIND,
+                object_id=object_id,
+                namespace=namespace,
+                collection=self._collection,
+                patch_json=self._descriptor_json(descriptor),
+                operation_key=opk,
             )
-        # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry', and
-        # drive_intent bypasses the retry backoff for this explicit inline drive (Yua item 4) so the
-        # coordinator re-reads fresh and re-applies immediately — no production sleep. Both changes
-        # converge; a persistent conflict exhausts the bound and fails loud (durable intent remains).
-        for _ in range(_SYNC_DRIVE_ATTEMPTS):
-            report = coordinator.drive_intent(opk)
-            if report.finalized:
-                committed = resolve_committed_content(
-                    self._client, self._collection, namespace=namespace, object_id=object_id
+            if status == "at_capacity":
+                raise ImmutableVectorPublishPending(f"outbox at capacity for {object_id!r}")
+            if status != "admitted":
+                # ``already_active``: a DIFFERENT operation holds the active intent for this object (our
+                # opk is freshly random and was NOT inserted). NEVER return the current pre-mutation
+                # committed row as if THIS request landed — fail loud pending so the caller sees its
+                # write did not commit (Yua item 3). The other operation's durable intent will drive that
+                # object forward on its own.
+                raise ImmutableVectorPublishPending(
+                    f"another intent is already active for {object_id!r}; this publish did not land"
                 )
-                if committed is not None:
-                    return committed
-            if report.abandoned:
-                break  # terminal fence -> will never commit inline.
-        raise ImmutableVectorPublishPending(
-            f"vector publish for {object_id!r} not committed inline; durable intent remains for worker"
-        )
+            # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry',
+            # and drive_intent bypasses the retry backoff for this explicit inline drive (Yua item 4) so
+            # the coordinator re-reads fresh and re-applies immediately — no production sleep. Both
+            # changes converge; a persistent conflict exhausts the bound and fails loud (durable intent
+            # remains).
+            for _ in range(_SYNC_DRIVE_ATTEMPTS):
+                report = coordinator.drive_intent(opk)
+                if report.finalized:
+                    committed = self._take_inline_commit(opk)
+                    if committed is not None:
+                        return committed
+                    break
+                if report.abandoned:
+                    break  # terminal fence -> will never commit inline.
+            raise ImmutableVectorPublishPending(
+                f"vector publish for {object_id!r} not committed inline; durable intent remains for worker"
+            )
+        finally:
+            self._end_inline(opk)
 
     # -- the registered apply handler ------------------------------------------------------------ #
 
@@ -957,21 +1120,35 @@ class ImmutableVectorPublisher:
         if descriptor is None:
             return "fence"  # no replayable descriptor -> terminal.
 
-        anchor = read_anchor(
-            self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
+        # Resolve cardinality once and retain the physical point ID. Every filtered mutation below adds
+        # that ID to its semantic/version fence, so a duplicate can neither fan the write out nor make an
+        # arbitrary limit=1 readback look successful.
+        identity = _read_unique_identity_record(
+            self._client,
+            self._collection,
+            namespace=ctx.namespace,
+            object_id=ctx.object_id,
         )
-        # Read the FRESH authoritative identity (anchor-over-content, or a v1 legacy row) ONCE — it drives
-        # both idempotent-replay detection and the rebase/observed-version fence below.
-        fresh = resolve_committed_content(
-            self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
+        identity_payload = dict(identity.payload or {}) if identity is not None else None
+        identity_point_id = identity.id if identity is not None else None
+        anchor = (
+            _anchor_view_from_payload(identity_payload)
+            if identity_payload is not None and identity_payload.get("point_kind") == ANCHOR_KIND
+            else None
+        )
+        fresh = (
+            _resolve_identity_payload(self._client, self._collection, identity_payload)
+            if identity_payload is not None
+            else None
         )
         # Idempotent replay (crash after our commit, before FINAL) for BOTH v1 and v2, vector-change AND
         # payload-only: every committed path stamps ``committed_operation_id``, so we re-detect OUR exact
         # token on the identity row and re-run only cleanup — never a second apply (Yua item 2).
         if fresh is not None and fresh.get("committed_operation_id") == ctx.operation_key:
-            return self._cleanup_and_confirm(
+            outcome = self._cleanup_and_confirm(
                 ctx.object_id, ctx.namespace, keep=fresh.get("live_point")
             )
+            return self._remember_inline_commit(ctx.operation_key, fresh, outcome)
 
         # REBASE ON FRESH AUTHORITATIVE DOMAIN STATE (DATA-001): the resolved payload deliberately
         # merges anchor + content so readers can see one authoritative object, but that read surface also
@@ -1013,7 +1190,9 @@ class ImmutableVectorPublisher:
         if not vector_changed:
             # PAYLOAD-ONLY: narrow fenced set_payload on the identity row, fenced on the observed version.
             # No new content point. A concurrent version bump fails the fence -> retry against fresh.
-            return self._publish_payload_only(ctx, anchor, new_full, obs_version)
+            if identity_point_id is None:
+                return "retry"
+            return self._publish_payload_only(ctx, anchor, identity_point_id, new_full, obs_version)
 
         # VECTOR CHANGE: embed the NEW projection, stage a write-once content point carrying the immutable
         # projection-source snapshot, then a SINGLE fenced anchor publish gated on pointer_version AND
@@ -1057,10 +1236,7 @@ class ImmutableVectorPublisher:
             "version": obs_version + 1,
         }
         if anchor is None:
-            legacy = _read_legacy_v1(
-                self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
-            )
-            if legacy is not None:
+            if identity_payload is not None and identity_point_id is not None:
                 # IN-PLACE fenced conversion of the v1 row INTO the anchor — NEVER delete an unfenced
                 # legacy row (Yua item 1). The version-fenced set_payload matches zero if a concurrent
                 # Phase-1 bump moved the row's version, and the op-token readback below then shows we did
@@ -1068,11 +1244,13 @@ class ImmutableVectorPublisher:
                 # window), so the leases' ``must_not content`` still targets exactly one row throughout.
                 # The converted row keeps its legacy vector; anchor-aware reads exclude it by point_kind
                 # (the universal anchor-never-ranks mechanism), so a real vector here cannot leak.
-                base_access = int((legacy.payload or {}).get("access_count", 0))
+                base_access = int(identity_payload.get("access_count", 0))
                 self._client.set_payload(
                     collection_name=self._collection,
                     payload={**publish, "access_count": base_access},
-                    points=_legacy_fence_not_retracted(ctx.namespace, ctx.object_id, obs_version),
+                    points=_legacy_fence_not_retracted(
+                        ctx.namespace, ctx.object_id, obs_version, identity_point_id
+                    ),
                 )
             else:
                 # Brand-new object (no legacy row): create the anchor separately with a zero vector.
@@ -1098,6 +1276,9 @@ class ImmutableVectorPublisher:
                 payload=publish,
                 points=models.Filter(
                     must=[
+                        models.HasIdCondition(
+                            has_id=[cast(models.ExtendedPointId, identity_point_id)]
+                        ),
                         models.FieldCondition(
                             key="object_id", match=models.MatchValue(value=ctx.object_id)
                         ),
@@ -1118,8 +1299,18 @@ class ImmutableVectorPublisher:
                 ),
             )
 
-        published = read_anchor(
-            self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
+        published_point_id = identity_point_id or anchor_point_id(ctx.namespace, ctx.object_id)
+        published_payload = _read_identity_payload_at_id(
+            self._client,
+            self._collection,
+            point_id=published_point_id,
+            namespace=ctx.namespace,
+            object_id=ctx.object_id,
+        )
+        published = (
+            _anchor_view_from_payload(published_payload)
+            if published_payload is not None and published_payload.get("point_kind") == ANCHOR_KIND
+            else None
         )
         if (
             published is None
@@ -1130,10 +1321,23 @@ class ImmutableVectorPublisher:
             return (
                 "retry"  # lost the dual fence -> reconcile re-drives against the newer fresh state.
             )
-        return self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=content_id)
+        committed = (
+            _resolve_identity_payload(self._client, self._collection, published_payload)
+            if published_payload is not None
+            else None
+        )
+        outcome = self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=content_id)
+        if committed is None:
+            return "retry"
+        return self._remember_inline_commit(ctx.operation_key, committed, outcome)
 
     def _publish_payload_only(
-        self, ctx: Any, anchor: AnchorView | None, new_full: dict[str, Any], obs_version: int
+        self,
+        ctx: Any,
+        anchor: AnchorView | None,
+        identity_point_id: models.ExtendedPointId,
+        new_full: dict[str, Any],
+        obs_version: int,
     ) -> str:
         """Existing content won -> only narrow payload fields changed. Fenced set_payload on the
         identity row (anchor if v2, else the v1 row) gated on the observed version, stamping OUR
@@ -1155,12 +1359,15 @@ class ImmutableVectorPublisher:
             "committed_operation_id": ctx.operation_key,
         }
         if anchor is None:
-            fence = _legacy_fence_not_retracted(ctx.namespace, ctx.object_id, obs_version)
+            fence = _legacy_fence_not_retracted(
+                ctx.namespace, ctx.object_id, obs_version, identity_point_id
+            )
         else:
             # v2: fence on the EXACT anchor identity (point_kind==anchor), not merely must_not content —
             # a stray legacy identity row for the same object would otherwise match too (Yua tightening).
             fence = models.Filter(
                 must=[
+                    models.HasIdCondition(has_id=[identity_point_id]),
                     models.FieldCondition(
                         key="object_id", match=models.MatchValue(value=ctx.object_id)
                     ),
@@ -1177,8 +1384,17 @@ class ImmutableVectorPublisher:
                 ]
             )
         self._client.set_payload(collection_name=self._collection, payload=narrow, points=fence)
-        fresh = resolve_committed_content(
-            self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
+        published_payload = _read_identity_payload_at_id(
+            self._client,
+            self._collection,
+            point_id=identity_point_id,
+            namespace=ctx.namespace,
+            object_id=ctx.object_id,
+        )
+        fresh = (
+            _resolve_identity_payload(self._client, self._collection, published_payload)
+            if published_payload is not None
+            else None
         )
         # sole success signal: OUR exact token landed (a bare version==obs+1 could be a foreign writer).
         if (
@@ -1186,7 +1402,7 @@ class ImmutableVectorPublisher:
             and fresh.get("committed_operation_id") == ctx.operation_key
             and int(fresh.get("version", -1)) == obs_version + 1
         ):
-            return "confirmed"
+            return self._remember_inline_commit(ctx.operation_key, fresh, "confirmed")
         return "retry"  # a concurrent writer won the version -> recompute against fresh.
 
     def _cleanup_and_confirm(self, object_id: str, namespace: str, keep: str | None) -> str:

@@ -17,6 +17,7 @@ Intended API (what these tests bind):
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -1359,3 +1360,232 @@ def test_cold_start_negative_no_handler_first_reconcile_cannot_commit(
     assert resolve_or_none(qdrant, collection, "cold-neg") is None, (
         "with no handler the first reconcile must not commit the pending intent"
     )
+
+
+def _authoritative_identity_rows(
+    qdrant: QdrantClient, collection: str, object_id: str
+) -> list[tuple[str, dict[str, Any]]]:
+    from musubi.store.immutable_vectors import CONTENT_KIND
+
+    rows, _ = qdrant.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=_NS)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            ],
+            must_not=[
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value=CONTENT_KIND))
+            ],
+        ),
+        limit=10,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return sorted((str(row.id), dict(row.payload or {})) for row in rows)
+
+
+def _seed_duplicate_legacy_rows(
+    qdrant: QdrantClient, collection: str, object_id: str
+) -> dict[str, Any]:
+    dense, sparse = _embed("legacy-body")
+    payload = {
+        "object_id": object_id,
+        "namespace": _NS,
+        "content": "legacy-body",
+        "importance": 1,
+        "state": "matured",
+    }
+    qdrant.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                payload=dict(payload),
+                vector={
+                    DENSE_VECTOR_NAME: dense,
+                    SPARSE_VECTOR_NAME: models.SparseVector(
+                        indices=list(sparse), values=list(sparse.values())
+                    ),
+                },
+            )
+            for _ in range(2)
+        ],
+        wait=True,
+    )
+    return payload
+
+
+def _duplicate_anchor(qdrant: QdrantClient, collection: str, object_id: str) -> None:
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    rows = qdrant.retrieve(
+        collection_name=collection,
+        ids=[anchor_point_id(_NS, object_id)],
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert len(rows) == 1 and rows[0].payload is not None
+    qdrant.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                payload=dict(rows[0].payload),
+                vector=cast(Any, rows[0].vector),
+            )
+        ],
+        wait=True,
+    )
+
+
+def test_non_embedding_patch_refuses_duplicate_legacy_identity_without_mutation(
+    qdrant: QdrantClient, collection: str
+) -> None:
+    from musubi.store.immutable_vectors import (
+        NonEmbeddingPatchConflict,
+        patch_non_embedding_payload,
+    )
+
+    object_id = "obj-duplicate-non-embedding"
+    observed = _seed_duplicate_legacy_rows(qdrant, collection, object_id)
+    before = _authoritative_identity_rows(qdrant, collection, object_id)
+
+    with pytest.raises(NonEmbeddingPatchConflict):
+        patch_non_embedding_payload(
+            qdrant,
+            collection,
+            namespace=_NS,
+            object_id=object_id,
+            observed_payload=observed,
+            changes={"importance": 9},
+            tag_mode="replace",
+        )
+
+    assert _authoritative_identity_rows(qdrant, collection, object_id) == before
+
+
+def test_legacy_conversion_refuses_duplicate_identity_without_mutation(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import ImmutableVectorPublishPending
+
+    object_id = "obj-duplicate-conversion"
+    _seed_duplicate_legacy_rows(qdrant, collection, object_id)
+    before = _authoritative_identity_rows(qdrant, collection, object_id)
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+
+    with pytest.raises(ImmutableVectorPublishPending):
+        pub.publish(
+            coord,
+            object_id=object_id,
+            namespace=_NS,
+            content_payload={"content": "replacement-body", "importance": 2},
+        )
+
+    assert _authoritative_identity_rows(qdrant, collection, object_id) == before
+    assert _content_point_ids(qdrant, collection, object_id) == []
+
+
+def test_pointer_publication_refuses_duplicate_v2_anchors_without_mutation(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import ImmutableVectorPublishPending
+
+    object_id = "obj-duplicate-pointer"
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("old"))
+    _duplicate_anchor(qdrant, collection, object_id)
+    before = _authoritative_identity_rows(qdrant, collection, object_id)
+    content_before = _content_point_ids(qdrant, collection, object_id)
+
+    with pytest.raises(ImmutableVectorPublishPending):
+        pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("new"))
+
+    assert _authoritative_identity_rows(qdrant, collection, object_id) == before
+    assert _content_point_ids(qdrant, collection, object_id) == content_before
+
+
+def test_payload_only_publication_refuses_duplicate_v2_anchors_without_mutation(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import ImmutableVectorPublishPending
+
+    object_id = "obj-duplicate-payload-only"
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(
+        coord,
+        object_id=object_id,
+        namespace=_NS,
+        content_payload={"content": "stable", "importance": 1},
+    )
+    _duplicate_anchor(qdrant, collection, object_id)
+    before = _authoritative_identity_rows(qdrant, collection, object_id)
+
+    with pytest.raises(ImmutableVectorPublishPending):
+        pub.publish(
+            coord,
+            object_id=object_id,
+            namespace=_NS,
+            content_payload={"content": "stable", "importance": 9},
+        )
+
+    assert _authoritative_identity_rows(qdrant, collection, object_id) == before
+
+
+def test_sync_publish_returns_exact_commit_when_duplicate_arrives_after_finalization(
+    qdrant: QdrantClient,
+    collection: str,
+    coord: LifecycleTransitionCoordinator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    object_id = "obj-post-final-duplicate"
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("old"))
+    anchor_rows = qdrant.retrieve(
+        collection_name=collection,
+        ids=[anchor_point_id(_NS, object_id)],
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert len(anchor_rows) == 1 and anchor_rows[0].payload is not None
+    stale_payload = dict(anchor_rows[0].payload)
+    stale_vector = cast(Any, anchor_rows[0].vector)
+    real_drive = coord.drive_intent
+    inserted = False
+
+    def drive_then_duplicate(operation_key: str) -> Any:
+        nonlocal inserted
+        report = real_drive(operation_key)
+        if report.finalized and not inserted:
+            inserted = True
+            qdrant.upsert(
+                collection_name=collection,
+                points=[
+                    models.PointStruct(
+                        id=str(uuid.uuid4()),
+                        payload=stale_payload,
+                        vector=stale_vector,
+                    )
+                ],
+                wait=True,
+            )
+        return report
+
+    monkeypatch.setattr(coord, "drive_intent", drive_then_duplicate)
+
+    committed = pub.publish(
+        coord,
+        object_id=object_id,
+        namespace=_NS,
+        content_payload=_content("new"),
+    )
+
+    assert committed["content"] == "new"
+    assert len(_authoritative_identity_rows(qdrant, collection, object_id)) == 2
