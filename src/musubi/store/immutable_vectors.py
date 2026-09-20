@@ -74,6 +74,22 @@ class ImmutableVectorIdentityAmbiguous(NonEmbeddingPatchConflict):
     terminal = True
 
 
+class ImmutableVectorIdentityAbsent(NonEmbeddingPatchConflict):
+    """No authoritative identity exists, and this path does not create one.
+
+    TERMINAL on purpose. The coordinator's `_classify` treats an unmarked exception as
+    ``unknown``, which is never abandoned -- it reschedules forever. A publish with no
+    identity to update will never acquire one by waiting, so retrying is not caution, it
+    is an intent that can never finalize occupying the outbox until the cap evicts it.
+
+    `terminal = True` is the same marking `ImmutableVectorIdentityAmbiguous` carries, and
+    for the same reason: the condition is proven, not transient
+    (Copilot round 29 on musubi#732; correction by Yua).
+    """
+
+    terminal = True
+
+
 def content_point_id_for(operation_key: str, generation: int = 0) -> str:
     """Deterministic content-point id from the STABLE operation_key (+ generation) — a reconcile
     re-drive of the same operation reuses the SAME id (never the per-claim owner_token)."""
@@ -1253,19 +1269,50 @@ class ImmutableVectorPublisher:
                     ),
                 )
             else:
-                # Brand-new object (no legacy row): create the anchor separately with a zero vector.
-                self._client.upsert(
-                    collection_name=self._collection,
-                    points=[
-                        models.PointStruct(
-                            id=anchor_point_id(ctx.namespace, ctx.object_id),
-                            payload={**publish, "access_count": 0},
-                            vector={
-                                DENSE_VECTOR_NAME: [0.0] * len(dense),
-                                SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
-                            },
-                        )
-                    ],
+                # NO ANCHOR CREATION HERE. This publisher is an UPDATE/REINFORCE path, and
+                # an anchor it creates is an anchor it can resurrect.
+                #
+                # This branch used to upsert the deterministic anchor id unconditionally.
+                # An intent admitted while the object was absent could be driven after
+                # another writer had created AND retracted that object, and the upsert
+                # would overwrite the evidence-bearing anchor -- bringing a retracted row
+                # back (Copilot round 29 on musubi#732).
+                #
+                # It cannot be fixed by fencing the write. An upsert takes no payload
+                # filter, and the `update_filter` parameter that does exist is not
+                # dependable here: `mutation_lease.py:52-55` carries a verified receipt
+                # that the deployed server SILENTLY IGNORES it on a sibling method -- a
+                # guard that would pass every test and be inert in production. The
+                # measured behaviour is from server 1.15 and production is pinned 1.17.1,
+                # so the honest status is UNMEASURED rather than broken; either way,
+                # terminal quarantine must not rest on a version-sensitive vendor
+                # parameter.
+                #
+                # So the write is removed instead of guarded. An anchor that is never
+                # created cannot be resurrected, and that guarantee depends on no client
+                # parameter, no server version, and no vendor behaviour to re-verify on
+                # upgrade (ruling: Yua, 2026-09-20).
+                #
+                # Re-read to tell the two cases apart. The read is NOT a fence -- it only
+                # routes; neither branch writes to the identity.
+                appeared = _read_unique_identity_record(
+                    self._client,
+                    self._collection,
+                    namespace=ctx.namespace,
+                    object_id=ctx.object_id,
+                )
+                self._delete_content_generation(ctx.object_id, ctx.namespace, generation)
+                if appeared is not None:
+                    # An identity exists now that did not when this intent read fresh.
+                    # Retry drives it back through the FILTERABLE conversion path above,
+                    # where the evidence predicate applies.
+                    return "retry"
+                # Genuine absence: there is nothing to update and this path must not
+                # create. Staged content for this operation is already removed above, so
+                # the failure leaves nothing behind.
+                raise ImmutableVectorIdentityAbsent(
+                    f"publish for ({ctx.namespace!r}, {ctx.object_id!r}) found no identity to "
+                    "update; this path does not create anchors"
                 )
         else:
             # Fenced pointer swap on BOTH observed pointer_version AND version (Yua dual fence): a

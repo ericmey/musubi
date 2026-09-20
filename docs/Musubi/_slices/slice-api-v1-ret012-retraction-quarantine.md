@@ -55,6 +55,31 @@ the escrow artifact remain available for correction and audit.
 - `tests/store/test_immutable_vectors_legacy_fence.py` (legacy fence arm preservation)
 - `tests/lifecycle/test_custom_intent_seam.py` (custom-intent preflight: classification
   and cardinality — **pre-existing file, extended by this slice**)
+- `tests/support/identity_seed.py` (**shared seeding helper, added by this slice** — see
+  below)
+- `tests/api/test_data001_episodic_patch_fence.py`
+- `tests/api/test_idem007_retraction_saga.py`
+- `tests/api/test_idem008_retraction_timestamps.py`
+- `tests/store/test_data001_layout_field_leak.py`
+- `tests/store/test_identity_seed_equivalence.py` (**added** — asserts the helper's end
+  state against the pre-change seed rather than inferring equivalence from green)
+
+### Why five unrelated test files enter this slice — recorded 2026-09-20
+
+Round 29 removed anchor creation from `ImmutableVectorPublisher` (see below). Measured
+before the removal: the publisher's ONLY production callers are
+`planes/episodic/plane.py:542` (`reinforce_publish`) and `planes/curated/plane.py:288`
+(`curated_publish`), both update paths. **Bare `publish()` has no production caller at
+all** — `EpisodicPlane.create` uses the plane's own `_upsert`.
+
+Five test files were nevertheless calling `publish()` on absent objects to SEED them,
+which means they were exercising a create path nothing ships and passing because of it.
+That is debt this slice **discovered**, not debt it incurred: the removal surfaces it as
+fifteen honest `ImmutableVectorPublishPending` failures.
+
+They enter by necessity — #732 cannot be green without them — and the fix is ONE shared
+seeder with fifteen call sites. If it ever wants per-file variants, that means the five
+files construct five different things and it is a separate finding (Aoi's condition).
 - `docs/Musubi/_slices/slice-api-v1-ret012-retraction-quarantine.md`
 - `docs/Musubi/_inbox/locks/slice-api-v1-ret012-retraction-quarantine.lock`
 

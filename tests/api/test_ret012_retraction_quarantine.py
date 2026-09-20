@@ -31,6 +31,7 @@ from musubi.store.immutable_vectors import (
 )
 from musubi.types.common import Ok, generate_ksuid
 from musubi.types.episodic import EpisodicMemory
+from tests.support.identity_seed import seed_v2_identity_via_migration
 
 _NS = "eric/claude-code/episodic"
 
@@ -94,13 +95,45 @@ def _seed(
         matured = asyncio.run(plane.get(namespace=saved.namespace, object_id=saved.object_id))
         assert matured is not None
         return matured
-    publisher.publish(
+    # LAYOUT: v2 anchor + content, via the production migration path. The absent-publish
+    # create this used to rely on was removed at round 29 -- the publisher is an
+    # update/reinforce path and an anchor it creates is an anchor it can resurrect.
+    seed_v2_identity_via_migration(
+        publisher._client,
         coordinator,
-        object_id=memory.object_id,
+        publisher,
         namespace=memory.namespace,
-        content_payload=memory.model_dump(mode="json"),
+        object_id=memory.object_id,
+        content=memory.content,
+        tags=list(memory.tags),
     )
-    return memory
+    # STORED state: the migration bumps the version, and this file's cells pass
+    # `memory.version` straight into `expected_version`.
+    if state == "matured":
+        # The migration path seeds through `plane.create`, which normalises to
+        # provisional -- so the v2 branch loses the requested state exactly the way the
+        # LEGACY branch did before round 20. Reach it the same canonical way, so both
+        # parametrizations exercise the state they name rather than one of them being
+        # quietly inert (Copilot round 20; regression caught by that round's own
+        # precondition assertion at round 29).
+        result = asyncio.run(
+            plane.transition(
+                namespace=memory.namespace,
+                object_id=memory.object_id,
+                to_state="matured",
+                actor="test-fixture",
+                reason="seed requested RET-012 state",
+                coordinator=coordinator,
+            )
+        )
+        assert isinstance(result, Ok), result
+    rows = [
+        r
+        for r in _layout(publisher._client, memory.object_id)
+        if r["payload"].get("point_kind") != "content"
+    ]
+    assert len(rows) == 1, f"expected one authoritative row, got {len(rows)}"
+    return memory.model_copy(update={"version": int(rows[0]["payload"]["version"])})
 
 
 def _layout(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:
