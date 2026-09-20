@@ -140,7 +140,18 @@ rerank timeout returns the pre-rerank hybrid order with the structured
 `reranker_failed` warning. A lineage timeout returns the unhydrated hit and logs
 the object id plus budget. Qdrant-backed authoritative resolution and lineage
 reads run outside the event-loop thread so concurrent blended callers do not
-starve one another before the five-second whole-call deadline.
+starve one another before the five-second whole-call deadline. All blocking
+Qdrant retrieval work shares a dedicated executor capped at 16 active calls per
+API process; excess work queues behind that ceiling instead of consuming the
+asyncio default executor. The production-shaped regression covers 20 concurrent
+deep callers with five lineage hits each. When the executor is saturated, the
+per-hit lineage deadline still returns the original unhydrated hit rather than
+failing the whole request.
+
+Lineage hydration has no per-hit event-loop adapter. Its worker-thread seam may
+only call plane reads that complete synchronously without suspending; if a plane
+read later awaits a loop-bound resource, hydration fails loudly and must gain a
+genuine synchronous read seam before use here.
 
 The rerank budget is production-derived rather than inherited from the earlier
 800 ms spec: a ten-caller burst on 2026-08-12 measured reranker duration at

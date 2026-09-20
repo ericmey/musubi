@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, cast
 
@@ -23,6 +23,7 @@ from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.retrieve.hybrid import HybridHit, HybridSearchResult, hybrid_search
+from musubi.retrieve.offload import run_qdrant_offload
 from musubi.retrieve.rerank import RerankResult, hybrid_fallback, rerank
 from musubi.retrieve.scoring import Hit, ScoredHit, rank_hits
 from musubi.retrieve.warnings import RetrievalWarning, reranker_failed
@@ -237,8 +238,8 @@ def _run_hydrate_one(
     client: QdrantClient,
     embedder: Embedder,
 ) -> ScoredHit:
-    """Run the sync-Qdrant lineage coroutine entirely on a worker thread."""
-    return asyncio.run(_hydrate_one(hit, client, embedder))
+    """Run the synchronous lineage seam entirely on a dedicated worker thread."""
+    return _hydrate_one(hit, client, embedder)
 
 
 async def _hydrate_lineage_async(
@@ -253,7 +254,7 @@ async def _hydrate_lineage_async(
     async def hydrate_or_original(hit: ScoredHit) -> ScoredHit:
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(_run_hydrate_one, hit, client, embedder),
+                run_qdrant_offload(_run_hydrate_one, hit, client, embedder),
                 timeout=timeout_s,
             )
         except TimeoutError:
@@ -274,7 +275,22 @@ async def _hydrate_lineage_async(
     return list(await asyncio.gather(*(hydrate_or_original(hit) for hit in hits)))
 
 
-async def _hydrate_one(
+def _complete_without_suspension[T](coroutine: Coroutine[Any, Any, T]) -> T:
+    """Complete a plane's faux-async sync-Qdrant method without creating an event loop.
+
+    Lineage hydration is deliberately a synchronous worker-thread seam. If a plane ``get`` ever
+    starts awaiting a loop-bound resource, fail visibly so that dependency is not silently driven on
+    a fresh per-hit loop.
+    """
+    try:
+        coroutine.send(None)
+    except StopIteration as completed:
+        return cast(T, completed.value)
+    coroutine.close()
+    raise RuntimeError("lineage plane get suspended; add a genuine synchronous read seam")
+
+
+def _hydrate_one(
     hit: ScoredHit,
     client: QdrantClient,
     embedder: Embedder,
@@ -300,18 +316,14 @@ async def _hydrate_one(
     # 1. Fetch base object
     obj: Any = None
     if hit.plane == "curated":
-        obj = await asyncio.wait_for(
-            curated.get(namespace=ns, object_id=hit.object_id), timeout=1.0
-        )
+        obj = _complete_without_suspension(curated.get(namespace=ns, object_id=hit.object_id))
     elif hit.plane == "concept":
-        obj = await asyncio.wait_for(
-            concept.get(namespace=ns, object_id=hit.object_id), timeout=1.0
-        )
+        obj = _complete_without_suspension(concept.get(namespace=ns, object_id=hit.object_id))
     elif hit.plane == "episodic":
         # RET-002: hydration must NOT account. Access is accounted once at the final
         # delivery boundary (orchestration.retrieve), never as a side effect of lineage.
-        obj = await asyncio.wait_for(
-            episodic.get(namespace=ns, object_id=hit.object_id, bump_access=False), timeout=1.0
+        obj = _complete_without_suspension(
+            episodic.get(namespace=ns, object_id=hit.object_id, bump_access=False)
         )
 
     if not obj:
@@ -330,12 +342,14 @@ async def _hydrate_one(
     while getattr(current, "superseded_by", None):
         nxt_id = current.superseded_by
         if hit.plane == "curated":
-            current = await curated.get(namespace=ns, object_id=nxt_id)
+            current = _complete_without_suspension(curated.get(namespace=ns, object_id=nxt_id))
         elif hit.plane == "concept":
-            current = await concept.get(namespace=ns, object_id=nxt_id)
+            current = _complete_without_suspension(concept.get(namespace=ns, object_id=nxt_id))
         elif hit.plane == "episodic":
             # RET-002: a lineage-walk hop is never a delivered row — never account it.
-            current = await episodic.get(namespace=ns, object_id=nxt_id, bump_access=False)
+            current = _complete_without_suspension(
+                episodic.get(namespace=ns, object_id=nxt_id, bump_access=False)
+            )
         if not current:
             break
         tip_id = current.object_id
@@ -355,8 +369,8 @@ async def _hydrate_one(
 
     # 4. Promoted from/to
     if hit.plane == "curated" and hasattr(obj, "promoted_from") and obj.promoted_from:
-        pf = await concept.get(
-            namespace=ns.replace("/curated", "/concept"), object_id=obj.promoted_from
+        pf = _complete_without_suspension(
+            concept.get(namespace=ns.replace("/curated", "/concept"), object_id=obj.promoted_from)
         )
         if pf:
             lineage["promoted_from"] = {
@@ -365,8 +379,8 @@ async def _hydrate_one(
             }
 
     if hit.plane == "concept" and hasattr(obj, "promoted_to") and obj.promoted_to:
-        pt = await curated.get(
-            namespace=ns.replace("/concept", "/curated"), object_id=obj.promoted_to
+        pt = _complete_without_suspension(
+            curated.get(namespace=ns.replace("/concept", "/curated"), object_id=obj.promoted_to)
         )
         if pt:
             lineage["promoted_to"] = {
@@ -376,8 +390,11 @@ async def _hydrate_one(
 
     # 5. Supported by
     for art_ref in getattr(obj, "supported_by", []):
-        art = await artifact.get(
-            namespace=ns.replace(f"/{hit.plane}", "/artifact"), object_id=art_ref.artifact_id
+        art = _complete_without_suspension(
+            artifact.get(
+                namespace=ns.replace(f"/{hit.plane}", "/artifact"),
+                object_id=art_ref.artifact_id,
+            )
         )
         if art:
             lineage["supported_by"].append(

@@ -13,6 +13,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
 from musubi.embedding.base import Embedder
+from musubi.retrieve.offload import run_qdrant_offload
 from musubi.retrieve.warnings import RetrievalWarning, sparse_embedding_failed
 from musubi.store.immutable_vectors import (
     not_anchor_condition,
@@ -274,7 +275,7 @@ async def _resolve_hits_async(
     that work on the event loop serialized otherwise independent blended
     plane legs and concurrent callers until the whole-call deadline expired.
     """
-    return await asyncio.to_thread(
+    return await run_qdrant_offload(
         _hits_from_response,
         response,
         client=client,
@@ -558,7 +559,7 @@ async def _query_points(
     timeout_s: float | None,
 ) -> Any:
     async def run() -> Any:
-        return await asyncio.to_thread(
+        return await run_qdrant_offload(
             client.query_points,
             collection_name=collection,
             prefetch=prefetch,
