@@ -329,7 +329,25 @@ def patch_non_embedding_payload(
     This public entry point never accepts embedding-projection changes on a v2
     anchor. Retraction is a sibling entry point with a required storage-bound
     evidence precondition; there is deliberately no boolean escape hatch here.
+
+    It also refuses outright on a row that already carries retraction evidence. RET-012
+    promises a retracted row "cannot later mature, regain importance, synthesize, or
+    promote" -- and `content` being blocked above is not enough, because `importance` is
+    a legal patch field and raising it is one of the four things the contract names.
+    Measured before it was fixed: a retracted row went from importance 1 to 9 through
+    `EpisodicPlane.patch`, with `state` still `archived` and evidence intact.
+
+    The guard belongs HERE rather than in each caller. The same contract was already
+    enforced at `_apply_conditional` (transitions) and `_drive_custom_intent` (custom
+    intents); this is the third write path to the same row, and it reaches every caller
+    of this primitive at once -- the episodic plane, the episodic write router and the
+    curated write router. The saga's own write uses `retract_non_embedding_payload`, the
+    sibling above, so quarantine and repair are unaffected.
     """
+    if observed_payload.get("retraction_evidence") is not None:
+        raise NonEmbeddingPatchConflict(
+            "this row is retracted; RET-012 quarantine is terminal for ordinary patches"
+        )
     if (
         observed_payload.get("point_kind") == ANCHOR_KIND
         and {

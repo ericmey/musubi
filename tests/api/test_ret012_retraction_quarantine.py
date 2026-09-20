@@ -24,7 +24,10 @@ from musubi.lifecycle.maturation import (
     episodic_maturation_sweep,
 )
 from musubi.planes.episodic import EpisodicPlane
-from musubi.store.immutable_vectors import ImmutableVectorPublisher
+from musubi.store.immutable_vectors import (
+    ImmutableVectorPublisher,
+    NonEmbeddingPatchConflict,
+)
 from musubi.types.common import Ok, generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
@@ -59,11 +62,15 @@ def _seed(
     plane: EpisodicPlane,
     publisher: ImmutableVectorPublisher,
     coordinator: Any,
+    content: str = "The original false claim.",
 ) -> EpisodicMemory:
+    # `content` is a parameter because the plane DEDUPS on it: two seeds with identical
+    # content collapse onto one row, and a cell that seeds a "control" and a "subject"
+    # then silently operates on the same object. That cost a confusing 409 once.
     memory = EpisodicMemory(
         namespace=_NS,
         object_id=generate_ksuid(),
-        content="The original false claim.",
+        content=content,
         state=state,
         importance=8,
     )
@@ -709,6 +716,34 @@ def test_ordinary_archived_row_without_retraction_evidence_still_restores(
     assert _raw_authoritative(qdrant, memory.object_id)["state"] == "matured"
 
 
+def _publish_descriptor_json(content: str) -> str:
+    """Exactly the framing `ImmutableVectorPublisher._descriptor_json` produces.
+
+    A bare descriptor is ABANDONED by the handler, which would make any cell built on
+    it pass whether or not the guard exists. Derived from the production shape, not
+    guessed.
+    """
+    return json.dumps(
+        {"descriptor": {"op": "set", "set_fields": {"content": content}, "embed_kind": "episodic"}},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _admit_and_drive(coordinator: Any, memory: EpisodicMemory, *, content: str, tag: str) -> Any:
+    opk = f"immutable_vector_publish:{memory.object_id}:{tag}"
+    status = coordinator.enqueue_custom_intent(
+        kind="immutable_vector_publish",
+        object_id=memory.object_id,
+        namespace=memory.namespace,
+        collection="musubi_episodic",
+        patch_json=_publish_descriptor_json(content),
+        operation_key=opk,
+    )
+    assert status == "admitted", status
+    return coordinator.drive_intent(opk)
+
+
 def test_custom_publish_intent_admitted_before_retraction_cannot_mutate_after(
     client: TestClient,
     valid_token: str,
@@ -722,10 +757,31 @@ def test_custom_publish_intent_admitted_before_retraction_cannot_mutate_after(
     A custom immutable-vector publish never reaches `_apply_conditional`, so the
     completed-retraction guard there does not see it. An intent admitted BEFORE the
     retraction is already durable in the outbox; it must not replay afterwards and
-    rewrite a quarantined row's content (Copilot round 22 on musubi#732).
+    rewrite a quarantined row (Copilot round 22 on musubi#732).
+
+    The CONTROL half is load-bearing: it proves this exact descriptor DOES rewrite an
+    un-retracted row. Without it the refusal half passes for any reason the intent
+    fails, including a malformed payload, and the cell measures nothing.
     """
     publisher = _immutable_publishers[0]
     assert isinstance(publisher, ImmutableVectorPublisher)
+
+    # CONTROL -- same descriptor, no retraction. Must land.
+    control = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+        content="A distinct control claim for the custom-intent control arm.",
+    )
+    control_report = _admit_and_drive(coordinator, control, content="REWRITTEN", tag="control")
+    assert control_report.finalized == 1, control_report
+    assert _raw_authoritative(qdrant, control.object_id)["content"] == "REWRITTEN", (
+        "control did not land; the refusal half below would prove nothing"
+    )
+
+    # REFUSAL -- intent admitted first, retraction lands, then the intent drives.
     memory = _seed(
         layout="legacy",
         state="provisional",
@@ -733,14 +789,13 @@ def test_custom_publish_intent_admitted_before_retraction_cannot_mutate_after(
         publisher=publisher,
         coordinator=coordinator,
     )
-    # Admit a custom intent FIRST, so it legitimately predates the retraction.
     opk = f"immutable_vector_publish:{memory.object_id}:preretraction"
     status = coordinator.enqueue_custom_intent(
         kind="immutable_vector_publish",
         object_id=memory.object_id,
         namespace=_NS,
         collection="musubi_episodic",
-        patch_json=json.dumps({"op": "set", "set_fields": {"content": "REWRITTEN AFTER RETRACTION"}}),
+        patch_json=_publish_descriptor_json("REWRITTEN AFTER RETRACTION"),
         operation_key=opk,
     )
     assert status == "admitted", status
@@ -759,12 +814,93 @@ def test_custom_publish_intent_admitted_before_retraction_cannot_mutate_after(
     assert before.get("retraction_evidence") is not None
     content_before = before["content"]
 
-    # Now drive the pre-admitted intent. It must refuse terminally, not rewrite.
-    coordinator.drive_intent(opk)
+    report = coordinator.drive_intent(opk)
+    assert report.abandoned == 1, f"pre-retraction intent was not refused terminally: {report}"
+    assert report.finalized == 0, report
 
     after = _raw_authoritative(qdrant, memory.object_id)
     assert after["content"] == content_before, (
-        "a pre-retraction custom intent rewrote a quarantined row's content"
+        "a pre-retraction custom intent rewrote a quarantined row"
     )
     assert "REWRITTEN AFTER RETRACTION" not in str(after["content"])
     assert after.get("retraction_evidence") is not None
+
+
+def test_retracted_row_cannot_regain_importance_through_patch(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+) -> None:
+    """The fourth write path, found by enumerating them rather than by a review round.
+
+    `EpisodicPlane.patch` reaches `patch_non_embedding_payload` directly -- no
+    coordinator, so neither the `_apply_conditional` guard nor the
+    `_drive_custom_intent` guard sees it. It blocks `content`, but `importance` is a
+    legal patch field, and "regain importance" is one of the four things RET-012's
+    contract says a retracted row cannot do.
+
+    Measured open before the fix: importance 1 -> 9 on a row with evidence intact.
+    """
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+
+    # CONTROL -- the same patch on a NON-retracted row must still work, or this cell
+    # would pass against a plane that simply refuses every patch.
+    control = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+        content="A distinct control claim for the importance-patch control arm.",
+    )
+    asyncio.run(
+        episodic.patch(
+            namespace=_NS,
+            object_id=control.object_id,
+            importance=9,
+            actor="operator",
+            reason="ordinary importance patch",
+        )
+    )
+    assert _raw_authoritative(qdrant, control.object_id)["importance"] == 9, (
+        "ordinary patch did not land; the refusal below would prove nothing"
+    )
+
+    response = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers={
+            "Authorization": f"Bearer {valid_token}",
+            "Idempotency-Key": "quarantine-no-importance-regain",
+        },
+        json=_body(memory.version),
+    )
+    assert response.status_code == 200, response.text
+    before = _raw_authoritative(qdrant, memory.object_id)
+    assert before.get("retraction_evidence") is not None
+    assert before["importance"] == 1
+
+    with pytest.raises(NonEmbeddingPatchConflict):
+        asyncio.run(
+            episodic.patch(
+                namespace=_NS,
+                object_id=memory.object_id,
+                importance=9,
+                actor="operator",
+                reason="attempt to restore importance on a retracted row",
+            )
+        )
+
+    after = _raw_authoritative(qdrant, memory.object_id)
+    assert after["importance"] == 1, "a retracted row regained importance"
+    assert after["state"] == "archived"
