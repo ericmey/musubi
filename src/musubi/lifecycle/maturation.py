@@ -673,6 +673,9 @@ async def provisional_ttl_sweep(
     deferred: list[TransitionPending] = []
     for row in candidates:
         object_id: KSUID = row["object_id"]
+        # TTL selection uses immutable created_epoch and has no mutable post-scroll
+        # eligibility check. Active-write deferral is a separate policy question, so
+        # this site is intentionally not version-fenced as a stale-snapshot repair.
         result = transition(
             client,
             coordinator=coordinator,
@@ -755,6 +758,7 @@ async def episodic_demotion_sweep(
             actor=_LIFECYCLE_ACTOR,
             reason="maturation-demotion",
             sink=sink,
+            expected_version=int(row["version"]),
         )
         if isinstance(result, Ok) and is_transition_pending(result.value):
             deferred.append(result.value)
@@ -829,6 +833,7 @@ async def concept_maturation_sweep(
             actor=_LIFECYCLE_ACTOR,
             reason="concept-maturation",
             sink=sink,
+            expected_version=int(row["version"]),
         )
         if isinstance(result, Ok) and is_transition_pending(result.value):
             deferred.append(result.value)
@@ -881,6 +886,7 @@ async def concept_demotion_sweep(
             actor=_LIFECYCLE_ACTOR,
             reason="concept-demotion",
             sink=sink,
+            expected_version=int(row["version"]),
         )
         if isinstance(result, Ok) and is_transition_pending(result.value):
             deferred.append(result.value)
