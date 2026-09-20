@@ -431,5 +431,5 @@ projection/summary; LIFE-007/008 / DATA-001 atomicity.
 
 **Status: ACCEPTED AND SHIPPED (rev 6).** PR #403 and replacement Phase B PR #414 are on `main` and
 deployed; rev 6 adds shipped REQ7 identity consistency. True deferrals are D4 Phase 1 (#558) and
-D5 Phase C. REQ7 (#412) and REQ8 (#413) are implemented and passing as of 2026-08-04; the rev-5
-shipped claims about PR #403 / #414 at their heads are unchanged.
+D5 Phase C. REQ7 (#412) is implemented and passing in rev 6; REQ8 (#413) has been implemented and
+passing since 2026-08-04. The rev-5 shipped claims about PR #403 / #414 at their heads are unchanged.
