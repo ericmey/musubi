@@ -117,6 +117,15 @@ _DEFAULT_LLM_BATCH = 10
 _LIFECYCLE_ACTOR = "lifecycle-worker"
 """Actor recorded on every transition this module emits — matches the spec."""
 
+
+@dataclass(frozen=True)
+class _SupersessionCandidate:
+    """The exact predecessor snapshot selected by the semantic seam."""
+
+    object_id: KSUID
+    version: int
+
+
 # ---------------------------------------------------------------------------
 # OllamaClient — Protocol + production stub
 # ---------------------------------------------------------------------------
@@ -461,12 +470,12 @@ async def episodic_maturation_sweep(
         # ``_TEICompositeEmbedder`` (LIFE-009 production wiring).
         # ------------------------------------------------------------------
         lineage_updates: LineageUpdates | None = None
-        superseded_target_id: KSUID | None = None
+        superseded_target: _SupersessionCandidate | None = None
 
         _hint = detect_supersession_hint(row.get("content", ""))
         if _hint:
             seam_embedder: Embedder = embedder if embedder is not None else _NoopEmbedder()
-            superseded_target_id = await _find_supersession_candidate(
+            superseded_target = await _find_supersession_candidate(
                 client,
                 collection=_EPISODIC_COLLECTION,
                 namespace=row["namespace"],
@@ -475,8 +484,8 @@ async def episodic_maturation_sweep(
                 embedder=seam_embedder,
                 topics=new_topics,
             )
-            if superseded_target_id is not None:
-                lineage_updates = LineageUpdates(supersedes=[superseded_target_id])
+            if superseded_target is not None:
+                lineage_updates = LineageUpdates(supersedes=[superseded_target.object_id])
 
         # ------------------------------------------------------------------
         # Step 6 — canonical state transition.
@@ -517,11 +526,11 @@ async def episodic_maturation_sweep(
 
         # If we marked an old row as the predecessor, flip it to
         # "superseded" with the back-pointer. Bullet 13 covers both sides.
-        if superseded_target_id is not None:
+        if superseded_target is not None:
             back_result = transition(
                 client,
                 coordinator=coordinator,
-                object_id=superseded_target_id,
+                object_id=superseded_target.object_id,
                 # The predecessor is, by construction, in the same namespace:
                 # `_find_supersession_candidate` returns "the unique matured row in the
                 # SAME namespace". This back-link was one of four identical unqualified
@@ -532,6 +541,10 @@ async def episodic_maturation_sweep(
                 reason="maturation-sweep-supersession",
                 lineage_updates=LineageUpdates(superseded_by=object_id),
                 sink=sink,
+                # The semantic seam scored a particular predecessor payload. Refuse
+                # to supersede a newer row if another writer patches it before this
+                # back-link transition (Copilot, musubi#771).
+                expected_version=superseded_target.version,
             )
             if not isinstance(back_result, Ok):
                 # Roll-forward: the new row is matured, the old is
@@ -539,7 +552,7 @@ async def episodic_maturation_sweep(
                 log.warning(
                     "supersession-back-link-failed new=%s old=%s err=%r",
                     object_id,
-                    superseded_target_id,
+                    superseded_target.object_id,
                     back_result.error,
                 )
             elif is_transition_pending(back_result.value):
@@ -945,8 +958,8 @@ async def _find_supersession_candidate(
     topics: list[str],
     similarity_threshold: float = 0.88,
     max_candidates: int = 20,
-) -> KSUID | None:
-    """Return the unique matured row in the same namespace that passes
+) -> _SupersessionCandidate | None:
+    """Return the unique matured-row snapshot in the same namespace that passes
     BOTH the semantic similarity AND the topic-compatibility checks
     (Issue #532 / LIFE-009).
 
@@ -998,12 +1011,15 @@ async def _find_supersession_candidate(
     # Topic-filter candidates first (no embedding needed; the topic
     # check is cheap). Surviving topic-compatible candidates are the
     # only rows whose dense vectors we will ever need.
-    candidate_pairs: list[tuple[KSUID, str]] = []
+    candidate_pairs: list[tuple[_SupersessionCandidate, str]] = []
     for rec in records:
         if not rec.payload:
             continue
         candidate_id = rec.payload.get("object_id")
         if not isinstance(candidate_id, str) or candidate_id == self_id:
+            continue
+        candidate_version = rec.payload.get("version")
+        if not isinstance(candidate_version, int) or isinstance(candidate_version, bool):
             continue
         candidate_content = (rec.payload.get("content") or "").strip().lower()
         if not candidate_content:
@@ -1017,7 +1033,15 @@ async def _find_supersession_candidate(
         candidate_topics = rec.payload.get("linked_to_topics") or []
         if not any(t in topics for t in candidate_topics):
             continue
-        candidate_pairs.append((candidate_id, candidate_content))
+        candidate_pairs.append(
+            (
+                _SupersessionCandidate(
+                    object_id=candidate_id,
+                    version=candidate_version,
+                ),
+                candidate_content,
+            )
+        )
 
     # ONE batched embed_dense call (discriminator: at most one network
     # roundtrip per seam invocation). The needle rides in the SAME
@@ -1049,7 +1073,7 @@ async def _find_supersession_candidate(
     needle_vec = vectors[0]
     needle_norm = math.sqrt(sum(x * x for x in needle_vec)) or 1.0
 
-    candidates: list[KSUID] = []
+    candidates: list[_SupersessionCandidate] = []
     for (cid, _), candidate_vec in zip(candidate_pairs, vectors[1:], strict=True):
         # The Embedder Protocol doesn't guarantee fixed-length vectors.
         # A misbehaving embedder returning a different-length candidate

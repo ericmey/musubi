@@ -46,6 +46,7 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.embedding.base import Embedder
 from musubi.lifecycle import LifecycleEventSink, file_lock, maturation
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.maturation import (
@@ -64,6 +65,7 @@ from musubi.lifecycle.maturation import (
 from musubi.planes.episodic import EpisodicPlane
 from musubi.planes.episodic.plane import episodic_point_id
 from musubi.store import bootstrap
+from musubi.store.specs import DENSE_SIZE
 from musubi.types.common import KSUID, Err, Ok, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
 
@@ -155,6 +157,21 @@ class FakeOllama:
 
 # Sanity: FakeOllama satisfies the OllamaClient Protocol.
 _: OllamaClient = FakeOllama()
+
+
+class _ConstantDenseEmbedder(Embedder):
+    """Make every non-empty supersession candidate semantically identical."""
+
+    _vector = [1.0, 0.0] + [0.0] * (DENSE_SIZE - 2)
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector for _ in texts]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return [{} for _ in texts]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return [0.0 for _ in candidates]
 
 
 # ---------------------------------------------------------------------------
@@ -563,25 +580,9 @@ async def test_supersession_sets_both_sides_of_link(
     seam requires."""
     from qdrant_client import models as qmodels
 
-    from musubi.embedding.base import Embedder
     from musubi.planes.episodic.plane import episodic_point_id
-    from musubi.store.specs import DENSE_SIZE
 
-    class _CtrlEmbedder(Embedder):
-        def __init__(self, vec: list[float]) -> None:
-            self._v = vec
-
-        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-            return [self._v for _ in texts]
-
-        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
-            return [{} for _ in texts]
-
-        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
-            return [0.0 for _ in candidates]
-
-    vec = [1.0, 0.0] + [0.0] * (DENSE_SIZE - 2)
-    plane._embedder = _CtrlEmbedder(vec)
+    plane._embedder = _ConstantDenseEmbedder()
 
     # Seed the original matured row with content the new one can hint at.
     original = await plane.create(
@@ -633,6 +634,102 @@ async def test_supersession_sets_both_sides_of_link(
     assert original.object_id in new_after.supersedes
     assert old_after.superseded_by == new_row.object_id
     assert old_after.state == "superseded"
+
+
+async def test_supersession_back_link_refuses_a_newer_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """The back-link identifies the predecessor snapshot the seam scored.
+
+    Patch that predecessor after semantic selection, while the new row's transition
+    is running, and before the predecessor transition. Without ``expected_version``
+    on the back-link, the newer row is legally superseded even though the seam never
+    analyzed its content (Copilot, musubi#771).
+    """
+    from qdrant_client import models as qmodels
+
+    original = await plane.create(
+        EpisodicMemory(
+            namespace=ns,
+            content="GPU pin: nvidia driver 470",
+            topics=["hardware/gpu"],
+        )
+    )
+    await plane.transition(
+        namespace=ns,
+        object_id=original.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(original.object_id)]),
+        wait=True,
+    )
+    selected = await plane.get(namespace=ns, object_id=original.object_id)
+    assert selected is not None
+
+    new_row = await _seed_provisional(
+        plane,
+        ns,
+        content="Update: GPU pin: nvidia driver 575",
+        tags=["hardware/gpu"],
+    )
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(new_row.object_id)]),
+        wait=True,
+    )
+
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    raced = False
+
+    def patch_predecessor_after_selection(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        result = real_transition(*args, **kwargs)
+        if not raced and kwargs.get("object_id") == new_row.object_id:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={
+                    "content": "newer writer changed the predecessor",
+                    "version": selected.version + 1,
+                },
+                points=qmodels.PointIdsList(points=[episodic_point_id(original.object_id)]),
+                wait=True,
+            )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", patch_predecessor_after_selection)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(),
+        embedder=_ConstantDenseEmbedder(),
+    )
+
+    assert raced, "the predecessor was not patched in the selection/back-link window"
+    new_after = await plane.get(namespace=ns, object_id=new_row.object_id)
+    old_after = await plane.get(namespace=ns, object_id=original.object_id)
+    assert new_after is not None and old_after is not None
+    assert new_after.state == "matured"
+    assert original.object_id in new_after.supersedes
+    assert old_after.state == "matured", "the back-link superseded a newer predecessor"
+    assert old_after.version == selected.version + 1
+    assert old_after.content == "newer writer changed the predecessor"
+    assert old_after.superseded_by is None
 
 
 # ---------------------------------------------------------------------------

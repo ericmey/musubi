@@ -278,7 +278,9 @@ async def test_paraphrase_supersession(qdrant: QdrantClient, ns: str) -> None:
         content="Update: today's meeting starts at 2pm",
         topics=["calendar/meeting"],
     )
-    assert result == predecessor.object_id
+    assert result is not None
+    assert result.object_id == predecessor.object_id
+    assert result.version == predecessor.version
 
 
 async def test_correction_supersession_links_to_right_predecessor(
@@ -306,7 +308,9 @@ async def test_correction_supersession_links_to_right_predecessor(
         content="Correction: the meeting is at 3pm",
         topics=["calendar/meeting"],
     )
-    assert result == predecessor.object_id
+    assert result is not None
+    assert result.object_id == predecessor.object_id
+    assert result.version == predecessor.version
 
 
 async def test_negation_supersession_links_to_right_predecessor(
@@ -334,7 +338,9 @@ async def test_negation_supersession_links_to_right_predecessor(
         content="Replacing: the sky is not green",
         topics=["world/color"],
     )
-    assert result == predecessor.object_id
+    assert result is not None
+    assert result.object_id == predecessor.object_id
+    assert result.version == predecessor.version
 
 
 async def test_participant_change_supersession(qdrant: QdrantClient, ns: str) -> None:
@@ -362,7 +368,9 @@ async def test_participant_change_supersession(qdrant: QdrantClient, ns: str) ->
         content="Update: bob said the meeting is at 2pm",
         topics=["calendar/meeting"],
     )
-    assert result == predecessor.object_id
+    assert result is not None
+    assert result.object_id == predecessor.object_id
+    assert result.version == predecessor.version
 
 
 async def test_time_change_supersession(qdrant: QdrantClient, ns: str) -> None:
@@ -386,7 +394,9 @@ async def test_time_change_supersession(qdrant: QdrantClient, ns: str) -> None:
         content="Update: the meeting is at 3pm",
         topics=["calendar/meeting"],
     )
-    assert result == predecessor.object_id
+    assert result is not None
+    assert result.object_id == predecessor.object_id
+    assert result.version == predecessor.version
 
 
 async def test_unrelated_substring_overlap_does_not_supersede(
