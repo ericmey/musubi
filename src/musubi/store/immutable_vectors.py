@@ -17,6 +17,7 @@ import asyncio
 import concurrent.futures
 import json
 import secrets
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -814,6 +815,32 @@ class ImmutableVectorPublisher:
         self._stall_after_staging = False  # fault-injection seams (tests only)
         self._fail_cleanup = False
         self._inject_pre_publish: Any | None = None
+        self._inline_lock = threading.Lock()
+        self._inline_waiters: set[str] = set()
+        self._inline_committed: dict[str, dict[str, Any]] = {}
+
+    def _begin_inline(self, operation_key: str) -> None:
+        with self._inline_lock:
+            self._inline_waiters.add(operation_key)
+
+    def _remember_inline_commit(
+        self, operation_key: str, committed: dict[str, Any], outcome: str
+    ) -> str:
+        if outcome == "confirmed":
+            with self._inline_lock:
+                if operation_key in self._inline_waiters:
+                    self._inline_committed[operation_key] = dict(committed)
+        return outcome
+
+    def _take_inline_commit(self, operation_key: str) -> dict[str, Any] | None:
+        with self._inline_lock:
+            committed = self._inline_committed.pop(operation_key, None)
+        return committed
+
+    def _end_inline(self, operation_key: str) -> None:
+        with self._inline_lock:
+            self._inline_waiters.discard(operation_key)
+            self._inline_committed.pop(operation_key, None)
 
     def register(self, coordinator: Any) -> None:
         coordinator.register_intent_handler(INTENT_KIND, self.apply)
@@ -903,51 +930,46 @@ class ImmutableVectorPublisher:
         self, coordinator: Any, object_id: str, namespace: str, descriptor: dict[str, Any]
     ) -> dict[str, Any]:
         opk = f"{INTENT_KIND}:{object_id}:{secrets.token_hex(8)}"
-        status: str = coordinator.enqueue_custom_intent(
-            kind=INTENT_KIND,
-            object_id=object_id,
-            namespace=namespace,
-            collection=self._collection,
-            patch_json=self._descriptor_json(descriptor),
-            operation_key=opk,
-        )
-        if status == "at_capacity":
-            raise ImmutableVectorPublishPending(f"outbox at capacity for {object_id!r}")
-        if status != "admitted":
-            # ``already_active``: a DIFFERENT operation holds the active intent for this object (our opk is
-            # freshly random and was NOT inserted). NEVER return the current pre-mutation committed row as
-            # if THIS request landed — fail loud pending so the caller sees its write did not commit (Yua
-            # item 3). The other operation's durable intent will drive that object forward on its own.
-            raise ImmutableVectorPublishPending(
-                f"another intent is already active for {object_id!r}; this publish did not land"
+        self._begin_inline(opk)
+        try:
+            status: str = coordinator.enqueue_custom_intent(
+                kind=INTENT_KIND,
+                object_id=object_id,
+                namespace=namespace,
+                collection=self._collection,
+                patch_json=self._descriptor_json(descriptor),
+                operation_key=opk,
             )
-        # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry', and
-        # drive_intent bypasses the retry backoff for this explicit inline drive (Yua item 4) so the
-        # coordinator re-reads fresh and re-applies immediately — no production sleep. Both changes
-        # converge; a persistent conflict exhausts the bound and fails loud (durable intent remains).
-        for _ in range(_SYNC_DRIVE_ATTEMPTS):
-            report = coordinator.drive_intent(opk)
-            if report.finalized:
-                identity = _read_unique_identity_record(
-                    self._client,
-                    self._collection,
-                    namespace=namespace,
-                    object_id=object_id,
+            if status == "at_capacity":
+                raise ImmutableVectorPublishPending(f"outbox at capacity for {object_id!r}")
+            if status != "admitted":
+                # ``already_active``: a DIFFERENT operation holds the active intent for this object (our
+                # opk is freshly random and was NOT inserted). NEVER return the current pre-mutation
+                # committed row as if THIS request landed — fail loud pending so the caller sees its
+                # write did not commit (Yua item 3). The other operation's durable intent will drive that
+                # object forward on its own.
+                raise ImmutableVectorPublishPending(
+                    f"another intent is already active for {object_id!r}; this publish did not land"
                 )
-                committed = (
-                    _resolve_identity_payload(
-                        self._client, self._collection, dict(identity.payload or {})
-                    )
-                    if identity is not None
-                    else None
-                )
-                if committed is not None:
-                    return committed
-            if report.abandoned:
-                break  # terminal fence -> will never commit inline.
-        raise ImmutableVectorPublishPending(
-            f"vector publish for {object_id!r} not committed inline; durable intent remains for worker"
-        )
+            # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry',
+            # and drive_intent bypasses the retry backoff for this explicit inline drive (Yua item 4) so
+            # the coordinator re-reads fresh and re-applies immediately — no production sleep. Both
+            # changes converge; a persistent conflict exhausts the bound and fails loud (durable intent
+            # remains).
+            for _ in range(_SYNC_DRIVE_ATTEMPTS):
+                report = coordinator.drive_intent(opk)
+                if report.finalized:
+                    committed = self._take_inline_commit(opk)
+                    if committed is not None:
+                        return committed
+                    break
+                if report.abandoned:
+                    break  # terminal fence -> will never commit inline.
+            raise ImmutableVectorPublishPending(
+                f"vector publish for {object_id!r} not committed inline; durable intent remains for worker"
+            )
+        finally:
+            self._end_inline(opk)
 
     # -- the registered apply handler ------------------------------------------------------------ #
 
@@ -984,9 +1006,10 @@ class ImmutableVectorPublisher:
         # payload-only: every committed path stamps ``committed_operation_id``, so we re-detect OUR exact
         # token on the identity row and re-run only cleanup — never a second apply (Yua item 2).
         if fresh is not None and fresh.get("committed_operation_id") == ctx.operation_key:
-            return self._cleanup_and_confirm(
+            outcome = self._cleanup_and_confirm(
                 ctx.object_id, ctx.namespace, keep=fresh.get("live_point")
             )
+            return self._remember_inline_commit(ctx.operation_key, fresh, outcome)
 
         # REBASE ON FRESH AUTHORITATIVE DOMAIN STATE (DATA-001): the resolved payload deliberately
         # merges anchor + content so readers can see one authoritative object, but that read surface also
@@ -1163,7 +1186,15 @@ class ImmutableVectorPublisher:
             return (
                 "retry"  # lost the dual fence -> reconcile re-drives against the newer fresh state.
             )
-        return self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=content_id)
+        committed = (
+            _resolve_identity_payload(self._client, self._collection, published_payload)
+            if published_payload is not None
+            else None
+        )
+        outcome = self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=content_id)
+        if committed is None:
+            return "retry"
+        return self._remember_inline_commit(ctx.operation_key, committed, outcome)
 
     def _publish_payload_only(
         self,
@@ -1240,7 +1271,7 @@ class ImmutableVectorPublisher:
             and fresh.get("committed_operation_id") == ctx.operation_key
             and int(fresh.get("version", -1)) == obs_version + 1
         ):
-            return "confirmed"
+            return self._remember_inline_commit(ctx.operation_key, fresh, "confirmed")
         return "retry"  # a concurrent writer won the version -> recompute against fresh.
 
     def _cleanup_and_confirm(self, object_id: str, namespace: str, keep: str | None) -> str:
