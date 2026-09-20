@@ -10,8 +10,8 @@ because the production upload path never indexes and reads are unfenced.
 
 from __future__ import annotations
 
-import warnings
 import uuid
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
