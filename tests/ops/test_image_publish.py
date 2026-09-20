@@ -10,8 +10,8 @@ Scope:
 - Triggers: tag push `v*`, branch push `main`, `workflow_dispatch`.
 - Permissions: `packages: write` (the GHCR push) + `contents: read`.
 - One job named `publish-core-image`.
-- Uses `docker/login-action` → GHCR, `docker/build-push-action` with
-  `push: true` and at least one `ghcr.io/ericmey/musubi-core` tag.
+- Uses `docker/login-action` → GHCR, builds one local scan candidate,
+  and publishes that exact image only after the CRITICAL gate.
 - Builds for `linux/amd64`.
 - Does NOT mutate `deploy/ansible/group_vars/all.yml` — digest bumps
   are separate, human-reviewed PRs.
@@ -24,6 +24,7 @@ Scope:
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "publish-core-image.yml"
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
 FIRST_DEPLOY_RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
+PUSH_DIGEST_EXTRACTOR = "grep -oE 'sha256:[0-9a-f]{64}' | tail -1"
 
 
 def _load(path: Path) -> Any:
@@ -101,6 +103,9 @@ def test_workflow_requests_packages_write_permission() -> None:
     assert perms.get("id-token") == "write", (
         "missing id-token:write — cosign keyless signing needs GitHub OIDC"
     )
+    assert perms.get("attestations") == "write", (
+        "missing attestations:write — build provenance cannot be published"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +144,15 @@ def test_workflow_generates_sbom() -> None:
     )
 
 
+def test_workflow_attests_published_digest_provenance() -> None:
+    steps = _job_steps()
+    attest = [s for s in steps if "actions/attest-build-provenance" in str(s.get("uses", ""))]
+    assert len(attest) == 1, "published image needs one provenance attestation"
+    with_block = attest[0].get("with") or {}
+    assert with_block.get("subject-digest") == "${{ steps.build.outputs.digest }}"
+    assert with_block.get("push-to-registry") is True
+
+
 def test_workflow_attaches_sbom_as_cosign_attestation() -> None:
     steps = _job_steps()
     for s in steps:
@@ -167,11 +181,77 @@ def test_workflow_trivy_scans_for_critical_cves_and_fails_on_finding() -> None:
     assert gate is not None, (
         "no Trivy step with exit-code: 1 — at least one step must gate the build"
     )
-    assert "@${{ steps.build.outputs.digest }}" in str(gate.get("image-ref", "")), (
-        "Trivy gate must scan the image by digest"
+    assert gate.get("image-ref") == "musubi-core:scan-${{ github.sha }}", (
+        "Trivy gate must scan the local pre-publish candidate"
     )
     severity = str(gate.get("severity", "")).upper()
     assert "CRITICAL" in severity, "Trivy gate severity must include CRITICAL"
+
+
+def test_critical_gate_runs_before_any_registry_push() -> None:
+    """A vulnerable image must never acquire a GHCR tag before refusal."""
+    steps = _job_steps()
+    login_index = next(
+        i for i, step in enumerate(steps) if "docker/login-action" in str(step.get("uses", ""))
+    )
+    gate_index = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name") == "Trivy vulnerability scan (SARIF — CRITICAL gate)"
+    )
+    pre_gate_names = [step.get("name") for step in steps[login_index + 1 : gate_index]]
+    assert pre_gate_names == [
+        "Derive image tags + labels",
+        "Build local scan candidate",
+        "Trivy vulnerability scan (table — always visible in logs)",
+    ], "unexpected step can write to the registry before the CRITICAL gate"
+
+    candidate = next(step for step in steps if step.get("name") == "Build local scan candidate")
+    with_block = candidate.get("with") or {}
+    assert with_block.get("load") is True
+    assert with_block.get("push") is False
+
+
+def test_publisher_retags_the_exact_scanned_image_without_rebuilding() -> None:
+    steps = _job_steps()
+    builds = [s for s in steps if "docker/build-push-action" in str(s.get("uses", ""))]
+    assert len(builds) == 1, "workflow must build exactly once"
+
+    publisher = next(step for step in steps if step.get("name") == "Publish scanned image")
+    run = str(publisher.get("run", ""))
+    assert 'docker tag "$SCAN_IMAGE" "$tag"' in run
+    assert 'docker push "$tag"' in run
+    assert "docker build" not in run
+
+
+def test_publisher_uses_each_push_receipt_as_the_digest_source() -> None:
+    publisher = next(step for step in _job_steps() if step.get("name") == "Publish scanned image")
+    run = str(publisher.get("run", ""))
+    assert 'push_output="$(docker push "$tag" 2>&1)"' in run
+    assert PUSH_DIGEST_EXTRACTOR.replace(" |", ' <<< "$push_output" |') in run
+    assert '[[ "$tag_digest" == sha256:* ]]' in run
+    assert '[[ "$tag_digest" == "$published_digest" ]]' in run
+    assert 'echo "digest=$published_digest" >> "$GITHUB_OUTPUT"' in run
+    assert "RepoDigests" not in run
+
+
+def test_push_digest_extractor_accepts_real_docker_output() -> None:
+    digest = "sha256:3e2e847869a190a1819a2b46338b50c6742024b36457aafc1d956ce764194ad8"
+    transcript = "\n".join(
+        [
+            "The push refers to repository [127.0.0.1:5999/shiori-probe]",
+            "cae91b5c4165: Pushed",
+            f"main: digest: {digest} size: 855",
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-o", "pipefail", "-c", PUSH_DIGEST_EXTRACTOR],
+        input=transcript,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == digest
 
 
 def test_workflow_grants_security_events_write_for_sarif_upload() -> None:
@@ -200,12 +280,13 @@ def test_workflow_logs_into_ghcr() -> None:
     assert registry == "ghcr.io", f"login registry is {registry!r}, expected ghcr.io"
 
 
-def test_workflow_uses_build_push_action_with_push_true() -> None:
+def test_workflow_uses_build_push_action_for_local_candidate() -> None:
     steps = _job_steps()
     build = [s for s in steps if "docker/build-push-action" in str(s.get("uses", ""))]
     assert build, "no docker/build-push-action step"
     with_block = build[0].get("with") or {}
-    assert with_block.get("push") is True, "build-push-action must set push: true"
+    assert with_block.get("load") is True, "scan candidate must load into Docker"
+    assert with_block.get("push") is False, "build must not publish before Trivy"
 
 
 def test_workflow_builds_for_linux_amd64() -> None:
