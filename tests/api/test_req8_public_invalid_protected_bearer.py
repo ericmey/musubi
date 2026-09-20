@@ -213,11 +213,11 @@ def test_reused_context_still_enforces_the_route_requirement(
 ) -> None:
     """The seam caches VALIDATION only — never authorization.
 
-    A token that is cryptographically valid but scoped to another tenant must still
+    A token that is cryptographically valid but scoped to another presence must still
     be refused by the protected route. If the guard's context short-circuited the
     AuthRequirement, this would wrongly succeed.
     """
-    wrong = mint_token(api_settings, scopes=["mallory/evil/episodic:rw"])
+    wrong = mint_token(api_settings, scopes=["eric/evil/episodic:rw"])
     r = client.get(PROTECTED, params=_PROTECTED_QS, headers={"Authorization": f"Bearer {wrong}"})
 
     # EXACT canonical scope denial, not "401 or 403". Yua on the first revision: a 401
