@@ -9,6 +9,9 @@ on:
   # gate can be dispatched against a feature ref pre-merge to produce real x86 Qdrant+TEI numbers.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # PR gate: deterministic, network-free fixed-embedding smoke — no real models.
   smoke:
