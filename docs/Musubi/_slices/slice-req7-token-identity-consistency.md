@@ -10,7 +10,7 @@ tags: [section/slices, status/in-progress, type/slice, api, security, auth]
 updated: 2026-09-20
 reviewed: false
 issue: 412
-depends-on: [slice-idempotency-phase-b]
+depends-on: []
 blocks: []
 ---
 
@@ -49,19 +49,25 @@ decision but does not carry a separate Test Contract.
 - `tests/api/test_req7_token_identity_invariant.py`
 - `tests/api/conftest.py` — mint internally consistent synthetic identities by
   default while permitting explicit inconsistency regressions.
+- `docs/Musubi/13-decisions/ADR-auth-boundary-consolidation.md`
+- `docs/Musubi/_slices/slice-req7-token-identity-consistency.md`
+- `docs/Musubi/_inbox/locks/slice-req7-token-identity-consistency.lock`
+
+## Also changed, owned elsewhere
+
+These are bounded synthetic-token fixture corrections required by the stricter
+validator; the behavior each historical test proves is unchanged.
+
 - `tests/api/test_req8_public_invalid_protected_bearer.py` — keep the
   authorization control token REQ-7-valid while remaining out of scope.
 - `tests/api/test_retrieve_stream.py` — bind existing `nyla/*` fixtures to a
   `nyla` presence.
 - `tests/api/test_thoughts_check_history.py` — keep the authorization control
   same-tenant but out of scope.
-- `tests/api/test_idem007_retraction_saga.py` — keep the different-principal
-  conflict fixture internally valid under REQ-7.
+- `tests/api/test_idem007_retraction_saga.py` — keep authorization-order and
+  different-principal fixtures internally valid under REQ-7.
 - `tests/api/test_idem006_receipt_audit.py` — normalize observer and target
   identities to the canonical subject encoding.
-- `docs/Musubi/13-decisions/ADR-auth-boundary-consolidation.md`
-- `docs/Musubi/_slices/slice-req7-token-identity-consistency.md`
-- `docs/Musubi/_inbox/locks/slice-req7-token-identity-consistency.lock`
 
 ## Forbidden paths
 
