@@ -24,6 +24,7 @@ Scope:
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "publish-core-image.yml"
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
 FIRST_DEPLOY_RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
+PUSH_DIGEST_EXTRACTOR = "grep -oE 'sha256:[0-9a-f]{64}' | tail -1"
 
 
 def _load(path: Path) -> Any:
@@ -226,11 +228,30 @@ def test_publisher_uses_each_push_receipt_as_the_digest_source() -> None:
     publisher = next(step for step in _job_steps() if step.get("name") == "Publish scanned image")
     run = str(publisher.get("run", ""))
     assert 'push_output="$(docker push "$tag" 2>&1)"' in run
-    assert "awk '/^digest: sha256:/ {print $2}'" in run
+    assert PUSH_DIGEST_EXTRACTOR.replace(" |", ' <<< "$push_output" |') in run
     assert '[[ "$tag_digest" == sha256:* ]]' in run
     assert '[[ "$tag_digest" == "$published_digest" ]]' in run
     assert 'echo "digest=$published_digest" >> "$GITHUB_OUTPUT"' in run
     assert "RepoDigests" not in run
+
+
+def test_push_digest_extractor_accepts_real_docker_output() -> None:
+    digest = "sha256:3e2e847869a190a1819a2b46338b50c6742024b36457aafc1d956ce764194ad8"
+    transcript = "\n".join(
+        [
+            "The push refers to repository [127.0.0.1:5999/shiori-probe]",
+            "cae91b5c4165: Pushed",
+            f"main: digest: {digest} size: 855",
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-o", "pipefail", "-c", PUSH_DIGEST_EXTRACTOR],
+        input=transcript,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == digest
 
 
 def test_workflow_grants_security_events_write_for_sarif_upload() -> None:

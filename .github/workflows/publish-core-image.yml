@@ -195,7 +195,7 @@ jobs:
             docker tag "$SCAN_IMAGE" "$tag"
             push_output="$(docker push "$tag" 2>&1)"
             printf '%s\n' "$push_output"
-            tag_digest="$(awk '/^digest: sha256:/ {print $2}' <<< "$push_output")"
+            tag_digest="$(grep -oE 'sha256:[0-9a-f]{64}' <<< "$push_output" | tail -1)"
             [[ "$tag_digest" == sha256:* ]]
             if [[ -z "$published_digest" ]]; then
               published_digest="$tag_digest"
