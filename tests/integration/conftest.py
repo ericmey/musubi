@@ -28,7 +28,7 @@ import os
 import shutil
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -150,7 +150,7 @@ def _start_api(*, port: int, env_file: Path) -> subprocess.Popen[bytes]:
     terminated at session teardown.
     """
     env = os.environ.copy()
-    env.update(_parse_env_file(env_file))
+    env.update(_resolved_stack_env(env_file))
     _prepare_runtime_dirs(env)
     return subprocess.Popen(
         [
@@ -197,6 +197,22 @@ def _parse_env_file(path: Path) -> dict[str, str]:
         k, v = line.split("=", 1)
         out[k.strip()] = v.strip()
     return out
+
+
+def _resolved_stack_env(path: Path, *, environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Load stack settings and apply compose host-port overrides.
+
+    Compose publishes Qdrant using ``MUSUBI_TEST_QDRANT_PORT`` while Musubi's
+    :class:`Settings` reads ``QDRANT_PORT``. Resolve the two names once so the
+    pytest parent, uvicorn child, and :class:`StackHandle` all address the same
+    service when a caller selects a non-default port.
+    """
+    source = os.environ if environ is None else environ
+    resolved = _parse_env_file(path)
+    qdrant_port = source.get("MUSUBI_TEST_QDRANT_PORT")
+    if qdrant_port:
+        resolved["QDRANT_PORT"] = qdrant_port
+    return resolved
 
 
 def _mint_operator_token(jwt_signing_key: str) -> str:
@@ -251,7 +267,7 @@ def live_stack(request: pytest.FixtureRequest) -> Iterator[StackHandle]:
     project = os.environ.get("MUSUBI_TEST_PROJECT", "musubi-integration")
     api_url = f"http://127.0.0.1:{api_port}"
 
-    env_kv = _parse_env_file(_ENV_FILE)
+    env_kv = _resolved_stack_env(_ENV_FILE)
     operator_token = _mint_operator_token(env_kv["JWT_SIGNING_KEY"])
 
     # Boot deps + spawn API.

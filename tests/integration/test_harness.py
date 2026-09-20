@@ -208,7 +208,7 @@ def test_start_api_receives_resolved_custom_qdrant_port(
         return _FakeProcess()
 
     monkeypatch.setenv("MUSUBI_TEST_QDRANT_PORT", "16333")
-    monkeypatch.setattr(harness.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr("tests.integration.conftest.subprocess.Popen", _fake_popen)
 
     harness._start_api(port=18100, env_file=env_file)
 
