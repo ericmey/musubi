@@ -509,30 +509,28 @@ def _assert_scheduled_incident_contract(content: str) -> None:
     )
 
     steps = reporter.get("steps", [])
-    scripts = [
-        str(step.get("with", {}).get("script", ""))
-        for step in steps
+    checkout_indexes = [
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    script_steps = [
+        (index, str(step.get("with", {}).get("script", "")))
+        for index, step in enumerate(steps)
         if str(step.get("uses", "")).startswith("actions/github-script@")
     ]
-    assert len(scripts) == 1, "Reporter MUST use exactly one github-script reconciliation step"
-    script = scripts[0]
+    assert len(script_steps) == 1, "Reporter MUST use exactly one github-script reconciliation step"
+    script_index, script = script_steps[0]
+    assert checkout_indexes and checkout_indexes[0] < script_index, (
+        "Reporter MUST checkout the tested reconciliation module before requiring it"
+    )
 
     assert "needs.scheduled.result" in content, (
         "Reporter MUST consume the actual scheduled job result, not infer it from a later step"
     )
-    assert "scheduled-evals-incident" in script, (
-        "Reporter MUST use a stable marker so repeated failures update one incident"
+    assert "report-scheduled-evals.js" in script, (
+        "Reporter MUST execute the behaviorally tested reconciliation module"
     )
-    assert "listForRepo" in script and "issues.create" in script, (
-        "Failure path MUST find the existing marked incident before creating one"
-    )
-    assert "assignees: [context.repo.owner]" in script, (
-        "A newly created incident MUST be assigned to the repository owner so it surfaces"
-    )
-    assert "issues.createComment" in script, (
-        "Repeated failure and recovery MUST append durable run evidence to the incident"
-    )
-    assert "state: 'closed'" in script, "Recovery path MUST close the active incident"
     assert "core.setFailed" in script, (
         "Reporter errors MUST fail visibly instead of silently dropping the notification"
     )
@@ -599,33 +597,6 @@ jobs:
     steps: []
 """
     with pytest.raises(AssertionError, match="issues: write"):
-        _assert_scheduled_incident_contract(broken)
-
-
-def test_scheduled_incident_reporter_discriminator_no_recovery_close() -> None:
-    """A failure-only notifier leaves a stale incident open after the gate recovers."""
-    broken = """
-jobs:
-  scheduled:
-    steps: []
-  report_scheduled_result:
-    needs: scheduled
-    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    permissions: {contents: read, issues: write}
-    concurrency: {group: scheduled-evals-incident, cancel-in-progress: false}
-    steps:
-      - uses: actions/github-script@v7
-        env:
-          RESULT: ${{ needs.scheduled.result }}
-        with:
-          script: |
-            // scheduled-evals-incident
-            await github.rest.issues.listForRepo(context.repo)
-            await github.rest.issues.create({...context.repo, assignees: [context.repo.owner]})
-            await github.rest.issues.createComment(context.repo)
-            core.setFailed('reporting failed')
-"""
-    with pytest.raises(AssertionError, match="Recovery path MUST close"):
         _assert_scheduled_incident_contract(broken)
 
 
