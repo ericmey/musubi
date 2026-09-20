@@ -162,6 +162,8 @@ def _assert_scheduled_contract(content: str) -> None:
     steps = scheduled.get("steps", [])
     boot_idx = -1
     live_gate_idx = -1
+    beir_gate_idx = -1
+    beir_gate_condition = ""
     for idx, step in enumerate(steps):
         run_cmd = step.get("run", "")
         if not run_cmd:
@@ -174,6 +176,9 @@ def _assert_scheduled_contract(content: str) -> None:
         # The live scheduled gate itself.
         if "musubi.evals scheduled" in run_cmd or "musubi-evals scheduled" in run_cmd:
             live_gate_idx = idx
+        if "beir_style_eval" in run_cmd:
+            beir_gate_idx = idx
+            beir_gate_condition = str(step.get("if", "")).strip()
 
     assert boot_idx != -1, (
         "Scheduled job MUST boot the real Qdrant+TEI stack (docker compose up) — the live gate fails "
@@ -183,6 +188,12 @@ def _assert_scheduled_contract(content: str) -> None:
     assert boot_idx < live_gate_idx, (
         "The real stack must be booted BEFORE the live gate runs — otherwise the gate fails loud and "
         "can never produce real numbers"
+    )
+    assert beir_gate_idx != -1, "Scheduled job MUST run the BEIR hybrid-vs-dense quality gate"
+    assert boot_idx < beir_gate_idx, "The real stack must be booted BEFORE the BEIR gate runs"
+    assert beir_gate_condition == "always()", (
+        "The BEIR gate MUST use if: always() so a failed sibling live gate cannot skip its "
+        "independent quality measurement"
     )
 
 
@@ -221,6 +232,23 @@ jobs:
     """
     with pytest.raises(AssertionError, match="booted BEFORE"):
         _assert_scheduled_contract(wrong_order)
+
+
+def test_scheduled_workflow_discriminator_beir_skipped_after_live_gate_failure() -> None:
+    """A later default-conditioned BEIR step is skipped when the sibling live gate fails."""
+    dependent_beir = """
+jobs:
+  scheduled:
+    steps:
+      - name: Boot stack
+        run: docker compose -f deploy/test-env/docker-compose.test.yml up -d --wait
+      - name: Run Scheduled Live Quality Gate
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+      - name: Run BEIR hybrid-vs-dense gate
+        run: uv run pytest -m integration -k beir_style_eval tests/retrieve/test_hybrid.py
+    """
+    with pytest.raises(AssertionError, match="MUST use if: always"):
+        _assert_scheduled_contract(dependent_beir)
 
 
 # --- On-demand dispatch of the live scheduled gate -------------------------------------------------

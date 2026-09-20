@@ -181,6 +181,76 @@ def test_parse_env_file_handles_inline_equals(tmp_path: Path) -> None:
     assert harness._parse_env_file(p) == {"KEY": "base64=value=with=equals"}
 
 
+def test_resolved_stack_env_maps_custom_qdrant_port(tmp_path: Path) -> None:
+    env_file = tmp_path / "env"
+    env_file.write_text("QDRANT_HOST=localhost\nQDRANT_PORT=6333\n")
+
+    resolved = harness._resolved_stack_env(
+        env_file,
+        environ={"MUSUBI_TEST_QDRANT_PORT": "16333"},
+    )
+
+    assert resolved["QDRANT_PORT"] == "16333"
+
+
+def test_start_api_receives_resolved_custom_qdrant_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / "env"
+    env_file.write_text("QDRANT_HOST=localhost\nQDRANT_PORT=6333\n")
+    captured: dict[str, Any] = {}
+
+    class _FakeProcess:
+        pass
+
+    def _fake_popen(*_: Any, **kwargs: Any) -> _FakeProcess:
+        captured.update(kwargs)
+        return _FakeProcess()
+
+    monkeypatch.setenv("MUSUBI_TEST_QDRANT_PORT", "16333")
+    monkeypatch.setattr("tests.integration.conftest.subprocess.Popen", _fake_popen)
+
+    harness._start_api(port=18100, env_file=env_file)
+
+    assert captured["env"]["QDRANT_PORT"] == "16333"
+
+
+def test_live_stack_handle_uses_resolved_custom_qdrant_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class _FakeProcess:
+        def terminate(self) -> None:
+            events.append("terminate")
+
+        def wait(self, *, timeout: int) -> None:
+            assert timeout == 10
+            events.append("wait")
+
+    monkeypatch.setenv("MUSUBI_TEST_QDRANT_PORT", "16333")
+    monkeypatch.setattr(harness, "_docker_available", lambda: True)
+    monkeypatch.setattr(harness, "_compose_up", lambda project: events.append(f"up:{project}"))
+    monkeypatch.setattr(harness, "_compose_down", lambda project: events.append(f"down:{project}"))
+    monkeypatch.setattr(harness, "_start_api", lambda **_: _FakeProcess())
+    monkeypatch.setattr(harness, "_wait_for_api", lambda _: None)
+
+    fixture = getattr(harness.live_stack, "__wrapped__")
+    stack = fixture(object())
+    handle = next(stack)
+    try:
+        assert handle.qdrant_url == "http://127.0.0.1:16333"
+    finally:
+        stack.close()
+
+    assert events == [
+        "up:musubi-integration",
+        "terminate",
+        "wait",
+        "down:musubi-integration",
+    ]
+
+
 def test_prepare_runtime_dirs_creates_host_path_preconditions(tmp_path: Path) -> None:
     """The host uvicorn can open SQLite and write all configured test paths."""
     env = {

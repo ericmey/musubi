@@ -60,6 +60,11 @@ jobs:
           set -a && . deploy/test-env/.env.test && set +a
           uv run python -m musubi.evals scheduled --data-dir tests/evals/data
       - name: Run BEIR hybrid-vs-dense gate
+        # Independent owner for integration.yml's one named exclusion. Without
+        # always(), a failure in the sibling live gate skips this measurement.
+        # This step still exits non-zero on its own threshold failure, so either
+        # quality gate can fail the scheduled job independently.
+        if: always()
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
