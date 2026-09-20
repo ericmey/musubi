@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.5](https://github.com/ericmey/musubi/compare/v1.26.4...v1.26.5) (2026-09-20)
+
+
+### Bug Fixes
+
+* **security:** gate images before registry publication ([#758](https://github.com/ericmey/musubi/issues/758)) ([52f520d](https://github.com/ericmey/musubi/commit/52f520dbdb27904e273d51e366ba5a1aecbc503e))
+
 ## [1.26.4](https://github.com/ericmey/musubi/compare/v1.26.3...v1.26.4) (2026-09-19)
 
 

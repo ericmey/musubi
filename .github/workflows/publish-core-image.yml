@@ -56,6 +56,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
       security-events: write
       actions: read
     outputs:
@@ -99,30 +100,26 @@ jobs:
             org.opencontainers.image.description=Musubi Core — three-plane shared memory server
             org.opencontainers.image.licenses=Apache-2.0
 
-      - name: Build and push
-        id: build
+      - name: Build local scan candidate
+        id: candidate
+        # The security gate must run before any registry tag is changed.
+        # A vulnerable candidate may exist in this runner's Docker store,
+        # but it cannot become :main, :latest, or a release tag.
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          load: true
+          push: false
+          tags: musubi-core:scan-${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
-          # GHA cache so subsequent builds reuse layers without
-          # pushing cache layers into GHCR itself.
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Embed provenance + SBOM attestations in the manifest. This
-          # is the default on build-push-action v6 but declaring
-          # explicitly documents the supply-chain commitment.
-          provenance: true
-          sbom: true
-          # Build-time secret for the Dockerfile's tokenizer pre-cache
-          # RUN step. SPLADE-v3 is a gated HF repo, so the pre-cache
-          # needs an HF read token to pull it. The token is mounted via
-          # the BuildKit secret API and never enters an image layer or
-          # the build cache — only the resulting cached tokenizer JSON
-          # is baked in. See the Dockerfile RUN block for the consumer.
+          # Docker's local image store cannot load BuildKit's manifest-level
+          # attestations. The exact scanned image is signed and receives a
+          # CycloneDX attestation after publication below.
+          provenance: false
+          sbom: false
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
 
@@ -131,50 +128,13 @@ jobs:
       # a signed, scanned image is the contract this workflow sells.
       # ------------------------------------------------------------------
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: "v2.4.1"
-
-      - name: Sign the published image (keyless, via GitHub OIDC)
-        # Signs by digest — tags are mutable, digests aren't. Anyone
-        # can verify later with `cosign verify --certificate-identity-
-        # regexp 'https://github.com/ericmey/musubi/.*' --certificate-
-        # oidc-issuer https://token.actions.githubusercontent.com
-        # ghcr.io/ericmey/musubi-core@<digest>`. Verification on the
-        # deploy side is future-enabled by ADR (not required today).
-        env:
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          set -euo pipefail
-          cosign sign --yes \
-            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
-
-      - name: Generate SBOM (CycloneDX)
-        uses: anchore/sbom-action@v0
-        with:
-          image: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
-          format: cyclonedx-json
-          output-file: sbom.cdx.json
-          upload-artifact: true
-
-      - name: Attach SBOM as cosign attestation
-        env:
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          set -euo pipefail
-          cosign attest --yes \
-            --predicate sbom.cdx.json \
-            --type cyclonedx \
-            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
-
       - name: Trivy vulnerability scan (table — always visible in logs)
         # Human-readable pass first so operators can see what CRITICAL
         # / HIGH findings exist without downloading the SARIF artefact.
         # `exit-code: 0` → this step never fails; gating is below.
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          image-ref: "musubi-core:scan-${{ github.sha }}"
           format: table
           severity: CRITICAL,HIGH
           exit-code: "0"
@@ -184,7 +144,7 @@ jobs:
       - name: Trivy vulnerability scan (SARIF — CRITICAL gate)
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          image-ref: "musubi-core:scan-${{ github.sha }}"
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL
@@ -219,6 +179,73 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+      - name: Publish scanned image
+        id: build
+        env:
+          PUBLISH_TAGS: ${{ steps.meta.outputs.tags }}
+          SCAN_IMAGE: musubi-core:scan-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          first_tag=""
+          published_digest=""
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            [[ -n "$first_tag" ]] || first_tag="$tag"
+            docker tag "$SCAN_IMAGE" "$tag"
+            push_output="$(docker push "$tag" 2>&1)"
+            printf '%s\n' "$push_output"
+            tag_digest="$(grep -oE 'sha256:[0-9a-f]{64}' <<< "$push_output" | tail -1)"
+            [[ "$tag_digest" == sha256:* ]]
+            if [[ -z "$published_digest" ]]; then
+              published_digest="$tag_digest"
+            else
+              [[ "$tag_digest" == "$published_digest" ]]
+            fi
+          done <<< "$PUBLISH_TAGS"
+          [[ -n "$first_tag" ]]
+          [[ "$published_digest" == sha256:* ]]
+          echo "digest=$published_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.4.1"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/ericmey/musubi-core
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Sign the published image (keyless, via GitHub OIDC)
+        # Signs by digest — tags are mutable, digests aren't. This step
+        # intentionally follows the local Trivy gate and registry push.
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign --yes \
+            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: true
+
+      - name: Attach SBOM as cosign attestation
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign attest --yes \
+            --predicate sbom.cdx.json \
+            --type cyclonedx \
+            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
 
       - name: Summarise digest
         # Surface the digest at the top of the workflow run page so an

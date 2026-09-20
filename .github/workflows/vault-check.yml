@@ -14,6 +14,10 @@ on:
       - "docs/AGENT-PROCESS.md"
       - ".github/workflows/vault-check.yml"
 
+permissions:
+  contents: read
+  issues: read
+
 jobs:
   hygiene:
     name: Vault hygiene (frontmatter + slice DAG + spec contracts + wikilinks)
