@@ -237,7 +237,6 @@ def test_core_update_runs_candidate_image_credential_preflight_intrinsically() -
     assert pre_tasks[preflight_index]["become"] is False
     assert pre_tasks[preflight_index].get("no_log") is not True
 
-    assert pre_tasks[preflight_index] in pre_tasks
     assert any("--policy always" in str(task) for task in _tasks(play))
 
 
