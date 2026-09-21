@@ -50,7 +50,7 @@ musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
 # `hopper-*` (H100/H200), `cpu-*` (no GPU). See
 # https://github.com/huggingface/text-embeddings-inference for the full list.
-musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.2.0"
+musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.9.4@sha256:bee0bdb887096229add91b6fdfcf95258c12eb9180e90dc86f3b4b25b86fc613"
 musubi_inference_ingress_image: "nginx:1.27-alpine"
 musubi_curl_image: "curlimages/curl:8.12.1"
 musubi_inference_port: 8102
