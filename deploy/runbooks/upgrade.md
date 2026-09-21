@@ -21,11 +21,18 @@ Set the common inventory arguments and read the reviewed image reference from
 the repository:
 
 ```bash
+set -euo pipefail
 cd ~/musubi
 git pull --ff-only origin main
+export ANSIBLE_VAULT_PASSWORD_FILE="${HOME}/ansible/.vault_pass"
 export MUSUBI_ANSIBLE_ARGS="-i deploy/ansible/inventory.yml -e @${HOME}/.musubi-secrets/inventory-vars.yml -e @${HOME}/.musubi-secrets/vault.yml"
 export TEI_IMAGE="$(python3 -c 'import yaml; print(yaml.safe_load(open("deploy/ansible/group_vars/all.yml"))["musubi_tei_image"])')"
 export MUSUBI_SSH="$(python3 -c 'import os, yaml; values = yaml.safe_load(open(os.path.expanduser("~/.musubi-secrets/inventory-vars.yml"))); print(values["operator_ssh_user"] + "@" + values["musubi_host"])')"
+test -r "${ANSIBLE_VAULT_PASSWORD_FILE}"
+case "${TEI_IMAGE}" in
+  ghcr.io/huggingface/text-embeddings-inference:86-*@sha256:*) ;;
+  *) echo "refusing invalid musubi_tei_image: ${TEI_IMAGE}" >&2; exit 1 ;;
+esac
 ```
 
 Pre-pull without interrupting the running containers, preserve the live
@@ -33,6 +40,10 @@ definition, render only the independently managed Compose file, and validate
 it before the single restart:
 
 ```bash
+set -euo pipefail
+: "${ANSIBLE_VAULT_PASSWORD_FILE:?run the setup block first}"
+: "${MUSUBI_ANSIBLE_ARGS:?run the setup block first}"
+: "${TEI_IMAGE:?run the setup block first}"
 ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
   -m ansible.builtin.command -a "docker pull ${TEI_IMAGE}"
 ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
@@ -53,6 +64,8 @@ run the production client-shape probe inside Core. It uses the already-mounted
 URLs and credentials without printing them:
 
 ```bash
+set -euo pipefail
+: "${MUSUBI_SSH:?run the setup block first}"
 ssh "${MUSUBI_SSH}" 'sudo docker exec -i musubi-core-1 python -' <<'PY'
 import base64
 import os
@@ -88,6 +101,9 @@ If rendering, startup, or a probe fails, restore the saved definition and
 restart once during the same maintenance window:
 
 ```bash
+set -euo pipefail
+: "${ANSIBLE_VAULT_PASSWORD_FILE:?run the setup block first}"
+: "${MUSUBI_ANSIBLE_ARGS:?run the setup block first}"
 ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
   -m ansible.builtin.command \
   -a "cp -a /etc/musubi/shared-inference-compose.yml.rollback /etc/musubi/shared-inference-compose.yml"

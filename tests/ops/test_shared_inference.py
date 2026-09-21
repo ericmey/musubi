@@ -771,6 +771,8 @@ def test_shared_inference_image_upgrade_has_an_operator_runnable_path() -> None:
 
     runbook = UPGRADE_RUNBOOK.read_text()
     for required in (
+        "ANSIBLE_VAULT_PASSWORD_FILE",
+        "set -euo pipefail",
         "--tags shared-inference-config",
         "docker pull",
         "name=shared-inference.service state=restarted",
@@ -778,6 +780,7 @@ def test_shared_inference_image_upgrade_has_an_operator_runnable_path() -> None:
         "shared-inference-compose.yml.rollback",
     ):
         assert required in runbook
+    assert '"core","tei-dense"' not in runbook
 
 
 def test_live_values_do_not_enter_public_sources() -> None:
