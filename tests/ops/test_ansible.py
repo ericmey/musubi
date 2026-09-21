@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -212,8 +211,7 @@ def test_tei_production_image_is_current_ampere_release_pinned_by_digest() -> No
     group_vars = _load_yaml(GROUP_VARS)
     image = group_vars["musubi_tei_image"]
 
-    assert re.fullmatch(
-        r"ghcr[.]io/huggingface/text-embeddings-inference:86-1[.]9[.]4"
-        r"@sha256:[0-9a-f]{64}",
-        image,
+    assert image == (
+        "ghcr.io/huggingface/text-embeddings-inference:86-1.9.4"
+        "@sha256:bee0bdb887096229add91b6fdfcf95258c12eb9180e90dc86f3b4b25b86fc613"
     )
