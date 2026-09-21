@@ -205,3 +205,13 @@ def test_update_playbook_respects_digest_pins() -> None:
     assert "pull --policy missing" in playbook_text
     assert "up -d --pull missing" in playbook_text
     assert "--policy always" not in playbook_text
+
+
+def test_tei_production_image_is_current_ampere_release_pinned_by_digest() -> None:
+    group_vars = _load_yaml(GROUP_VARS)
+    image = group_vars["musubi_tei_image"]
+
+    assert image == (
+        "ghcr.io/huggingface/text-embeddings-inference:86-1.9.4"
+        "@sha256:bee0bdb887096229add91b6fdfcf95258c12eb9180e90dc86f3b4b25b86fc613"
+    )

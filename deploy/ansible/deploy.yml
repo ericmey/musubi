@@ -67,6 +67,7 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0640"
+      tags: [shared-inference-config]
 
     - name: Render shared inference ingress
       ansible.builtin.template:

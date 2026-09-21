@@ -26,6 +26,7 @@ AUTH_MIGRATION = ANSIBLE / "shared-inference-auth-migrate.yml"
 ENV = ANSIBLE / "templates" / "env.production.j2"
 ADR = ROOT / "docs" / "Musubi" / "13-decisions" / "0045-authenticated-shared-inference-services.md"
 SLICE = ROOT / "docs" / "Musubi" / "_slices" / "slice-ops-shared-inference.md"
+UPGRADE_RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade.md"
 
 
 def _services(path: Path) -> dict[str, Any]:
@@ -757,6 +758,29 @@ def test_normal_app_deploy_does_not_restart_shared_inference() -> None:
     )
     unit = (ANSIBLE / "templates" / "musubi.service.j2").read_text()
     assert "Requires=docker.service shared-inference.service" not in unit
+
+
+def test_shared_inference_image_upgrade_has_an_operator_runnable_path() -> None:
+    deploy = yaml.safe_load((ANSIBLE / "deploy.yml").read_text())
+    render = next(
+        task
+        for task in deploy[0]["tasks"]
+        if task["name"] == "Render shared inference Compose file"
+    )
+    assert "shared-inference-config" in render.get("tags", [])
+
+    runbook = UPGRADE_RUNBOOK.read_text()
+    for required in (
+        "ANSIBLE_VAULT_PASSWORD_FILE",
+        "set -euo pipefail",
+        "--tags shared-inference-config",
+        "docker pull",
+        "name=shared-inference.service state=restarted",
+        '"encoding_format": "base64"',
+        "shared-inference-compose.yml.rollback",
+    ):
+        assert required in runbook
+    assert '"core","tei-dense"' not in runbook
 
 
 def test_live_values_do_not_enter_public_sources() -> None:

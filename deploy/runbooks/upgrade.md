@@ -10,6 +10,112 @@ config. For a first-deploy-from-scratch, use
 
 The `deploy/ansible/update.yml` playbook drives every step below.
 
+## Shared-inference / TEI image upgrades
+
+TEI is owned by `shared-inference.service`, not by the application Compose
+project. Consequently, `update.yml` and a normal application deploy do not
+recreate TEI. When `musubi_tei_image` changes, use this bounded path from the
+Ansible controller instead of adding `tei-*` to `changed_services`.
+
+Set the common inventory arguments and read the reviewed image reference from
+the repository:
+
+```bash
+set -euo pipefail
+cd ~/musubi
+git pull --ff-only origin main
+export ANSIBLE_VAULT_PASSWORD_FILE="${HOME}/ansible/.vault_pass"
+export MUSUBI_ANSIBLE_ARGS="-i deploy/ansible/inventory.yml -e @${HOME}/.musubi-secrets/inventory-vars.yml -e @${HOME}/.musubi-secrets/vault.yml"
+export TEI_IMAGE="$(python3 -c 'import yaml; print(yaml.safe_load(open("deploy/ansible/group_vars/all.yml"))["musubi_tei_image"])')"
+export MUSUBI_SSH="$(python3 -c 'import os, yaml; values = yaml.safe_load(open(os.path.expanduser("~/.musubi-secrets/inventory-vars.yml"))); print(values["operator_ssh_user"] + "@" + values["musubi_host"])')"
+test -r "${ANSIBLE_VAULT_PASSWORD_FILE}"
+case "${TEI_IMAGE}" in
+  ghcr.io/huggingface/text-embeddings-inference:86-*@sha256:*) ;;
+  *) echo "refusing invalid musubi_tei_image: ${TEI_IMAGE}" >&2; exit 1 ;;
+esac
+```
+
+Pre-pull without interrupting the running containers, preserve the live
+definition, render only the independently managed Compose file, and validate
+it before the single restart:
+
+```bash
+set -euo pipefail
+: "${ANSIBLE_VAULT_PASSWORD_FILE:?run the setup block first}"
+: "${MUSUBI_ANSIBLE_ARGS:?run the setup block first}"
+: "${TEI_IMAGE:?run the setup block first}"
+ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
+  -m ansible.builtin.command -a "docker pull ${TEI_IMAGE}"
+ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
+  -m ansible.builtin.command \
+  -a "cp -a /etc/musubi/shared-inference-compose.yml /etc/musubi/shared-inference-compose.yml.rollback"
+ansible-playbook ${MUSUBI_ANSIBLE_ARGS} deploy/ansible/deploy.yml \
+  --tags shared-inference-config
+ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
+  -m ansible.builtin.command \
+  -a "docker compose -p shared-inference -f /etc/musubi/shared-inference-compose.yml config --quiet"
+ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
+  -m ansible.builtin.systemd_service \
+  -a "name=shared-inference.service state=restarted"
+```
+
+Wait for `tei-dense`, `tei-sparse`, and `tei-reranker` to report healthy, then
+run the production client-shape probe inside Core. It uses the already-mounted
+URLs and credentials without printing them:
+
+```bash
+set -euo pipefail
+: "${MUSUBI_SSH:?run the setup block first}"
+ssh "${MUSUBI_SSH}" 'sudo docker exec -i musubi-core-1 python -' <<'PY'
+import base64
+import os
+
+import httpx
+
+auth = (os.environ["TEI_BASIC_AUTH_USERNAME"], os.environ["TEI_BASIC_AUTH_PASSWORD"])
+requests = (
+    (os.environ["TEI_DENSE_URL"], "/embed", {"inputs": ["upgrade probe"], "truncate": True}),
+    (os.environ["TEI_SPARSE_URL"], "/embed_sparse", {"inputs": ["upgrade probe"]}),
+    (os.environ["TEI_RERANKER_URL"], "/rerank", {"query": "upgrade", "texts": ["upgrade probe", "weather"]}),
+)
+with httpx.Client(auth=auth, timeout=30) as client:
+    results = [client.post(base.rstrip("/") + path, json=body) for base, path, body in requests]
+    assert all(response.status_code == 200 for response in results)
+    assert len(results[0].json()[0]) == 1024
+    assert results[1].json()[0]
+    assert sorted(item["index"] for item in results[2].json()) == [0, 1]
+
+    openai_url = os.environ["TEI_DENSE_URL"].rstrip("/") + "/v1/embeddings"
+    common = {"model": "text-embeddings-inference", "input": ["upgrade probe"]}
+    floats = client.post(openai_url, json={**common, "encoding_format": "float"})
+    encoded = client.post(openai_url, json={**common, "encoding_format": "base64"})
+    assert floats.status_code == encoded.status_code == 200
+    assert len(floats.json()["data"][0]["embedding"]) == 1024
+    wire = encoded.json()["data"][0]["embedding"]
+    assert isinstance(wire, str) and len(base64.b64decode(wire, validate=True)) == 4096
+print("shared-inference upgrade probes: PASS")
+PY
+```
+
+If rendering, startup, or a probe fails, restore the saved definition and
+restart once during the same maintenance window:
+
+```bash
+set -euo pipefail
+: "${ANSIBLE_VAULT_PASSWORD_FILE:?run the setup block first}"
+: "${MUSUBI_ANSIBLE_ARGS:?run the setup block first}"
+ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
+  -m ansible.builtin.command \
+  -a "cp -a /etc/musubi/shared-inference-compose.yml.rollback /etc/musubi/shared-inference-compose.yml"
+ansible musubi ${MUSUBI_ANSIBLE_ARGS} --become \
+  -m ansible.builtin.systemd_service \
+  -a "name=shared-inference.service state=restarted"
+```
+
+The persistent `/var/lib/musubi/tei-models` cache is not replaced in either
+direction. Keep the rollback file until the new containers and consumer smoke
+checks have remained healthy.
+
 ---
 
 ## 1. Pre-flight
@@ -110,13 +216,13 @@ ansible-playbook \
  -e @~/.musubi-secrets/inventory-vars.yml \
  -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml --ask-vault-pass
-# Or for a multi-service bump:
+# Or for an application multi-service bump:
 ansible-playbook \
  -i deploy/ansible/inventory.yml \
  -e @~/.musubi-secrets/inventory-vars.yml \
  -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml \
- -e '{"changed_services":["core","tei-dense"]}' --ask-vault-pass
+ -e '{"changed_services":["core","lifecycle-worker"]}' --ask-vault-pass
 ```
 
 > **Use the JSON extra-vars form for `changed_services`.** Ansible's
