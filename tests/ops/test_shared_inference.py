@@ -773,7 +773,7 @@ def test_shared_inference_image_upgrade_has_an_operator_runnable_path() -> None:
     for required in (
         "--tags shared-inference-config",
         "docker pull",
-        "systemctl restart shared-inference.service",
+        "name=shared-inference.service state=restarted",
         '"encoding_format": "base64"',
         "shared-inference-compose.yml.rollback",
     ):
