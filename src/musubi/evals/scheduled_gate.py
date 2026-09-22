@@ -30,6 +30,13 @@ from musubi.types.common import LifecycleState
 
 _VISIBILITY_ATTEMPTS = 30  # bounded polls for seeded rows to become queryable before fail-loud
 _VISIBILITY_BACKOFF_S = 0.5
+# This gate measures ranking quality, not the interactive stage budgets. The fast
+# path already documents why: a cold CPU TEI stack on the scheduled runner exceeds
+# the 250ms per-plane default. Deep retrieval's rerank budget is 1.5s, and the
+# same runner exceeds that on every deep query, so the cross-encoder never runs
+# and the trap queries are scored in hybrid order. Give every stage the same
+# headroom. Latency has its own contracts; these overrides do not change them.
+_QUALITY_STAGE_TIMEOUT_S = 30.0
 
 
 class ScheduledGateFailure(RuntimeError):
@@ -227,6 +234,55 @@ def _teardown(client: Any, collection: str, namespace: str) -> None:
     )
 
 
+async def retrieve_scheduled_query(
+    backends: Any,
+    *,
+    namespace: str,
+    collection: str,
+    query_text: str,
+    mode: str,
+) -> list[str]:
+    """Rank one scheduled-gate query through the production fast or deep path.
+
+    Stage budgets are the quality-measurement headroom, not the interactive defaults.
+    """
+    from musubi.evals.live_gate import _hits_or_raise
+    from musubi.retrieve.deep import RetrievalQuery, run_deep_retrieve
+    from musubi.retrieve.fast import run_fast_retrieve
+
+    # Provisional included so the immediate-recall contract is exercised.
+    state_filter: tuple[LifecycleState, ...] = ("provisional", "matured")
+    if mode == "deep":
+        result: Any = await run_deep_retrieve(
+            backends.client,
+            backends.embedder,
+            backends.reranker,
+            RetrievalQuery(
+                namespace=namespace,
+                query_text=query_text,
+                mode="deep",
+                limit=20,
+                state_filter=state_filter,
+            ),
+            rerank_timeout_s=_QUALITY_STAGE_TIMEOUT_S,
+            plane_timeout_s=_QUALITY_STAGE_TIMEOUT_S,
+            sparse_timeout_s=_QUALITY_STAGE_TIMEOUT_S,
+        )
+    else:
+        result = await run_fast_retrieve(
+            backends.client,
+            backends.embedder,
+            namespace=namespace,
+            query=query_text,
+            collections=(collection,),
+            limit=20,
+            state_filter=state_filter,
+            plane_timeout_s=_QUALITY_STAGE_TIMEOUT_S,
+            sparse_timeout_s=_QUALITY_STAGE_TIMEOUT_S,
+        )
+    return _hits_or_raise(result, query_text)
+
+
 async def run_scheduled_seeded_gate(
     backends: Any, *, data_dir: Path, run_id: str
 ) -> dict[str, Any]:
@@ -235,9 +291,6 @@ async def run_scheduled_seeded_gate(
     and tear down ONLY the run-owned data (even on failure). Returns
     ``{"by_mode": <per-mode aggregate>, "per_query": [...]}`` — the caller enforces the frozen
     thresholds on ``by_mode`` and never tunes them; per-query is for attribution."""
-    from musubi.evals.live_gate import _hits_or_raise
-    from musubi.retrieve.deep import RetrievalQuery, run_deep_retrieve
-    from musubi.retrieve.fast import run_fast_retrieve
     from musubi.store import bootstrap as bootstrap_collections
     from musubi.store.names import collection_for_plane
 
@@ -250,37 +303,13 @@ async def run_scheduled_seeded_gate(
     plane_factory = _episodic_plane_factory(backends)
 
     async def _retrieve(query_text: str, mode: str) -> list[str]:
-        # Provisional included so the immediate-recall contract is exercised.
-        state_filter: tuple[LifecycleState, ...] = ("provisional", "matured")
-        if mode == "deep":
-            result: Any = await run_deep_retrieve(
-                backends.client,
-                backends.embedder,
-                backends.reranker,
-                RetrievalQuery(
-                    namespace=namespace,
-                    query_text=query_text,
-                    mode="deep",
-                    limit=20,
-                    state_filter=state_filter,
-                ),
-            )
-        else:
-            result = await run_fast_retrieve(
-                backends.client,
-                backends.embedder,
-                namespace=namespace,
-                query=query_text,
-                collections=(collection,),
-                limit=20,
-                state_filter=state_filter,
-                # This gate measures ranking QUALITY, not latency — the interactive 250ms per-plane
-                # default 503s on the cold CPU-TEI CI stack. Give retrieval generous headroom so a
-                # slow embed can't fail the quality measurement (latency has its own contracts).
-                plane_timeout_s=30.0,
-                sparse_timeout_s=30.0,
-            )
-        return _hits_or_raise(result, query_text)
+        return await retrieve_scheduled_query(
+            backends,
+            namespace=namespace,
+            collection=collection,
+            query_text=query_text,
+            mode=mode,
+        )
 
     try:
         key_to_object_id = await _seed_documents(corpus, plane_factory=plane_factory, run_id=run_id)

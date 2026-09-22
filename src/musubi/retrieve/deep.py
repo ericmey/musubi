@@ -80,15 +80,28 @@ async def run_deep_retrieve(
     reranker: TEIRerankerClient,
     query: RetrievalQuery,
     llm: DeepRetrievalLLM | None = None,
+    *,
+    rerank_timeout_s: float | None = None,
+    plane_timeout_s: float | None = None,
+    sparse_timeout_s: float | None = None,
 ) -> Result[DeepResult, DeepRetrievalError]:
     """Execute deep-path retrieval.
 
     Orchestrates hybrid_search -> rerank -> LLM expansion -> score -> lineage.
+
+    Stage budgets default to the interactive settings (rerank 1.5s, per-plane hybrid
+    1.5s, sparse 1.0s). A quality measurement that must not degrade to hybrid order
+    on a cold CPU reranker passes larger ``rerank_timeout_s`` / ``plane_timeout_s`` /
+    ``sparse_timeout_s``; those overrides do not change the production defaults.
     """
     if llm is None:
         llm = _NotConfiguredDeepLLM()
 
-    rerank_timeout_s, lineage_timeout_s = _retrieval_stage_timeouts()
+    settings_rerank_timeout_s, lineage_timeout_s = _retrieval_stage_timeouts()
+    if rerank_timeout_s is None:
+        rerank_timeout_s = settings_rerank_timeout_s
+    hybrid_timeout_s = 1.5 if plane_timeout_s is None else plane_timeout_s
+    hybrid_sparse_timeout_s = 1.0 if sparse_timeout_s is None else sparse_timeout_s
 
     # 1. LLM Query Expansion
     expanded_query = query.query_text
@@ -117,8 +130,9 @@ async def run_deep_retrieve(
                 state_filter=query.state_filter,
                 # Spec: deep per-plane hybrid budget is 1500ms
                 # ([[05-retrieval/orchestration]] / [[05-retrieval/hybrid-search]]).
-                timeout_s=1.5,
-                sparse_timeout_s=1.0,
+                # Callers measuring rank quality may raise both budgets.
+                timeout_s=hybrid_timeout_s,
+                sparse_timeout_s=hybrid_sparse_timeout_s,
             )
         )
 
