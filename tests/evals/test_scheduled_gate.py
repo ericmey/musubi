@@ -20,12 +20,14 @@ import yaml
 
 from musubi.evals import scheduled_gate as sg
 from musubi.evals.scheduled_gate import (
+    _QUALITY_STAGE_TIMEOUT_S,
     ScheduledCorpus,
     ScheduledGateFailure,
     _measure,
     _seed_documents,
     _teardown,
     load_corpus,
+    retrieve_scheduled_query,
     run_namespace,
     wait_for_visibility,
 )
@@ -157,6 +159,49 @@ def test_invalid_two_segment_namespace_is_rejected() -> None:
 
 
 # --- discriminator 6: no-seed (an unseeded/empty measurement must FAIL, never fake-pass) -----------
+
+
+def test_deep_quality_measurement_raises_the_interactive_rerank_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scheduled runner's CPU reranker exceeds the 1.5s interactive budget on every
+    deep query. The quality gate must hand deep retrieval a longer stage budget so the
+    cross-encoder actually ranks the trap queries."""
+    seen: dict[str, float] = {}
+
+    async def fake_deep(*args: Any, **kwargs: Any) -> Any:
+        del args
+        seen["rerank_timeout_s"] = kwargs["rerank_timeout_s"]
+        seen["plane_timeout_s"] = kwargs["plane_timeout_s"]
+        seen["sparse_timeout_s"] = kwargs["sparse_timeout_s"]
+        from musubi.retrieve.deep import DeepResult
+        from musubi.types.common import Ok
+
+        return Ok(value=DeepResult(hits=[]))
+
+    monkeypatch.setattr("musubi.retrieve.deep.run_deep_retrieve", fake_deep)
+
+    class _Backends:
+        client = object()
+        embedder = object()
+        reranker = object()
+
+    ids = asyncio.run(
+        retrieve_scheduled_query(
+            _Backends(),
+            namespace="eric/eval/episodic",
+            collection="musubi_episodic",
+            query_text="trade latency for recall",
+            mode="deep",
+        )
+    )
+    assert ids == []
+    assert seen == {
+        "rerank_timeout_s": _QUALITY_STAGE_TIMEOUT_S,
+        "plane_timeout_s": _QUALITY_STAGE_TIMEOUT_S,
+        "sparse_timeout_s": _QUALITY_STAGE_TIMEOUT_S,
+    }
+    assert _QUALITY_STAGE_TIMEOUT_S > 1.5
 
 
 def test_measure_of_empty_store_yields_failing_metrics() -> None:

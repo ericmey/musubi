@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.17](https://github.com/ericmey/musubi/compare/v1.26.16...v1.26.17) (2026-09-22)
+
+
+### Bug Fixes
+
+* **evals:** let the scheduled deep gate finish reranking ([#821](https://github.com/ericmey/musubi/issues/821)) ([16c6859](https://github.com/ericmey/musubi/commit/16c68590f6643dff66603048493a0c9fd19d4950))
+
 ## [1.26.16](https://github.com/ericmey/musubi/compare/v1.26.15...v1.26.16) (2026-09-20)
 
 

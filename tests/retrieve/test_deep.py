@@ -253,6 +253,58 @@ async def test_deep_path_no_response_cache_by_default() -> None:
     pass
 
 
+async def test_run_deep_retrieve_honors_caller_stage_budgets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quality-gate caller can raise hybrid and rerank budgets without changing the defaults."""
+    from musubi.retrieve.hybrid import HybridHit, HybridSearchResult
+    from musubi.retrieve.rerank import RerankResult
+    from musubi.types.common import Ok
+
+    seen: dict[str, float] = {}
+
+    async def fake_hybrid(*args: Any, **kwargs: Any) -> Any:
+        del args
+        seen["timeout_s"] = kwargs["timeout_s"]
+        seen["sparse_timeout_s"] = kwargs["sparse_timeout_s"]
+        return Ok(
+            value=HybridSearchResult(
+                hits=[
+                    HybridHit(
+                        object_id="obj",
+                        score=1.0,
+                        payload={"namespace": "a/b/episodic", "state": "matured"},
+                    )
+                ]
+            )
+        )
+
+    async def fake_rerank(*args: Any, **kwargs: Any) -> Any:
+        del args
+        seen["rerank_timeout_s"] = kwargs["timeout_s"]
+        return RerankResult(hits=[], warnings=())
+
+    monkeypatch.setattr("musubi.retrieve.deep.hybrid_search", fake_hybrid)
+    monkeypatch.setattr("musubi.retrieve.deep._rerank_with_timeout", fake_rerank)
+
+    result = await run_deep_retrieve(
+        object(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+        RetrievalQuery(
+            namespace="a/b/episodic",
+            query_text="trade latency for recall",
+            planes=("episodic",),
+            include_lineage=False,
+        ),
+        rerank_timeout_s=30.0,
+        plane_timeout_s=30.0,
+        sparse_timeout_s=30.0,
+    )
+    assert result.is_ok()
+    assert seen == {"timeout_s": 30.0, "sparse_timeout_s": 30.0, "rerank_timeout_s": 30.0}
+
+
 async def test_deep_path_rerank_down_falls_back_with_warning(
     qdrant: QdrantClient,
     embedder: FakeEmbedder,
