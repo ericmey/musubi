@@ -62,18 +62,31 @@ Design choices are captured as ADRs in [`docs/Musubi/13-decisions/`](docs/Musubi
 
 ## Try it
 
+The whole memory server on CPU, with Docker and nothing else:
+
 ```bash
-# 1. Clone
 git clone https://github.com/ericmey/musubi && cd musubi
-
-# 2. Install (Python 3.12 + uv required — https://docs.astral.sh/uv/)
-make install
-
-# 3. Run the local test suite
-make check
+docker compose -f quickstart/docker-compose.yml up -d --wait   # first boot downloads ~2.5 GB of models
+docker compose -f quickstart/docker-compose.yml run --rm demo
 ```
 
-A single-box Docker Compose deploy is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). Pin by digest — tags are mutable, digests aren't, and the rest of the repo (ansible, CI, SECURITY.md) verifies by digest:
+The demo has one agent capture memories, then a second agent with a
+**read-only** token recall the right one from a question that shares no
+content words with it, and finally checks that the read-only token is
+refused a write. It exits non-zero if any of that fails, and the
+[Quickstart workflow](.github/workflows/quickstart.yml) runs it on a clean
+runner. The quickstart uses smaller CPU models than production; see
+[`quickstart/docker-compose.yml`](quickstart/docker-compose.yml).
+The API is then on `http://127.0.0.1:8100/v1`.
+
+To work on the code (Python 3.12 + [uv](https://docs.astral.sh/uv/)):
+
+```bash
+make install
+make check    # lint, types, and the unit suite
+```
+
+For a production deploy, the single-box Docker Compose stack is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). Pin by digest — tags are mutable, digests aren't, and the rest of the repo (ansible, CI, SECURITY.md) verifies by digest:
 
 ```
 ghcr.io/ericmey/musubi-core@sha256:<digest>
