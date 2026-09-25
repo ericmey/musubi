@@ -6,7 +6,8 @@ Run it against the quickstart stack:
 
 What it shows, and checks (exits non-zero if any check fails):
 
-1. A "scribe" agent captures a few memories into its own namespace.
+1. A "scribe" agent captures a few memories into its own namespace (fresh per
+   run, so the demo is repeatable against the persistent volume).
 2. The memories are matured. In a real deployment the hourly lifecycle
    sweep does this; here an operator token does it directly so the demo
    does not wait an hour.
@@ -32,8 +33,10 @@ import jwt
 
 API = os.environ.get("MUSUBI_URL", "http://localhost:8100/v1")
 KEY = os.environ["JWT_SIGNING_KEY"]
-NS = "demo/scribe/episodic"
 RUN = uuid.uuid4().hex[:6]
+# One namespace per run, so repeat runs against the persistent quickstart volume
+# never see an earlier run's identical memories (the check below is by object_id).
+NS = f"demo/scribe-{RUN}/episodic"
 
 MEMORIES = [
     "Eric drinks a flat white with oat milk every morning before stand-up.",
