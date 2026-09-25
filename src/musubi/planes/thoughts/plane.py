@@ -267,10 +267,10 @@ class ThoughtsPlane:
 
         Qdrant ``scroll`` doesn't order by object_id (point ids are
         UUIDv5, uncorrelated with KSUID), so we paginate through the
-        filtered slice until we collect ``cap + 1`` post-anchor
-        candidates or exhaust the result set. Sorting + cap are applied
-        after the paginated fetch so ``truncated`` reflects whether a
-        genuine overflow occurred, not scroll-window quirks.
+        filtered slice until the result set is exhausted. Sorting + cap are
+        applied after the full fetch, so the result is the ``cap`` smallest
+        post-anchor ids regardless of scroll order, and ``truncated``
+        reflects a genuine overflow.
 
         Ordered ascending by ``object_id`` lexicographically. Since
         ``object_id`` is a KSUID, this preserves second-level creation
@@ -307,11 +307,20 @@ class ThoughtsPlane:
             ],
         )
 
+        # Scroll order is by point id, not by KSUID, and Qdrant cannot
+        # order_by a keyword field. created_epoch is not a safe proxy either:
+        # object_id is minted when the Thought is built, created_epoch when it
+        # is sent, so the two can disagree. The only order-correct way to find
+        # the ``cap`` smallest post-anchor ids is to read every post-anchor
+        # candidate, then sort and cap. Stopping early at ``cap + 1`` returned
+        # whichever rows the first pages held and could skip the earliest
+        # events. The epoch filter above bounds the scan to thoughts sent
+        # since the anchor, which is the reconnect window.
         candidates: list[Thought] = []
         offset: Any | None = None
         page_size = max(cap + 1, 64)
 
-        while len(candidates) <= cap:
+        while True:
             resp, offset = self._client.scroll(
                 collection_name=self._collection,
                 scroll_filter=base_filter,
@@ -326,10 +335,8 @@ class ThoughtsPlane:
                 thought = _thought_from_payload(point.payload)
                 if thought.object_id > last_event_id:
                     candidates.append(thought)
-                    if len(candidates) > cap:
-                        break
 
-            if offset is None or len(candidates) > cap:
+            if offset is None:
                 break
 
         # Sort by object_id lex-ascending — matches the canonical-api

@@ -8,6 +8,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -499,3 +500,41 @@ async def test_replay_since_returns_empty_for_malformed_anchor(
         )
         assert replayed == [], f"malformed anchor {bad!r} should yield empty replay"
         assert truncated is False
+
+
+async def test_replay_since_returns_earliest_post_anchor_when_scroll_is_unordered(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    """Qdrant's scroll order is by point id, not by KSUID. With more than
+    ``cap`` post-anchor thoughts spread over several scroll pages, replay must
+    still return the ``cap`` lexicographically smallest object_ids, not
+    whichever ``cap + 1`` the first pages happened to hold.
+
+    Red-proof: the scroll below serves pages newest-first, so the earliest
+    thoughts arrive on the last page. An implementation that stops paging once
+    it holds ``cap + 1`` candidates returns later events and misses these."""
+    sent = [await plane.send(_make(f"msg-{i}", ns, "a", "b")) for i in range(10)]
+    expected = sorted(t.object_id for t in sent)[:3]
+
+    real_scroll = plane._client.scroll
+
+    def newest_first_scroll(**kwargs: Any) -> tuple[list[Any], int | None]:
+        # Pull every matching record from the real store, then page it back
+        # in DESCENDING object_id order, two records per page.
+        full = {k: v for k, v in kwargs.items() if k not in ("limit", "offset")}
+        records, _ = real_scroll(**full, limit=10_000)
+        ordered = sorted(records, key=lambda r: str((r.payload or {})["object_id"]), reverse=True)
+        start = int(kwargs.get("offset") or 0)
+        nxt = start + 2 if start + 2 < len(ordered) else None
+        return list(ordered[start : start + 2]), nxt
+
+    plane._client.scroll = newest_first_scroll  # type: ignore[method-assign,assignment]
+    try:
+        replayed, truncated = await plane.replay_since(
+            namespace=ns, includes={"b", "all"}, last_event_id="0" * 27, cap=3
+        )
+    finally:
+        plane._client.scroll = real_scroll  # type: ignore[method-assign]
+
+    assert [t.object_id for t in replayed] == expected
+    assert truncated is True
