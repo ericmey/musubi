@@ -74,3 +74,51 @@ def test_upload_at_limit_round_trips_bytes_size_and_hash(
         ".staging" in str(p) and p.suffix == ".part"
         for p in _files_under(api_settings.artifact_blob_path)
     )
+
+
+def _staging_parts(root: Path) -> list[Path]:
+    staging = root / ".staging"
+    return list(staging.glob("*.part")) if staging.exists() else []
+
+
+def _post_expecting_failure(client: TestClient, token: str) -> None:
+    # A failure after the bytes are written surfaces as a server error. Whether the
+    # TestClient re-raises it or returns a 5xx depends on its configuration; either
+    # way, the assertion that matters is about the staging directory afterwards.
+    try:
+        r = _upload(client, token, b"payload")
+        assert r.status_code >= 500  # type: ignore[attr-defined]
+    except RuntimeError:
+        pass
+
+
+def test_failure_in_plane_create_leaves_no_staging_file(
+    client: TestClient, api_settings: Settings, monkeypatch: object
+) -> None:
+    from musubi.planes.artifact import ArtifactPlane
+
+    async def boom(self: object, *a: object, **k: object) -> object:
+        raise RuntimeError("injected plane.create failure")
+
+    monkeypatch.setattr(ArtifactPlane, "create", boom)  # type: ignore[attr-defined]
+    token = mint_token(api_settings, scopes=[f"{NS}:rw"])
+
+    _post_expecting_failure(client, token)
+
+    assert _staging_parts(api_settings.artifact_blob_path) == []
+
+
+def test_failure_in_final_replace_leaves_no_staging_file(
+    client: TestClient, api_settings: Settings, monkeypatch: object
+) -> None:
+    import musubi.api.routers.writes_artifact as wa
+
+    def boom(src: object, dst: object) -> None:
+        raise RuntimeError("injected os.replace failure")
+
+    monkeypatch.setattr(wa.os, "replace", boom)  # type: ignore[attr-defined]
+    token = mint_token(api_settings, scopes=[f"{NS}:rw"])
+
+    _post_expecting_failure(client, token)
+
+    assert _staging_parts(api_settings.artifact_blob_path) == []

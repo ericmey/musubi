@@ -69,6 +69,10 @@ async def upload_artifact(
     staging = staging_dir / f"{uuid.uuid4().hex}.part"
     hasher = hashlib.sha256()
     size = 0
+    # The staging file must not outlive this request: every failure up to and
+    # including the final os.replace() removes it (nothing else ever walks
+    # .staging). After a successful replace the staging path no longer exists,
+    # so the unlink is a no-op; the final blob is never deleted here.
     try:
         with staging.open("wb") as out:
             while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
@@ -85,29 +89,29 @@ async def upload_artifact(
                     )
                 hasher.update(chunk)
                 out.write(chunk)
+        sha = hasher.hexdigest()
+        saved = await plane.create(
+            SourceArtifact(
+                namespace=namespace,
+                title=title,
+                filename=file.filename or "upload.bin",
+                sha256=sha,
+                content_type=content_type,
+                size_bytes=size,
+                chunker=chunker,
+                ingestion_metadata={"source_system": source_system},
+            )
+        )
+        # Persist raw bytes under artifact_blob_path/<namespace>/<object_id>.
+        # The layout matches ops/cleanup.py's hard-delete walker and is the
+        # minimum wiring for GET /artifacts/{id}/blob to round-trip. Real
+        # content-addressed blob storage (S3 / by-sha256) is a follow-up.
+        blob_path = settings.artifact_blob_path / saved.namespace / saved.object_id
+        blob_path.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging, blob_path)
     except BaseException:
         staging.unlink(missing_ok=True)
         raise
-    sha = hasher.hexdigest()
-    saved = await plane.create(
-        SourceArtifact(
-            namespace=namespace,
-            title=title,
-            filename=file.filename or "upload.bin",
-            sha256=sha,
-            content_type=content_type,
-            size_bytes=size,
-            chunker=chunker,
-            ingestion_metadata={"source_system": source_system},
-        )
-    )
-    # Persist raw bytes under artifact_blob_path/<namespace>/<object_id>.
-    # The layout matches ops/cleanup.py's hard-delete walker and is the
-    # minimum wiring for GET /artifacts/{id}/blob to round-trip. Real
-    # content-addressed blob storage (S3 / by-sha256) is a follow-up.
-    blob_path = settings.artifact_blob_path / saved.namespace / saved.object_id
-    blob_path.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(staging, blob_path)
     # C4/ART-001: the canonical blob + head are durable — admit a durable indexing intent. The
     # lifecycle worker's ArtifactIndexer then chunks/embeds/stages/publishes a committed generation.
     admission = coordinator.enqueue_index_intent(
