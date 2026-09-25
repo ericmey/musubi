@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from qdrant_client import QdrantClient
 
 from musubi.api.auth import require_auth
@@ -97,8 +97,9 @@ async def get_artifact_blob(
             code="NOT_FOUND",
             detail=f"blob for artifact {object_id!r} not found",
         )
-    return Response(
-        content=blob_path.read_bytes(),
+    # Stream from disk rather than reading the whole blob into memory.
+    return FileResponse(
+        blob_path,
         media_type=getattr(parent, "content_type", "application/octet-stream"),
     )
 
