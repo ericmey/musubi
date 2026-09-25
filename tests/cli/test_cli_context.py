@@ -15,6 +15,13 @@ _TOKEN = "operator-token-fake"
 
 
 @pytest.fixture(autouse=True)
+def _namespace_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI no longer defaults to a house agent; tests that do not pass
+    --namespace get a generic one from the environment."""
+    monkeypatch.setenv("MUSUBI_NAMESPACE", "my-agent/main")
+
+
+@pytest.fixture(autouse=True)
 def _scrub_cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MUSUBI_API_URL", raising=False)
     monkeypatch.delenv("MUSUBI_TOKEN", raising=False)
@@ -139,3 +146,25 @@ def test_context_json_preserves_warnings(runner: CliRunner, httpx_mock: HTTPXMoc
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output).get("warnings") == ["plane_timeout_episodic"]
+
+
+def test_context_requires_a_namespace_instead_of_defaulting_to_a_house_agent(
+    runner: CliRunner, monkeypatch
+) -> None:
+    """The CLI used to default to one of the maintainer's agents (yua/command-chair)."""
+    monkeypatch.delenv("MUSUBI_NAMESPACE", raising=False)
+    result = runner.invoke(app, ["context", "--token", _TOKEN])
+    assert result.exit_code != 0
+    assert "MUSUBI_NAMESPACE" in result.output
+
+
+def test_context_reads_namespace_from_env(
+    runner: CliRunner, httpx_mock: HTTPXMock, monkeypatch
+) -> None:
+    monkeypatch.setenv("MUSUBI_NAMESPACE", "my-agent/main")
+    httpx_mock.add_response(method="POST", url=f"{_BASE}/context", json=_context_reply())
+    result = runner.invoke(app, ["context", "--token", _TOKEN])
+    assert result.exit_code == 0, result.output
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert json.loads(request.read())["namespace"] == "my-agent/main"

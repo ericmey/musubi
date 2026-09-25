@@ -16,7 +16,7 @@ Behaviour:
   the rest of the fleet emits (so musubi-core lines up with openclaw,
   livekit, etc. on Tempo + Mimir labels).
 - Span export goes over OTLP/gRPC to the supplied endpoint
-  (e.g. ``http://shiori.mey.house:4317``).
+  (e.g. ``http://otel-collector.internal:4317``).
 - 100% sampling per the spec ("100% in v1 (low traffic; dedicated host
   has spare headroom)"). No sampler argument is passed; OTel's default
   is ``ParentBased(AlwaysOn)`` which is exactly 100% root-sampling.

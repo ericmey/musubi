@@ -370,7 +370,7 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = Field(
         default="",
         description="OTLP/gRPC endpoint for span export "
-        "(e.g. `http://shiori.mey.house:4317`). Empty disables tracing.",
+        "(e.g. `http://otel-collector.internal:4317`). Empty disables tracing.",
     )
     otel_service_name: str = Field(
         default="musubi-core",

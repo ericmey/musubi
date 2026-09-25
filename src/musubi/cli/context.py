@@ -19,13 +19,15 @@ context_app = typer.Typer(
 @context_app.callback(invoke_without_command=True)
 def context(
     namespace: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--namespace",
             "-n",
-            help="Two- or three-segment namespace, e.g. yua/command-chair.",
+            envvar="MUSUBI_NAMESPACE",
+            help="Two- or three-segment namespace, e.g. my-agent/main. Required; "
+            "may also come from MUSUBI_NAMESPACE.",
         ),
-    ] = "yua/command-chair",
+    ] = None,
     query_text: Annotated[
         str,
         typer.Option("--query", "-q", help="Moment/task to align context against."),
@@ -59,6 +61,11 @@ def context(
 ) -> None:
     """Build and print a startup context pack."""
 
+    if not namespace:
+        raise typer.BadParameter(
+            "no namespace given: pass --namespace or set MUSUBI_NAMESPACE",
+            param_hint="--namespace",
+        )
     base_url = resolve_base_url(api_url)
     bearer = resolve_token(token)
     body = {
