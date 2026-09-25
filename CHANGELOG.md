@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.18](https://github.com/ericmey/musubi/compare/v1.26.17...v1.26.18) (2026-09-25)
+
+
+### Bug Fixes
+
+* **thoughts:** replay_since returns the earliest post-anchor events ([#826](https://github.com/ericmey/musubi/issues/826)) ([e29486e](https://github.com/ericmey/musubi/commit/e29486e504da0522a3b807b381fed14e3ffe7801))
+
 ## [1.26.17](https://github.com/ericmey/musubi/compare/v1.26.16...v1.26.17) (2026-09-22)
 
 
