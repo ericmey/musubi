@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.27.0](https://github.com/ericmey/musubi/compare/v1.26.18...v1.27.0) (2026-09-25)
+
+
+### Features
+
+* **quickstart:** CPU-only docker compose quickstart with a checked demo ([#825](https://github.com/ericmey/musubi/issues/825)) ([923fb41](https://github.com/ericmey/musubi/commit/923fb410856602bd385a9d89f1cf81727c72cdbd))
+
+
+### Bug Fixes
+
+* **artifacts:** bound upload size and stream upload and download ([#828](https://github.com/ericmey/musubi/issues/828)) ([fd490e3](https://github.com/ericmey/musubi/commit/fd490e36eac65dcf62c9de4c153324dda740a6c6))
+
 ## [1.26.18](https://github.com/ericmey/musubi/compare/v1.26.17...v1.26.18) (2026-09-25)
 
 
