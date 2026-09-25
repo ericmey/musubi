@@ -34,6 +34,10 @@ jobs:
         run: docker compose -f quickstart/docker-compose.yml run --rm demo
         timeout-minutes: 5
 
+      - name: Run the demo again on the same volume (repeatability)
+        run: docker compose -f quickstart/docker-compose.yml run --rm demo
+        timeout-minutes: 5
+
       - name: Logs on failure
         if: failure()
         run: docker compose -f quickstart/docker-compose.yml logs --no-color --tail 200
