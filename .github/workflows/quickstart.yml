@@ -1,0 +1,43 @@
+# Quickstart proof: a stranger's first five minutes, run on a clean runner.
+#
+# Boots quickstart/docker-compose.yml exactly as the README tells a new
+# user to, then runs the demo, which exits non-zero unless one agent's
+# memory is recalled by another agent and a read-only token is refused
+# a write. If this is green, the README's "Try it" works.
+
+name: Quickstart
+
+on:
+  pull_request:
+    paths:
+      - 'quickstart/**'
+      - '.github/workflows/quickstart.yml'
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Boot the stack
+        run: docker compose -f quickstart/docker-compose.yml up -d --wait --wait-timeout 900
+        timeout-minutes: 20
+
+      - name: Run the demo
+        run: docker compose -f quickstart/docker-compose.yml run --rm demo
+        timeout-minutes: 5
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f quickstart/docker-compose.yml logs --no-color --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f quickstart/docker-compose.yml down -v

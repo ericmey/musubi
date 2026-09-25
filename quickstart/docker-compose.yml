@@ -1,0 +1,104 @@
+# Musubi quickstart: the full memory server on CPU, no GPU, no host setup.
+#
+#   docker compose -f quickstart/docker-compose.yml up -d --wait
+#   docker compose -f quickstart/docker-compose.yml run --rm demo
+#
+# This file is for trying Musubi. It is NOT the production stack:
+# production is ../docker-compose.yml rendered by Ansible (deploy/ansible),
+# with GPU TEI, BGE-M3 and TLS. Nothing here is read by that path.
+#
+# Models are smaller than production so a cold start fits a laptop:
+# bge-large-en-v1.5 dense (1024-dim, matching the collection schema),
+# efficient-SPLADE sparse, bge-reranker-base. First boot downloads
+# them (~2.5 GB) into named volumes; later boots are fast.
+#
+# Images are amd64. On Apple Silicon, Docker runs them under emulation;
+# that works but is slower on first boot.
+
+name: musubi-quickstart
+
+x-tei: &tei
+  image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
+  platform: linux/amd64
+  environment:
+    HF_HUB_ENDPOINT: https://huggingface.co
+    HF_HOME: /data
+  healthcheck:
+    test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
+    interval: 10s
+    timeout: 5s
+    retries: 90
+    start_period: 120s
+
+x-core: &core
+  # v1.26.17, cosign-signed by publish-core-image.yml; same digest as
+  # deploy/ansible/group_vars/all.yml.
+  image: ghcr.io/ericmey/musubi-core@sha256:9b14e7e27c318ad0ae784d275c80572bed26ce32cf9673a754d77a43a6292bdf
+  platform: linux/amd64
+  env_file: [.env.quickstart]
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.0
+    volumes: [qdrant-storage:/qdrant/storage]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  tei-dense:
+    <<: *tei
+    volumes: [tei-dense-models:/data]
+    command: ["--model-id", "BAAI/bge-large-en-v1.5", "--port", "80"]
+
+  tei-sparse:
+    <<: *tei
+    volumes: [tei-sparse-models:/data]
+    command: ["--model-id", "naver/efficient-splade-VI-BT-large-doc", "--pooling", "splade", "--port", "80"]
+
+  tei-reranker:
+    <<: *tei
+    volumes: [tei-reranker-models:/data]
+    command: ["--model-id", "BAAI/bge-reranker-base", "--port", "80"]
+
+  core:
+    <<: *core
+    ports: ["127.0.0.1:8100:8100"]
+    # Core expects its data dirs to exist (the Ansible deploy creates them
+    # on the host); create them in the container's /tmp for the quickstart.
+    command:
+      - sh
+      - -c
+      - >-
+        mkdir -p /tmp/musubi/vault /tmp/musubi/artifacts /tmp/musubi/lifecycle /tmp/musubi/logs &&
+        exec uvicorn --factory musubi.api.app:create_app --host 0.0.0.0 --port 8100
+    depends_on:
+      qdrant: {condition: service_healthy}
+      tei-dense: {condition: service_healthy}
+      tei-sparse: {condition: service_healthy}
+      tei-reranker: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8100/v1/ops/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  # One-shot demo: `docker compose -f quickstart/docker-compose.yml run --rm demo`
+  demo:
+    <<: *core
+    profiles: ["demo"]
+    depends_on:
+      core: {condition: service_healthy}
+    volumes: ["./demo.py:/quickstart/demo.py:ro"]
+    environment:
+      MUSUBI_URL: http://core:8100/v1
+    command: ["python", "/quickstart/demo.py"]
+
+volumes:
+  qdrant-storage:
+  tei-dense-models:
+  tei-sparse-models:
+  tei-reranker-models:
