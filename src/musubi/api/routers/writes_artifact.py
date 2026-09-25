@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from pydantic import BaseModel
@@ -25,6 +27,9 @@ from musubi.types.artifact import SourceArtifact
 from musubi.types.common import Ok
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifact-writes"])
+
+
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 class ArtifactCreateResponse(BaseModel):
@@ -57,8 +62,33 @@ async def upload_artifact(
     # query string). Authorize the parsed Form namespace with route-native shared authz so a
     # write-scoped token is required for the namespace actually being written.
     authorize_namespace(request, namespace, settings=settings, access="w")
-    raw = await file.read()
-    sha = hashlib.sha256(raw).hexdigest()
+    # Stream the upload to a staging file in chunks: hash as we go and refuse
+    # past artifact_max_bytes, instead of reading the whole body into memory.
+    staging_dir = settings.artifact_blob_path / ".staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staging = staging_dir / f"{uuid.uuid4().hex}.part"
+    hasher = hashlib.sha256()
+    size = 0
+    try:
+        with staging.open("wb") as out:
+            while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+                size += len(chunk)
+                if size > settings.artifact_max_bytes:
+                    raise APIError(
+                        status_code=413,
+                        code="CONTENT_TOO_LARGE",
+                        detail=(
+                            f"artifact upload exceeds the limit of "
+                            f"{settings.artifact_max_bytes} bytes"
+                        ),
+                        hint="raise ARTIFACT_MAX_BYTES on the server, or split the artifact",
+                    )
+                hasher.update(chunk)
+                out.write(chunk)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    sha = hasher.hexdigest()
     saved = await plane.create(
         SourceArtifact(
             namespace=namespace,
@@ -66,7 +96,7 @@ async def upload_artifact(
             filename=file.filename or "upload.bin",
             sha256=sha,
             content_type=content_type,
-            size_bytes=len(raw),
+            size_bytes=size,
             chunker=chunker,
             ingestion_metadata={"source_system": source_system},
         )
@@ -77,7 +107,7 @@ async def upload_artifact(
     # content-addressed blob storage (S3 / by-sha256) is a follow-up.
     blob_path = settings.artifact_blob_path / saved.namespace / saved.object_id
     blob_path.parent.mkdir(parents=True, exist_ok=True)
-    blob_path.write_bytes(raw)
+    os.replace(staging, blob_path)
     # C4/ART-001: the canonical blob + head are durable — admit a durable indexing intent. The
     # lifecycle worker's ArtifactIndexer then chunks/embeds/stages/publishes a committed generation.
     admission = coordinator.enqueue_index_intent(

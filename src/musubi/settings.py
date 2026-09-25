@@ -167,6 +167,16 @@ class Settings(BaseSettings):
     )
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
+    artifact_max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        gt=0,
+        description=(
+            "Largest artifact upload accepted, in bytes (default 100 MiB). Uploads are hashed and "
+            "written to disk in chunks and refused with 413 CONTENT_TOO_LARGE past this size. "
+            "The multipart body is still received before the handler runs, so a hard request-size "
+            "ceiling belongs at the reverse proxy as well."
+        ),
+    )
     lifecycle_sqlite_path: Path = Field(description="Host path to lifecycle-work sqlite.")
     idempotency_receipt_sqlite_path: Path | None = Field(
         default=None,
