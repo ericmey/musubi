@@ -98,7 +98,7 @@ Verify the signature before pinning in production:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \
+  --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/ericmey/musubi-core@sha256:<digest>
 ```

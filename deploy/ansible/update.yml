@@ -106,7 +106,7 @@
           - candidate_preflight_inputs.results[0].stat.isdir | default(false)
           - candidate_preflight_inputs.results[1].stat.isreg | default(false)
           - candidate_preflight_inputs.results[2].stat.isreg | default(false)
-          - musubi_core_image is match('^ghcr[.]io/ericmey/musubi-core@sha256:[0-9a-f]{64}$')
+          - musubi_core_image is match('^ghcr[.]io/(ericmey|sourceblender)/musubi-core@sha256:[0-9a-f]{64}$')
         fail_msg: >-
           Core update is not armed: set MUSUBI_PREFLIGHT_AUTHORITY_ENV to an
           explicit server/preflight env, provide every configured credential,
@@ -136,8 +136,10 @@
         argv:
           - cosign
           - verify
+          # Single-quoted: YAML double quotes would reject the \. escapes. Both owners
+          # stay trusted across the ericmey -> sourceblender repo transfer.
           - --certificate-identity-regexp
-          - "https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*"
+          - '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$'
           - --certificate-oidc-issuer
           - https://token.actions.githubusercontent.com
           - "{{ musubi_core_image }}"

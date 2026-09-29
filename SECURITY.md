@@ -57,7 +57,7 @@ Every published image is signed by a GitHub Actions OIDC identity via [cosign](h
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \
+  --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/ericmey/musubi-core@sha256:<digest>
 ```
