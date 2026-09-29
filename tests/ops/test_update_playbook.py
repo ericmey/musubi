@@ -295,9 +295,9 @@ def test_every_documented_core_update_entrypoint_names_preflight_authority_env()
         )
 
 
-def test_candidate_preflight_manifest_declares_twelve_live_and_one_template() -> None:
+def test_candidate_preflight_manifest_declares_thirteen_live_and_one_template() -> None:
     manifest = yaml.safe_load(PREFLIGHT_MANIFEST.read_text())
-    assert len(manifest["live"]) == 12
+    assert len(manifest["live"]) == 13
     assert len(manifest["templates"]) == 1
     assert manifest["templates"][0]["file"] == "musubi-mcp.env"
     assert manifest["templates"][0]["classification"] == "non-consumed-template"
