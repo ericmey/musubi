@@ -53,6 +53,12 @@ concurrency:
   group: auto-digest-bump
   cancel-in-progress: false
 
+env:
+  # The image lives in the namespace of whichever owner ran the publish, so
+  # resolve and pin there. The signer identity below accepts both owners
+  # across the ericmey -> sourceblender transfer.
+  IMAGE_REPO: ${{ github.repository_owner }}/musubi-core
+
 jobs:
   bump:
     runs-on: ubuntu-latest
@@ -119,7 +125,7 @@ jobs:
           # The package is public, so no auth needed. Ask for both the v2 manifest
           # AND the OCI index content type — GHCR serves whichever matches.
           REGISTRY="ghcr.io"
-          IMAGE="ericmey/musubi-core"
+          IMAGE="${IMAGE_REPO}"
           TOKEN=$(curl -sf "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE}:pull" \
                   | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
 
@@ -146,7 +152,7 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
           DIGEST: ${{ steps.resolve.outputs.digest }}
           FILE: deploy/ansible/group_vars/all.yml
-          NEW_IMAGE: ghcr.io/ericmey/musubi-core@${{ steps.resolve.outputs.digest }}
+          NEW_IMAGE: ghcr.io/${{ env.IMAGE_REPO }}@${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
 
@@ -225,9 +231,9 @@ jobs:
           required live-credential preflight command:
 
               cosign verify \\
-                --certificate-identity-regexp 'https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*' \\
+                --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$' \\
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
-                ghcr.io/ericmey/musubi-core@${DIGEST}
+                ghcr.io/${IMAGE_REPO}@${DIGEST}
 
           No tracking Issue: auto-generated release digest pin."
 
@@ -257,12 +263,12 @@ jobs:
           \`\`\`bash
           cd ~/musubi
           git pull --ff-only origin main
-          export CANDIDATE_IMAGE=ghcr.io/ericmey/musubi-core@${DIGEST}
+          export CANDIDATE_IMAGE=ghcr.io/${IMAGE_REPO}@${DIGEST}
           export MUSUBI_CREDENTIAL_DIR=~/.musubi
           export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
 
           cosign verify \\
-            --certificate-identity-regexp 'https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*' \\
+            --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$' \\
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
             \${CANDIDATE_IMAGE}
           docker pull \${CANDIDATE_IMAGE}

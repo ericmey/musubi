@@ -301,7 +301,8 @@ def test_workflow_tags_include_ghcr_namespace() -> None:
     # docker/metadata-action emits the tags; grep for the canonical
     # namespace in the workflow source as a cheap integration test.
     text = WORKFLOW.read_text()
-    assert "ghcr.io/ericmey/musubi-core" in text
+    assert "IMAGE: ghcr.io/${{ github.repository_owner }}/musubi-core" in text
+    assert "images: ${{ env.IMAGE }}" in text
 
 
 def test_workflow_does_not_mutate_group_vars() -> None:
@@ -334,7 +335,7 @@ def test_workflow_does_not_mutate_group_vars() -> None:
 
 
 _IMAGE_RE = re.compile(
-    r"^(musubi-core:dev|ghcr\.io/ericmey/musubi-core"
+    r"^(musubi-core:dev|ghcr\.io/(ericmey|sourceblender)/musubi-core"
     r"(:v\d[\w.\-]*|@sha256:[0-9a-f]{64}))$"
 )
 
@@ -346,7 +347,7 @@ def test_group_vars_musubi_core_image_parses_as_oci_reference() -> None:
     assert _IMAGE_RE.match(image), (
         f"musubi_core_image={image!r} is not a recognised shape — expected "
         "either the pre-publish local tag 'musubi-core:dev' or a GHCR "
-        "reference like 'ghcr.io/ericmey/musubi-core@sha256:<64-hex>'"
+        "reference like 'ghcr.io/<owner>/musubi-core@sha256:<64-hex>'"
     )
 
 
