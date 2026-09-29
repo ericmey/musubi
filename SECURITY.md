@@ -15,7 +15,7 @@ Musubi is pre-1.0 and moves fast. Security-relevant fixes land on the latest min
 
 Use one of these paths instead:
 
-1. **GitHub Private Vulnerability Reporting** — preferred. Go to the [Security tab](https://github.com/ericmey/musubi/security/advisories/new) on this repo and open a draft advisory. It's routed directly to the maintainer and isn't publicly indexed until published.
+1. **GitHub Private Vulnerability Reporting** — preferred. Go to the [Security tab](https://github.com/sourceblender/musubi/security/advisories/new) on this repo and open a draft advisory. It's routed directly to the maintainer and isn't publicly indexed until published.
 2. **Email** — `ericmey@gmail.com` with subject prefix `[musubi-security]`.
 
 Please include:

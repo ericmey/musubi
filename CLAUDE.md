@@ -11,7 +11,7 @@ Musubi (結び) is a three-plane shared memory server for a small AI agent fleet
 ## The repo at a glance
 
 ```
-~/Projects/musubi/                   ← this repo (github.com/ericmey/musubi)
+~/Projects/musubi/                   ← this repo (github.com/sourceblender/musubi)
 ├── src/musubi/                      ← implementation (Python 3.12, pydantic v2)
 │   ├── types/                       ← shared types (slice-types)
 │   ├── store/                       ← Qdrant layout + bootstrap (slice-qdrant-layout)

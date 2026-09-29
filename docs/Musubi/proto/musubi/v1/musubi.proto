@@ -18,7 +18,7 @@ package musubi.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/ericmey/musubi/proto/musubi/v1;musubiv1";
+option go_package = "github.com/sourceblender/musubi/proto/musubi/v1;musubiv1";
 
 // --------------------------------------------------------------------------
 // Service

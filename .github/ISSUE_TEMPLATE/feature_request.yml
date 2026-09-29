@@ -8,7 +8,7 @@ body:
       value: |
         Musubi is a personal project with a deliberate scope. Feature requests are welcome but won't automatically be accepted — the bar is: the idea fits the three-plane / lifecycle-engine architecture, and either you or someone else is willing to write the slice spec and the implementation.
 
-        For open-ended "what if…" ideas, please start a [Discussion](https://github.com/ericmey/musubi/discussions) instead.
+        For open-ended "what if…" ideas, please start a [Discussion](https://github.com/sourceblender/musubi/discussions) instead.
 
   - type: textarea
     id: problem
@@ -62,5 +62,5 @@ body:
       options:
         - label: I searched existing issues and discussions for a similar request.
           required: true
-        - label: I've read [CONTRIBUTING.md](https://github.com/ericmey/musubi/blob/main/CONTRIBUTING.md) and understand that outside features require alignment before implementation.
+        - label: I've read [CONTRIBUTING.md](https://github.com/sourceblender/musubi/blob/main/CONTRIBUTING.md) and understand that outside features require alignment before implementation.
           required: true

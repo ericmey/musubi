@@ -39,7 +39,7 @@ operational path is always the ansible control host → playbook → musubi work
 
 ```bash
 ssh <ansible-host>
-git clone git@github.com:ericmey/musubi.git ~/musubi
+git clone git@github.com:sourceblender/musubi.git ~/musubi
 cd ~/musubi
 ansible-galaxy collection install -r deploy/ansible/requirements.yml
 deploy/ansible/setup-control-host.sh

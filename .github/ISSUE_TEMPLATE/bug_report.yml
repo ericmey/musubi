@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for filing a bug report. Please fill in what you can — a clear, reproducible bug gets fixed much faster than a vague one.
 
-        **Security-related bugs do NOT go here.** If you've found a vulnerability, use [GitHub's private vulnerability reporting](https://github.com/ericmey/musubi/security/advisories/new) instead. See [SECURITY.md](https://github.com/ericmey/musubi/blob/main/SECURITY.md).
+        **Security-related bugs do NOT go here.** If you've found a vulnerability, use [GitHub's private vulnerability reporting](https://github.com/sourceblender/musubi/security/advisories/new) instead. See [SECURITY.md](https://github.com/sourceblender/musubi/blob/main/SECURITY.md).
 
   - type: textarea
     id: summary

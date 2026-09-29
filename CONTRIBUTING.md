@@ -117,7 +117,7 @@ Full style guide: [`docs/Musubi/00-index/conventions.md`](docs/Musubi/00-index/c
 
 ## Questions
 
-Not sure where something fits? Open an issue with the `question` label — it's the lowest-cost way to start a conversation. Once [Discussions](https://github.com/ericmey/musubi/discussions) is enabled, longer design conversations move there.
+Not sure where something fits? Open an issue with the `question` label — it's the lowest-cost way to start a conversation. Once [Discussions](https://github.com/sourceblender/musubi/discussions) is enabled, longer design conversations move there.
 
 ## Code of Conduct
 
