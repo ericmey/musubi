@@ -196,4 +196,4 @@ Agents append one entry per work session. Format:
 
 ## PR links
 
-- [#268 feat(api): wildcard namespace segments for tenant-wide retrieve](https://github.com/ericmey/musubi/pull/268) — merged 2026-04-24T22:40:53Z, closes #267
+- [#268 feat(api): wildcard namespace segments for tenant-wide retrieve](https://github.com/sourceblender/musubi/pull/268) — merged 2026-04-24T22:40:53Z, closes #267

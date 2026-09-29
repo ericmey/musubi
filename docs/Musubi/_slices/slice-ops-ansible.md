@@ -88,4 +88,4 @@ Agents append one entry per work session. Format:
 
 ## PR links
 
-- [PR #77](https://github.com/ericmey/musubi/pull/77)
+- [PR #77](https://github.com/sourceblender/musubi/pull/77)

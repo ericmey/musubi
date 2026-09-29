@@ -111,7 +111,7 @@ has zero trace coverage.
 
 The status of this slice **stays `done`** — its history is the artifact.
 The unshipped Tracing scope is being completed under issue
-[#302](https://github.com/ericmey/musubi/issues/302) without expanding
+[#302](https://github.com/sourceblender/musubi/issues/302) without expanding
 beyond the original spec. Two small companion fixes are included to make
 the spec actually true:
 
@@ -131,11 +131,11 @@ This is debt repayment, not a new slice.
 
 ## PR links
 
-- [#303](https://github.com/ericmey/musubi/pull/303) — server-side OTel
+- [#303](https://github.com/sourceblender/musubi/pull/303) — server-side OTel
   SDK init, FastAPI auto-instrumentation, `retrieve.orchestration` hand-
   rolled span, uvicorn-through-StructuredJsonFormatter, formatter
   promotes `otelTraceID`/`otelSpanID` → top-level `trace_id`/`span_id`.
-- [#306](https://github.com/ericmey/musubi/pull/306) — wires
+- [#306](https://github.com/sourceblender/musubi/pull/306) — wires
   `OTEL_EXPORTER_OTLP_ENDPOINT` + `MUSUBI_SERVICE_VERSION` into
   `.env.production` from new ansible group_vars defaults; extends the
   `auto-digest-bump.yml` generator so `musubi_core_version` is rewritten

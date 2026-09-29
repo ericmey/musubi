@@ -75,4 +75,4 @@ while adding application authentication and per-consumer credentials.
 
 ## PR links
 
-- [PR #743](https://github.com/ericmey/musubi/pull/743)
+- [PR #743](https://github.com/sourceblender/musubi/pull/743)

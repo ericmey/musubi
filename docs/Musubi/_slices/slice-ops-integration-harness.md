@@ -178,10 +178,10 @@ Tests use `api_client` and assert end-to-end behaviour.
 
 ## Follow-up Issues opened (DoD evidence)
 
-- [#118](https://github.com/ericmey/musubi/issues/118) — slice-ingestion-capture bullet 22 (100-item batch capture <1s) unskip path.
-- [#119](https://github.com/ericmey/musubi/issues/119) — slice-plane-concept bullet 24 (ollama-offline graceful degradation) unskip path.
-- [#120](https://github.com/ericmey/musubi/issues/120) — slice-api-thoughts-stream bullet 20 (SSE live delivery) unskip path.
+- [#118](https://github.com/sourceblender/musubi/issues/118) — slice-ingestion-capture bullet 22 (100-item batch capture <1s) unskip path.
+- [#119](https://github.com/sourceblender/musubi/issues/119) — slice-plane-concept bullet 24 (ollama-offline graceful degradation) unskip path.
+- [#120](https://github.com/sourceblender/musubi/issues/120) — slice-api-thoughts-stream bullet 20 (SSE live delivery) unskip path.
 
 ## PR links
 
-- [#114](https://github.com/ericmey/musubi/pull/114) — `slice/slice-ops-integration-harness` → `v2`.
+- [#114](https://github.com/sourceblender/musubi/pull/114) — `slice/slice-ops-integration-harness` → `v2`.

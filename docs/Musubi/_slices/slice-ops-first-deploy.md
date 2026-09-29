@@ -256,7 +256,7 @@ no end-to-end run had ever happened):**
 - Native Qdrant / Ollama / Open WebUI purged before first run.
 - HF cache rsynced into `/var/lib/musubi/tei-models/` so SPLADE v3 loads
  from local cache (HF-gated; would 401).
-- the control host's deploy key added to `ericmey/musubi` on GitHub.
+- the control host's deploy key added to `sourceblender/musubi` on GitHub.
 
 **What the slice's Test Contract did NOT catch** (follow-up for the
 post-incident review):
@@ -271,7 +271,7 @@ post-incident review):
 
 ## PR links
 
-- [PR #121](https://github.com/ericmey/musubi/pull/121) — original slice.
-- [PR #146](https://github.com/ericmey/musubi/pull/146) — inventory parametrisation + control-host setup.
-- [PR #147](https://github.com/ericmey/musubi/pull/147) — bootstrap apt repo fixes.
-- [PR #148](https://github.com/ericmey/musubi/pull/148) — musubi-core Dockerfile + compose/env fixes (the deploy-unblocker).
+- [PR #121](https://github.com/sourceblender/musubi/pull/121) — original slice.
+- [PR #146](https://github.com/sourceblender/musubi/pull/146) — inventory parametrisation + control-host setup.
+- [PR #147](https://github.com/sourceblender/musubi/pull/147) — bootstrap apt repo fixes.
+- [PR #148](https://github.com/sourceblender/musubi/pull/148) — musubi-core Dockerfile + compose/env fixes (the deploy-unblocker).

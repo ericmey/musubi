@@ -193,4 +193,4 @@ from disk.
 - **A new reconciliation worker**: unnecessary — the lifecycle coordinator already owns durable
   admission + reconcile for custom intent kinds (ART-001 precedent).
 
-[PR #539]: https://github.com/ericmey/musubi/pull/539
+[PR #539]: https://github.com/sourceblender/musubi/pull/539

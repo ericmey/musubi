@@ -91,7 +91,7 @@ Plus slice-specific:
 - [ ] `uv sync --all-packages` at repo root resolves the full workspace and installs all packages editably.
 - [ ] `make check` runs ruff + mypy + pytest + coverage across all packages (single invocation, same targets as today).
 - [ ] `uv build --package musubi-livekit` produces a wheel with **only** LiveKit adapter code — verify by `python -m zipfile -l dist/musubi_livekit-*.whl` shows no `api/`, `planes/`, `retrieve/` entries.
-- [ ] Consumer install path works: in a fresh virtualenv on a separate machine, `pip install "git+https://github.com/ericmey/musubi.git@v2#subdirectory=packages/musubi-livekit"` installs `musubi-livekit` + transitive `musubi-client` + `httpx` + `pydantic` only. Verified with `pip list` — no `qdrant-client`, `fastapi`, etc.
+- [ ] Consumer install path works: in a fresh virtualenv on a separate machine, `pip install "git+https://github.com/sourceblender/musubi.git@v2#subdirectory=packages/musubi-livekit"` installs `musubi-livekit` + transitive `musubi-client` + `httpx` + `pydantic` only. Verified with `pip list` — no `qdrant-client`, `fastapi`, etc.
 - [ ] GitHub Actions workflow builds + publishes the correct wheel on a per-package git tag (e.g., `musubi-livekit-v0.1.0` triggers only `musubi-livekit` publish).
 - [ ] No source code changes — `git log --stat` on the feat commit shows only renames (`R100`) and `pyproject.toml` adds. Any `.py` file with `+` / `-` outside `pyproject.toml` is out of scope; land in a follow-up.
 - [ ] Branch coverage unchanged on all owned code (moving files shouldn't reduce coverage).

@@ -118,4 +118,4 @@ Agents append one entry per work session. Format:
 
 ## PR links
 
-- [#96](https://github.com/ericmey/musubi/pull/96) — `slice/slice-adapter-livekit` → `v2`.
+- [#96](https://github.com/sourceblender/musubi/pull/96) — `slice/slice-adapter-livekit` → `v2`.

@@ -192,7 +192,7 @@ Per the README's status section: pure cleanup, no risk, 1-2 hours. Slot in as a 
 
 ## Recently shipped (2026-04-24 → 2026-04-25)
 
-- ✓ **Multimodality end-to-end** — wildcard namespaces (ADR 0031, v1.1.0), state_filter API ([#271](https://github.com/ericmey/musubi/pull/271), v1.2.0), `musubi_search` tool on voice agents, `<owner>/*` retrieve in openclaw-musubi plugin. Verified via real call: phone-Nyla recalled an Openclaw save.
+- ✓ **Multimodality end-to-end** — wildcard namespaces (ADR 0031, v1.1.0), state_filter API ([#271](https://github.com/sourceblender/musubi/pull/271), v1.2.0), `musubi_search` tool on voice agents, `<owner>/*` retrieve in openclaw-musubi plugin. Verified via real call: phone-Nyla recalled an Openclaw save.
 - ✓ **Voice agent thought-partner mode** — Eric ends calls, not the agent. Length matches conversation density. Applied across Nyla / Aoi / Party.
 - ✓ **Greeting filter + recency-based recent** — `fetch_recent_context` filters to agent-tagged rows, drops the time-window. Party's "I was just thinking about..." hook now strips speaker prefix and length-checks, falls back to plain hello when nothing reads naturally.
 - ✓ **Tool name standardisation** — voice `memory_store` renamed to `musubi_remember` to match the openclaw-musubi plugin. `tags` → `topics`. Optional `importance`.

@@ -33,7 +33,7 @@ The **interface** decision from 0011 stands: one canonical HTTP/gRPC API, adapte
 
 ## Decision
 
-**Musubi is a single monorepo at `github.com/ericmey/musubi`.** All components live under `src/musubi/` on the `v2` branch (merging to `main` at feature parity):
+**Musubi is a single monorepo at `github.com/sourceblender/musubi`.** All components live under `src/musubi/` on the `v2` branch (merging to `main` at feature parity):
 
 ```
 src/musubi/
@@ -101,4 +101,4 @@ Considered. Possible future move if we ever need to publish `musubi-sdk` or `mus
 - [[13-decisions/0011-canonical-api-and-adapters]] — interface decision stands; repo-layout portion is superseded by this ADR.
 - [[12-roadmap/ownership-matrix]] — repo column collapses to a single `musubi` entry.
 - [[07-interfaces/canonical-api]], [[07-interfaces/contract-tests]] — unchanged by this ADR; interface discipline is identical.
-- `github.com/ericmey/musubi` `v2` branch — scaffold committed 2026-04-17 reflects this layout.
+- `github.com/sourceblender/musubi` `v2` branch — scaffold committed 2026-04-17 reflects this layout.

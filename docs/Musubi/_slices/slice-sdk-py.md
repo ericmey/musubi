@@ -116,4 +116,4 @@ Agents append one entry per work session. Format:
 
 ## PR links
 
-- [#90](https://github.com/ericmey/musubi/pull/90) — `slice/slice-sdk-py` → `v2`.
+- [#90](https://github.com/sourceblender/musubi/pull/90) — `slice/slice-sdk-py` → `v2`.

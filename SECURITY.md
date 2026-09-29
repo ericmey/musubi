@@ -49,7 +49,7 @@ This is a personal project with a single maintainer, so response is best-effort 
 
 - Third-party dependencies with their own security policies (Qdrant, TEI, Ollama, FastAPI). Report those upstream; we'll pick up their fixes when they ship.
 - Denial-of-service against a single-node homelab deployment by an authenticated caller — Musubi has no admission-control hardening for that use case today, and making it robust is on the roadmap rather than a bug.
-- Homelab-specific topology disclosed in historical `refs/pull/*` refs from before the repo went public. The current default branch is scrubbed; see commit [`cbcca0b`](https://github.com/ericmey/musubi/commit/cbcca0b) for details.
+- Homelab-specific topology disclosed in historical `refs/pull/*` refs from before the repo went public. The current default branch is scrubbed; see commit [`cbcca0b`](https://github.com/sourceblender/musubi/commit/cbcca0b) for details.
 
 ## Supply-chain verification
 

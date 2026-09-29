@@ -146,7 +146,7 @@ In v1.0:
 Post-v1.0:
 - ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will need its own ADR
 - ⏳ Auto-deploy pipeline (image publish is automated; host rollout is still operator-driven via ansible)
-- ⏳ gRPC transport ADR ([#98](https://github.com/ericmey/musubi/issues/98)) — priority-low, not a 1.0 blocker
+- ⏳ gRPC transport ADR ([#98](https://github.com/sourceblender/musubi/issues/98)) — priority-low, not a 1.0 blocker
 - ⏳ Vault-wide sweep to update illustrative `eric/...` examples to agent-as-tenant (normative specs already flipped; docs carry a banner pointing at [ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
 
 Roadmap detail lives in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).
