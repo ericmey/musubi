@@ -1,6 +1,6 @@
 name: Publish Musubi Core image
 
-# Publishes ghcr.io/ericmey/musubi-core, replacing the one-shot
+# Publishes ghcr.io/<repository owner>/musubi-core, replacing the one-shot
 # `docker save | ssh | docker load` transfer used for the first
 # deploy. See [[_slices/slice-ops-core-image-publish]] and
 # `deploy/runbooks/upgrade-image.md`.
@@ -36,6 +36,11 @@ concurrency:
   # queue up redundant publishes.
   group: publish-core-image-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # Derived, not named: after a repo transfer the workflow's token can only
+  # write packages in the new owner's namespace.
+  IMAGE: ghcr.io/${{ github.repository_owner }}/musubi-core
 
 jobs:
   publish-core-image:
@@ -87,7 +92,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/ericmey/musubi-core
+          images: ${{ env.IMAGE }}
           tags: |
             # `v<version>` tag push → `:v<version>` + `:latest`
             type=semver,pattern={{version}},prefix=v,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -96,7 +101,7 @@ jobs:
             # manual dispatch with explicit tag input
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
           labels: |
-            org.opencontainers.image.source=https://github.com/ericmey/musubi
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Musubi Core — three-plane shared memory server
             org.opencontainers.image.licenses=Apache-2.0
 
@@ -215,7 +220,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v3
         with:
-          subject-name: ghcr.io/ericmey/musubi-core
+          subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
@@ -227,12 +232,12 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign --yes \
-            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+            "${IMAGE}@${{ steps.build.outputs.digest }}"
 
       - name: Generate SBOM (CycloneDX)
         uses: anchore/sbom-action@v0
         with:
-          image: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          image: "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
           format: cyclonedx-json
           output-file: sbom.cdx.json
           upload-artifact: true
@@ -245,14 +250,14 @@ jobs:
           cosign attest --yes \
             --predicate sbom.cdx.json \
             --type cyclonedx \
-            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+            "${IMAGE}@${{ steps.build.outputs.digest }}"
 
       - name: Summarise digest
         # Surface the digest at the top of the workflow run page so an
         # operator can copy it into `group_vars/all.yml` without hunting
         # through step logs.
         run: |
-          echo "### Published ghcr.io/ericmey/musubi-core" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Published ${IMAGE}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Tags:**" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
@@ -266,7 +271,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Pin in \`deploy/ansible/group_vars/all.yml\` as:" >> "$GITHUB_STEP_SUMMARY"
           echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
-          echo "musubi_core_image: \"ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "musubi_core_image: \"${IMAGE}@${{ steps.build.outputs.digest }}\"" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attach digest as release asset
@@ -276,7 +281,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           body: |
-            Published `ghcr.io/ericmey/musubi-core` for this release.
+            Published `${{ env.IMAGE }}` for this release.
 
             **Tags:** `${{ steps.meta.outputs.tags }}`
 
@@ -285,7 +290,7 @@ jobs:
             Pin in `deploy/ansible/group_vars/all.yml`:
 
             ```yaml
-            musubi_core_image: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+            musubi_core_image: "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
             ```
           append_body: true
           fail_on_unmatched_files: false

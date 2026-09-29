@@ -37,7 +37,7 @@ Moving the vault into the code repo removes all of that friction, at the cost of
 The Obsidian architecture vault becomes a first-class directory inside the monorepo:
 
 ```
-~/Projects/musubi/                 ← the repo (github.com/ericmey/musubi)
+~/Projects/musubi/                 ← the repo (github.com/sourceblender/musubi)
 ├── src/musubi/                    ← code
 ├── tests/
 ├── docs/Musubi/             ← the vault (this ADR's subject)
@@ -64,7 +64,7 @@ The Obsidian architecture vault becomes a first-class directory inside the monor
 
 ### Positive
 
-- **One clone to rule them all.** A fresh agent runs `git clone git@github.com:ericmey/musubi.git && cd musubi` and has the code, the specs, the slice registry, the agent guardrails, the test fixtures catalog, and every ADR. There is no "and also go clone the vault" step.
+- **One clone to rule them all.** A fresh agent runs `git clone git@github.com:sourceblender/musubi.git && cd musubi` and has the code, the specs, the slice registry, the agent guardrails, the test fixtures catalog, and every ADR. There is no "and also go clone the vault" step.
 - **Atomic spec + code PRs.** The `spec-update: <doc-path>` commit trailer finally means something — both files live in the same git history and a single PR review covers both.
 - **CI can enforce vault gates.** A `vault-check.yml` GitHub Action runs the existing `make agent-check` / `slice-check` / `spec-check` targets against every PR; the frontmatter linter, slice DAG validator, and Test Contract hygiene become PR-blocking instead of operator-discipline.
 - **Multi-agent coordination gets simpler.** Every agent — regardless of vendor — reads the vault from `docs/Musubi/` via the same repo clone. Path conventions are the same for Claude Code, Codex, Gemini CLI, and Cursor.

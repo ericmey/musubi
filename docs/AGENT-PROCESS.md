@@ -212,7 +212,7 @@ Simultaneous edits to `docs/Musubi/00-index/work-log.md` or a slice note are the
 
 ## 12. TL;DR for a new agent
 
-1. Clone: `git clone git@github.com:ericmey/musubi.git && cd musubi && git switch main`.
+1. Clone: `git clone git@github.com:sourceblender/musubi.git && cd musubi && git switch main`.
 2. Read `CLAUDE.md`, this file, and `docs/Musubi/00-index/agent-guardrails.md`.
 3. `gh issue list --label "slice,status:ready"` to see what's available.
 4. Claim one. Branch. Draft PR. Tests first. Implement. `make check`. Mark ready.

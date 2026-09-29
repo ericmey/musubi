@@ -210,9 +210,9 @@ Plus slice-specific:
 
 ## Follow-up Issues opened (re-skip targets for in-PR unskip)
 
-- [#133](https://github.com/ericmey/musubi/issues/133) — bullet 5 capture-then-retrieve unskip; needs Qdrant `wait=True` or longer poll budget on cold-cache CI.
-- [#134](https://github.com/ericmey/musubi/issues/134) — bullet 12 artifact-upload unskip; downstream chunker / artifact-plane root-cause investigation.
+- [#133](https://github.com/sourceblender/musubi/issues/133) — bullet 5 capture-then-retrieve unskip; needs Qdrant `wait=True` or longer poll budget on cold-cache CI.
+- [#134](https://github.com/sourceblender/musubi/issues/134) — bullet 12 artifact-upload unskip; downstream chunker / artifact-plane root-cause investigation.
 
 ## PR links
 
-- [#126](https://github.com/ericmey/musubi/pull/126) — `slice/slice-api-app-bootstrap` → `v2`.
+- [#126](https://github.com/sourceblender/musubi/pull/126) — `slice/slice-api-app-bootstrap` → `v2`.

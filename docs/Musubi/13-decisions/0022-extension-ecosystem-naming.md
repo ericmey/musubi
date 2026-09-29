@@ -24,7 +24,7 @@ Musubi should have **as many official interfaces as tools that might use it**, e
 
 ## Context
 
-[[13-decisions/0015-monorepo-supersedes-multi-repo]] established that Musubi is a single Python monorepo at `github.com/ericmey/musubi` with all components under `src/musubi/`. ADR-0015 did not take a position on components whose **implementation language is not Python** — an OpenClaw browser extension in TypeScript, a future Obsidian plugin in TS/Electron, a future VS Code extension in Node, a hypothetical Rust TUI, etc. The question surfaced 2026-04-19 when `slice-adapter-openclaw` needed its owns_paths reconciled to post-monorepo layout and it became obvious that TypeScript source cannot live inside a Python package at `src/musubi/adapters/openclaw/`.
+[[13-decisions/0015-monorepo-supersedes-multi-repo]] established that Musubi is a single Python monorepo at `github.com/sourceblender/musubi` with all components under `src/musubi/`. ADR-0015 did not take a position on components whose **implementation language is not Python** — an OpenClaw browser extension in TypeScript, a future Obsidian plugin in TS/Electron, a future VS Code extension in Node, a hypothetical Rust TUI, etc. The question surfaced 2026-04-19 when `slice-adapter-openclaw` needed its owns_paths reconciled to post-monorepo layout and it became obvious that TypeScript source cannot live inside a Python package at `src/musubi/adapters/openclaw/`.
 
 A related but separable concern surfaced in parallel: **how do Python integrations whose runtime is not the Musubi deploy target get distributed?** Example: the LiveKit adapter is Python but runs inside a LiveKit Agents worker process deployed on a different machine. Copying adapter source into every consumer's repo is a DX disaster; installing the full Musubi server wheel into a LiveKit worker pulls ~150 MB of deps it never touches.
 
@@ -101,7 +101,7 @@ dependencies = [
 ```bash
 uv add musubi-livekit   # from PyPI once published
 # or, pre-PyPI:
-uv add "git+https://github.com/ericmey/musubi.git@musubi-livekit-v0.1.0#subdirectory=packages/musubi-livekit"
+uv add "git+https://github.com/sourceblender/musubi.git@musubi-livekit-v0.1.0#subdirectory=packages/musubi-livekit"
 ```
 
 Either path installs **only** `musubi-livekit` + its transitive deps (`musubi-client`, `httpx`, `pydantic`, plus `livekit-agents` that the worker requested). The full Musubi server wheel never lands on the worker machine. Total install ~15 MB.

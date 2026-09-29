@@ -96,7 +96,7 @@ musubi-core itself never initialized a `TracerProvider`, never installed
 The server-side gap was scoped under `slice-ops-observability`
 (see `09-operations/observability.md` § Tracing) but discovered
 unshipped on 2026-05-13. It is being completed under issue
-[#302](https://github.com/ericmey/musubi/issues/302) — debt repayment,
+[#302](https://github.com/sourceblender/musubi/issues/302) — debt repayment,
 not new scope.
 
 Once the server side ships, the SDK spans this ticket resolved will

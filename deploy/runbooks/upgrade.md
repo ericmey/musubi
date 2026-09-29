@@ -158,10 +158,10 @@ or config-only changes.
 # Confirm the new digest from the publish workflow:
 gh run list --workflow publish-core-image.yml --limit 3
 
-# Open a bump PR:
+# Open a bump PR (<owner>: ericmey before the sourceblender transfer, sourceblender after):
 git checkout -b ops/core-image-bump-$(date +%Y%m%d)
 sed -i '' \
- -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste>"|' \
+ -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/<owner>/musubi-core@sha256:<paste>"|' \
  deploy/ansible/group_vars/all.yml
 git commit -am "ops: bump musubi_core_image to @sha256:<first 12 chars>"
 gh pr create --base main --title "ops: bump musubi_core_image"

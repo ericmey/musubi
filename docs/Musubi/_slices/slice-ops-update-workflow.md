@@ -192,7 +192,7 @@ Key behaviours:
 Operator procedure. Structure mirrors `first-deploy.md`:
 
 1. **Pre-flight** — confirm the new image is published
-   (https://github.com/ericmey/musubi/pkgs/container/musubi-core), or
+   (https://github.com/sourceblender/musubi/pkgs/container/musubi-core), or
    confirm a `qdrant`/`tei`/`ollama` version bump is in `group_vars`.
 2. **Bump the pin** — commit `musubi_core_image` (or other image) to
    the new `@sha256:<digest>` in `group_vars/all.yml`; push; pull on
@@ -346,6 +346,6 @@ entry documents what shipped and closes the Test Contract.
 
 ## PR links
 
-- [#149](https://github.com/ericmey/musubi/pull/149) — initial update.yml playbook + runbook + tests
-- [#182](https://github.com/ericmey/musubi/pull/182) — Tier-3 auto-digest-bump (automates the pin-bump PR)
+- [#149](https://github.com/sourceblender/musubi/pull/149) — initial update.yml playbook + runbook + tests
+- [#182](https://github.com/sourceblender/musubi/pull/182) — Tier-3 auto-digest-bump (automates the pin-bump PR)
 - closure PR — work log + status flip

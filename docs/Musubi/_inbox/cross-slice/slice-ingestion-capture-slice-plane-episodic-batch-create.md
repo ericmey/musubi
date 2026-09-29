@@ -7,12 +7,12 @@ target_slice: slice-plane-episodic
 status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tracked_by: "https://github.com/ericmey/musubi/issues/141"
+tracked_by: "https://github.com/sourceblender/musubi/issues/141"
 tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-23
 ---
 
-> **Tracked as GH Issue #141** — https://github.com/ericmey/musubi/issues/141
+> **Tracked as GH Issue #141** — https://github.com/sourceblender/musubi/issues/141
 > The ticket body below is preserved for audit; new discussion happens on the Issue.
 
 

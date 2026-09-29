@@ -2,8 +2,12 @@
 
 Companion to [`.github/workflows/publish-core-image.yml`](../../.github/workflows/publish-core-image.yml).
 Use this when you need to move `musubi.example.local` to a newer
-`ghcr.io/ericmey/musubi-core` digest. For a first-deploy-from-scratch,
+`ghcr.io/<owner>/musubi-core` digest. For a first-deploy-from-scratch,
 see [`first-deploy.md`](first-deploy.md) instead.
+
+`<owner>` is the repository's GitHub owner: `ericmey` for images published
+before the transfer to `sourceblender`, `sourceblender` after it. Copy the
+full reference from the release page rather than typing it.
 
 Cadence: on demand. Every merge to `main` publishes a fresh floating
 `:main` tag + a digest. Every `v*` tag push publishes `:vX.Y.Z` +
@@ -78,7 +82,7 @@ gh run view --workflow publish-core-image.yml --log \
 cd ~/Projects/musubi
 git checkout -b ops/core-image-bump-$(date +%Y%m%d)
 sed -i '' \
- -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste digest here>"|' \
+ -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/<owner>/musubi-core@sha256:<paste digest here>"|' \
  deploy/ansible/group_vars/all.yml
 git add deploy/ansible/group_vars/all.yml
 git commit -m "ops: bump musubi_core_image to @sha256:<first 12 chars>"
@@ -104,12 +108,12 @@ has changed yet.
 # Before merging the pin PR, from the credential-bearing Ansible controller:
 cd ~/musubi
 git pull --ff-only origin main
-export CANDIDATE_IMAGE=ghcr.io/ericmey/musubi-core@sha256:<paste digest here>
+export CANDIDATE_IMAGE=ghcr.io/<owner>/musubi-core@sha256:<paste digest here>
 export MUSUBI_CREDENTIAL_DIR=~/.musubi
 export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
 
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*' \
+  --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "${CANDIDATE_IMAGE}"
 docker pull "${CANDIDATE_IMAGE}"
