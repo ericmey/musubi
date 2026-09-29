@@ -15,7 +15,7 @@ Musubi is pre-1.0 and moves fast. Security-relevant fixes land on the latest min
 
 Use one of these paths instead:
 
-1. **GitHub Private Vulnerability Reporting** — preferred. Go to the [Security tab](https://github.com/ericmey/musubi/security/advisories/new) on this repo and open a draft advisory. It's routed directly to the maintainer and isn't publicly indexed until published.
+1. **GitHub Private Vulnerability Reporting** — preferred. Go to the [Security tab](https://github.com/sourceblender/musubi/security/advisories/new) on this repo and open a draft advisory. It's routed directly to the maintainer and isn't publicly indexed until published.
 2. **Email** — `ericmey@gmail.com` with subject prefix `[musubi-security]`.
 
 Please include:
@@ -49,7 +49,7 @@ This is a personal project with a single maintainer, so response is best-effort 
 
 - Third-party dependencies with their own security policies (Qdrant, TEI, Ollama, FastAPI). Report those upstream; we'll pick up their fixes when they ship.
 - Denial-of-service against a single-node homelab deployment by an authenticated caller — Musubi has no admission-control hardening for that use case today, and making it robust is on the roadmap rather than a bug.
-- Homelab-specific topology disclosed in historical `refs/pull/*` refs from before the repo went public. The current default branch is scrubbed; see commit [`cbcca0b`](https://github.com/ericmey/musubi/commit/cbcca0b) for details.
+- Homelab-specific topology disclosed in historical `refs/pull/*` refs from before the repo went public. The current default branch is scrubbed; see commit [`cbcca0b`](https://github.com/sourceblender/musubi/commit/cbcca0b) for details.
 
 ## Supply-chain verification
 

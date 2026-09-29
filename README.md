@@ -4,9 +4,9 @@
     <em>Shared memory for a small fleet of AI agents — three planes, local inference, a lifecycle engine that matures raw captures into a human-reviewable knowledge base.</em>
   </p>
   <p align="center">
-    <a href="https://github.com/ericmey/musubi/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ericmey/musubi?sort=semver&color=blue"></a>
-    <a href="https://github.com/ericmey/musubi/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ericmey/musubi/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-    <a href="https://github.com/ericmey/musubi/actions/workflows/publish-core-image.yml"><img alt="Signed image" src="https://github.com/ericmey/musubi/actions/workflows/publish-core-image.yml/badge.svg?branch=main"></a>
+    <a href="https://github.com/sourceblender/musubi/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/sourceblender/musubi?sort=semver&color=blue"></a>
+    <a href="https://github.com/sourceblender/musubi/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sourceblender/musubi/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+    <a href="https://github.com/sourceblender/musubi/actions/workflows/publish-core-image.yml"><img alt="Signed image" src="https://github.com/sourceblender/musubi/actions/workflows/publish-core-image.yml/badge.svg?branch=main"></a>
     <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue"></a>
     <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-blue">
     <img alt="cosign signed" src="https://img.shields.io/badge/cosign-signed-brightgreen">
@@ -65,7 +65,7 @@ Design choices are captured as ADRs in [`docs/Musubi/13-decisions/`](docs/Musubi
 The whole memory server on CPU, with Docker and nothing else:
 
 ```bash
-git clone https://github.com/ericmey/musubi && cd musubi
+git clone https://github.com/sourceblender/musubi && cd musubi
 docker compose -f quickstart/docker-compose.yml up -d --wait   # first boot downloads ~2.5 GB of models
 docker compose -f quickstart/docker-compose.yml run --rm demo
 ```
@@ -146,7 +146,7 @@ In v1.0:
 Post-v1.0:
 - ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will need its own ADR
 - ⏳ Auto-deploy pipeline (image publish is automated; host rollout is still operator-driven via ansible)
-- ⏳ gRPC transport ADR ([#98](https://github.com/ericmey/musubi/issues/98)) — priority-low, not a 1.0 blocker
+- ⏳ gRPC transport ADR ([#98](https://github.com/sourceblender/musubi/issues/98)) — priority-low, not a 1.0 blocker
 - ⏳ Vault-wide sweep to update illustrative `eric/...` examples to agent-as-tenant (normative specs already flipped; docs carry a banner pointing at [ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
 
 Roadmap detail lives in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).

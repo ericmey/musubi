@@ -233,7 +233,7 @@ host. Each fix landed via PR tonight:
 - `ericmey`'s Mac pubkey added to the control host's `authorized_keys` (via Proxmox
  console — the prior laptop's key didn't follow).
 - the control host's SSH key registered as a read-only GitHub deploy key on
- `ericmey/musubi` so the ansible control host can `git clone` the repo.
+ `sourceblender/musubi` so the ansible control host can `git clone` the repo.
 - Native `qdrant.service` / `ollama.service` / `open-webui.service` stopped,
  disabled, and purged (binaries, data dirs, service users). Design call per
  discussion: `bootstrap.yml` assumes a greenfield host going forward; the
@@ -402,7 +402,7 @@ Vault changes:
 
 ### 2026-04-17 — Musubi v2 scaffold pushed; monorepo decision (ADR-0015)
 
-v2 rebuild started. The `v2` branch of `github.com/ericmey/musubi` now holds a clean Python 3.12 + `uv` + pydantic v2 scaffold (hatchling build, ruff + mypy strict + pytest, GitHub Actions CI), committed as `6457881` and pushed over SSH (HTTPS credential helper wasn't wired; switched remote to `git@github.com`). v1 content was removed from the `v2` branch entirely — `main` still holds v1 as the historical POC; v2 is the new source of truth and will merge to `main` at feature parity.
+v2 rebuild started. The `v2` branch of `github.com/sourceblender/musubi` now holds a clean Python 3.12 + `uv` + pydantic v2 scaffold (hatchling build, ruff + mypy strict + pytest, GitHub Actions CI), committed as `6457881` and pushed over SSH (HTTPS credential helper wasn't wired; switched remote to `git@github.com`). v1 content was removed from the `v2` branch entirely — `main` still holds v1 as the historical POC; v2 is the new source of truth and will merge to `main` at feature parity.
 
 Alongside the scaffold, the repo-layout portion of [[13-decisions/0011-canonical-api-and-adapters]] was superseded: Musubi is a **monorepo**, not eight repos. Interface discipline (canonical API, adapters only talk via the SDK, no storage reach-throughs) carries over as import-lint rules instead of repo fences. All components — Core, SDK, MCP/Obsidian/CLI adapters, contract tests, `deploy/` (Ansible + Compose) — live under `src/musubi/` in the one repo.
 

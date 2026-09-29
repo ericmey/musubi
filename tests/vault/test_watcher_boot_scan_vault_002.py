@@ -640,7 +640,7 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to VAULT-001 (Issue ericmey/musubi#446): ghost-row "
+    reason="deferred to VAULT-001 (Issue sourceblender/musubi#446): ghost-row "
     "reconciliation (known_hashes minus rglob) is a separate slice. The "
     "vacuous test_boot_scan_archives_removed_files was REMOVED from "
     "tests/vault/test_watcher_boot_scan.py in the VAULT-002 hygiene-cleanup "

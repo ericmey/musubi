@@ -114,4 +114,4 @@ Tests landed at [tests/integration/test_livekit_e2e.py](../../tests/integration/
 
 ## PR links
 
-- https://github.com/ericmey/musubi/pull/184 — initial test contract + handoff
+- https://github.com/sourceblender/musubi/pull/184 — initial test contract + handoff

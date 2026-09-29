@@ -168,7 +168,7 @@ first deploy relied on. Replace with:
 > **Before running `deploy.yml`:** confirm that the digest in
 > `group_vars/all.yml → musubi_core_image` corresponds to a
 > successfully-published workflow run on GHCR
-> (https://github.com/ericmey/musubi/pkgs/container/musubi-core). If
+> (https://github.com/sourceblender/musubi/pkgs/container/musubi-core). If
 > the image isn't published yet, trigger
 > `.github/workflows/publish-core-image.yml` via `workflow_dispatch`
 > and wait for the digest before proceeding.
@@ -297,7 +297,7 @@ This entry closes the gap.
   "NOT in scope: signing"). That exclusion was inverted when
   supply-chain hygiene became a public-repo requirement earlier today.
   spec-update trailer covers the change.
-- Also ships: auto-digest-bump ([#182](https://github.com/ericmey/musubi/pull/182)) — a
+- Also ships: auto-digest-bump ([#182](https://github.com/sourceblender/musubi/pull/182)) — a
   Tier-3 workflow that opens the digest-bump PR automatically after
   `release:published`. Originally scoped as "explicitly NOT in scope"
   of this slice; landed under slice-ops-update-workflow's umbrella
@@ -305,7 +305,7 @@ This entry closes the gap.
 
 ## PR links
 
-- [#145](https://github.com/ericmey/musubi/pull/145) — initial workflow + group_vars pin
-- [#166](https://github.com/ericmey/musubi/pull/166) / [#167](https://github.com/ericmey/musubi/pull/167) / [#170](https://github.com/ericmey/musubi/pull/170) — Tier-1 supply-chain hardening
-- [#182](https://github.com/ericmey/musubi/pull/182) — Tier-3 auto-digest-bump (also closes slice-ops-update-workflow)
+- [#145](https://github.com/sourceblender/musubi/pull/145) — initial workflow + group_vars pin
+- [#166](https://github.com/sourceblender/musubi/pull/166) / [#167](https://github.com/sourceblender/musubi/pull/167) / [#170](https://github.com/sourceblender/musubi/pull/170) — Tier-1 supply-chain hardening
+- [#182](https://github.com/sourceblender/musubi/pull/182) — Tier-3 auto-digest-bump (also closes slice-ops-update-workflow)
 - closure PR — bullet 11 test + runbook workflow_dispatch recovery note
