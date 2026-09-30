@@ -370,7 +370,7 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = Field(
         default="",
         description="OTLP/gRPC endpoint for span export "
-        "(e.g. `http://shiori.mey.house:4317`). Empty disables tracing.",
+        "(e.g. `https://telemetry.example.test:4317`). Empty disables tracing.",
     )
     otel_service_name: str = Field(
         default="musubi-core",
@@ -382,7 +382,7 @@ class Settings(BaseSettings):
         description="Resource `service.namespace` attribute on emitted spans.",
     )
     otel_deployment_environment: str = Field(
-        default="harem-world",
+        default="production",
         description="Resource `deployment.environment` attribute.",
     )
     otel_host_name: str = Field(

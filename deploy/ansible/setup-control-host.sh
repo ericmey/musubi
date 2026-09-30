@@ -46,7 +46,7 @@ if [[ ! -f "$INVENTORY_VARS" ]]; then
 # values fill its Jinja placeholders.
 
 # ssh user on the Musubi workload host
-operator_ssh_user: "ericmey"
+operator_ssh_user: "" # required: SSH user on your workload host
 
 # Musubi workload host (DNS name + VLAN IP)
 musubi_host: "" # e.g. musubi.example.local
@@ -61,6 +61,11 @@ musubi_inference_hostname: "" # e.g. inference.example.local
 # Leave empty for VLAN-internal v1 deploys.
 kong_gateway: "" # e.g. kong.example.local
 kong_ip: "" # e.g. 10.0.0.50
+
+# Optional observability destinations. Empty disables export/forwarding.
+musubi_otel_otlp_endpoint: ""
+musubi_prometheus_remote_write_url: ""
+musubi_deployment_environment: "production"
 YAML
  chmod 600 "$INVENTORY_VARS"
  echo "created $INVENTORY_VARS"

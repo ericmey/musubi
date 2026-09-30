@@ -18,7 +18,7 @@ import …` without a longer dotted path:
   formatter at app startup.
 - **Tracing:** :func:`init_tracing` builds an OTel ``TracerProvider``
   exporting OTLP/gRPC to the endpoint named by
-  ``OTEL_EXPORTER_OTLP_ENDPOINT`` (e.g. ``http://shiori.mey.house:4317``);
+  ``OTEL_EXPORTER_OTLP_ENDPOINT`` (e.g. ``https://telemetry.example.test:4317``);
   :func:`instrument_fastapi` installs FastAPI auto-instrumentation;
   :func:`get_tracer` returns a tracer for hand-instrumented named spans.
   All three are no-ops when ``OTEL_EXPORTER_OTLP_ENDPOINT`` is unset.

@@ -12,7 +12,7 @@
 # Two modes:
 #
 #   # Safe mode (default). Runs only restore + validation on an
-#   # already-bootstrapped host. Use this against musubi.mey.house.
+#   # already-bootstrapped Musubi host.
 #   ansible-playbook deploy/backup/drill.yml \
 #     -e backup_timestamp=20260422T180001Z
 #

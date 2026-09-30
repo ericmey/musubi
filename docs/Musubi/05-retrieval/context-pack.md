@@ -208,14 +208,12 @@ Before and after the deploy, run the live consumer blast-radius smoke:
 
 ```bash
 MUSUBI_CONSUMER_PHASE=pre-deploy \
-MUSUBI_CONSUMER_COMMAND_CHAIR_CMD='<command-chair live smoke command>' \
-MUSUBI_CONSUMER_PHONE_AGENTS_CMD='<phone-agent live smoke command>' \
-MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD='<openclaw-on-nyla live smoke command>' \
-MUSUBI_CONSUMER_VICE_CMD='<vice live app smoke command>' \
+MUSUBI_CONSUMER_CHECKS_FILE="$HOME/.musubi-secrets/consumer-checks.tsv" \
 deploy/smoke/check_consumers.sh
 ```
 
 Repeat with `MUSUBI_CONSUMER_PHASE=post-deploy` after the new container is
-running. These commands must exercise the real consumers: the four command-chair
-agents, phone agents, OpenClaw on Nyla, and Vice. If any fail, roll back the
-versioned image pin before continuing adoption.
+running. The private TSV contains one `label<TAB>command` per live consumer;
+each command must exercise that consumer, not just Core health. Missing, empty,
+placeholder and failing checks stop the gate. If any fail after deploy, roll back
+the versioned image pin before continuing adoption.

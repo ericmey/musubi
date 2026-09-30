@@ -5,15 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 phase="${MUSUBI_CONSUMER_PHASE:-post-deploy}"
-checks=(
-  "command-chair agents:MUSUBI_CONSUMER_COMMAND_CHAIR_CMD"
-  "phone agents:MUSUBI_CONSUMER_PHONE_AGENTS_CMD"
-  "OpenClaw on Nyla:MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD"
-  "Vice app:MUSUBI_CONSUMER_VICE_CMD"
-)
-
+checks_file="${MUSUBI_CONSUMER_CHECKS_FILE:-}"
 failed=0
+count=0
 printf 'Musubi consumer regression smoke (%s)\n' "$phase"
+
+if [[ -z "$checks_file" ]]; then
+  fail "MUSUBI_CONSUMER_CHECKS_FILE is not set" || true
+  exit 1
+fi
+if [[ ! -f "$checks_file" || ! -r "$checks_file" ]]; then
+  fail "MUSUBI_CONSUMER_CHECKS_FILE is not a readable file: $checks_file" || true
+  exit 1
+fi
 
 is_placeholder_or_noop() {
   local cmd="$1"
@@ -23,17 +27,23 @@ is_placeholder_or_noop() {
   [[ "$trimmed" == *"<"* || "$trimmed" == *">"* ]]
 }
 
-for check in "${checks[@]}"; do
-  name="${check%%:*}"
-  var="${check##*:}"
-  cmd="${!var:-}"
-  if [[ -z "$cmd" ]]; then
-    fail "consumer ${name}: ${var} is not set" || true
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  if [[ "$line" != *$'\t'* ]]; then
+    fail "consumer check row needs label<TAB>command" || true
     failed=1
     continue
   fi
+  name="${line%%$'\t'*}"
+  cmd="${line#*$'\t'}"
+  if [[ -z "$name" || -z "$cmd" || "$cmd" == *$'\t'* ]]; then
+    fail "consumer check row needs one label and one command" || true
+    failed=1
+    continue
+  fi
+  count=$((count + 1))
   if is_placeholder_or_noop "$cmd"; then
-    fail "consumer ${name}: ${var} must be a real live-consumer command, not a placeholder/no-op" || true
+    fail "consumer ${name}: command must be a real live-consumer command, not a placeholder/no-op" || true
     failed=1
     continue
   fi
@@ -43,6 +53,11 @@ for check in "${checks[@]}"; do
     fail "consumer ${name}" || true
     failed=1
   fi
-done
+done < "$checks_file"
+
+if [[ "$count" -eq 0 ]]; then
+  fail "no consumer checks declared in $checks_file" || true
+  failed=1
+fi
 
 exit "$failed"

@@ -323,7 +323,7 @@ def test_check_observability_scrapes_valid_prometheus_text() -> None:
     assert "[PASS] metric families" in result.stdout
 
 
-def test_check_consumers_requires_every_live_consumer_command() -> None:
+def test_check_consumers_requires_operator_file() -> None:
     result = subprocess.run(
         ["bash", str(SMOKE / "check_consumers.sh")],
         cwd=ROOT,
@@ -334,24 +334,19 @@ def test_check_consumers_requires_every_live_consumer_command() -> None:
     )
 
     assert result.returncode != 0
-    assert "[FAIL] consumer command-chair agents" in result.stdout
-    assert "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD is not set" in result.stdout
-    assert "MUSUBI_CONSUMER_PHONE_AGENTS_CMD is not set" in result.stdout
-    assert "MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD is not set" in result.stdout
-    assert "MUSUBI_CONSUMER_VICE_CMD is not set" in result.stdout
+    assert "MUSUBI_CONSUMER_CHECKS_FILE is not set" in result.stdout
 
 
-def test_check_consumers_runs_every_live_consumer_command() -> None:
+def test_check_consumers_runs_operator_declared_commands(tmp_path: Path) -> None:
+    checks = tmp_path / "consumers.tsv"
+    checks.write_text("agent A\tprintf agent-a-smoke\napp B\tprintf app-b-smoke\n")
     result = subprocess.run(
         ["bash", str(SMOKE / "check_consumers.sh")],
         cwd=ROOT,
         env={
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "MUSUBI_CONSUMER_PHASE": "pre-deploy",
-            "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD": "printf command-chair-smoke",
-            "MUSUBI_CONSUMER_PHONE_AGENTS_CMD": "printf phone-smoke",
-            "MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD": "printf openclaw-smoke",
-            "MUSUBI_CONSUMER_VICE_CMD": "printf vice-smoke",
+            "MUSUBI_CONSUMER_CHECKS_FILE": str(checks),
         },
         capture_output=True,
         text=True,
@@ -360,22 +355,19 @@ def test_check_consumers_runs_every_live_consumer_command() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "Musubi consumer regression smoke (pre-deploy)" in result.stdout
-    assert "[PASS] consumer command-chair agents" in result.stdout
-    assert "[PASS] consumer phone agents" in result.stdout
-    assert "[PASS] consumer OpenClaw on Nyla" in result.stdout
-    assert "[PASS] consumer Vice app" in result.stdout
+    assert "[PASS] consumer agent A" in result.stdout
+    assert "[PASS] consumer app B" in result.stdout
 
 
-def test_check_consumers_rejects_placeholders_and_noops() -> None:
+def test_check_consumers_rejects_placeholders_and_noops(tmp_path: Path) -> None:
+    checks = tmp_path / "consumers.tsv"
+    checks.write_text("agent A\ttrue\napp B\t<app live smoke command>\n")
     result = subprocess.run(
         ["bash", str(SMOKE / "check_consumers.sh")],
         cwd=ROOT,
         env={
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD": "true",
-            "MUSUBI_CONSUMER_PHONE_AGENTS_CMD": "<phone-agent live smoke command>",
-            "MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD": "printf openclaw-smoke",
-            "MUSUBI_CONSUMER_VICE_CMD": "printf vice-smoke",
+            "MUSUBI_CONSUMER_CHECKS_FILE": str(checks),
         },
         capture_output=True,
         text=True,
@@ -383,8 +375,39 @@ def test_check_consumers_rejects_placeholders_and_noops() -> None:
     )
 
     assert result.returncode != 0
-    assert "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD must be a real live-consumer command" in result.stdout
-    assert "MUSUBI_CONSUMER_PHONE_AGENTS_CMD must be a real live-consumer command" in result.stdout
+    assert "consumer agent A: command must be a real live-consumer command" in result.stdout
+    assert "consumer app B: command must be a real live-consumer command" in result.stdout
+
+
+def test_check_consumers_rejects_empty_file(tmp_path: Path) -> None:
+    checks = tmp_path / "consumers.tsv"
+    checks.write_text("# no consumers declared yet\n")
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "MUSUBI_CONSUMER_CHECKS_FILE": str(checks)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "no consumer checks declared" in result.stdout
+
+
+def test_check_consumers_fails_when_operator_command_fails(tmp_path: Path) -> None:
+    checks = tmp_path / "consumers.tsv"
+    checks.write_text("good agent\tprintf worked\nbroken app\texit 7\n")
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "MUSUBI_CONSUMER_CHECKS_FILE": str(checks)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "[PASS] consumer good agent" in result.stdout
+    assert "[FAIL] consumer broken app" in result.stdout
 
 
 def test_verify_sh_aggregates_all_checks() -> None:
