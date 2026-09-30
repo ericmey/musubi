@@ -1,6 +1,6 @@
 # Musubi perf testing harness
 
-Load + performance testing scripts for `musubi.mey.house`. Implements
+Load + performance testing scripts for a Musubi deployment. Implements
 the plan at *(link in PR description)*.
 
 ## Layout
@@ -36,7 +36,7 @@ scripts/perf/
 ## Env vars every scenario reads
 
 ```bash
-export MUSUBI_V2_BASE_URL=http://musubi.mey.house:8100/v1
+export MUSUBI_V2_BASE_URL=http://localhost:8100/v1          # your deployment
 export MUSUBI_V2_TOKEN=mbi_perf_...                        # scoped to the prefix below
 export MUSUBI_V2_NAMESPACE_PREFIX=perf-test/harness        # tenant/presence — plane is appended
 ```

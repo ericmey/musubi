@@ -4,8 +4,7 @@ Use this when `deploy/backup/restore.yml` cannot run (rot tracked in #190)
 or you want a low-cost, low-risk recovery path that doesn't depend on
 Ansible at all.
 
-Every step runs directly on `musubi.mey.house` (or wherever Musubi is
-deployed). No control host needed.
+Every step runs directly on the Musubi host. No control host needed.
 
 **When this is your procedure:**
 - Perf testing corrupted state and you want to roll back to a known-good.

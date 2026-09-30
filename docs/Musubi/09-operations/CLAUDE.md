@@ -29,17 +29,16 @@ Local rules for `musubi/observability/`, `musubi/ops/`, `deploy/prometheus/`, an
 
 ## Observability stack
 
-Per [[13-decisions/0033-centralize-observability-on-shiori]], visualization /
-log aggregation / trace storage / alerting all live on a dedicated
-observability host (shiori) external to this repo. Local on the musubi host:
+Musubi exposes telemetry; visualization, log aggregation, trace storage and alerting are the
+operator's choice and live outside this repo (the original deployment's decision is recorded in
+[[13-decisions/0033-centralize-observability-on-shiori]]). On the Musubi host:
 
-- **Metrics (local scrape):** Prometheus on the musubi compose bridge — scrapes `core:8100/v1/ops/metrics`, qdrant (Bearer-authed `/metrics`), the three TEI services, node-exporter, and itself. Config rendered from `deploy/ansible/templates/prometheus.yml.j2`. Local TSDB retains 30 days for direct PromQL access at `127.0.0.1:9090` if shiori is unreachable.
-- **Metrics (central forward):** prometheus `remote_write` → `shiori.mey.house:9009/api/v1/push` (Mimir). Source of truth for visualization, alerting, and multi-host correlation.
+- **Metrics (local scrape):** Prometheus on the musubi compose bridge scrapes `core:8100/v1/ops/metrics`, qdrant (Bearer-authed `/metrics`), the TEI services, node-exporter, and itself. Config rendered from `deploy/ansible/templates/prometheus.yml.j2`. The local TSDB retains 30 days for direct PromQL at `127.0.0.1:9090`.
+- **Metrics (central forward):** optional Prometheus `remote_write` to your metrics backend (Mimir, Cortex, Thanos, a hosted service).
 - **Host metrics:** node-exporter sidecar container; standard prom/node-exporter image, mounts /proc, /sys, / read-only.
-- **Logs:** structured JSON to stdout (still required) — central Loki ingest from musubi is a follow-up PR scoped to the shiori-side codebase.
-- **Traces:** OpenTelemetry instrumentation lands when needed; central Tempo on shiori receives them. No local trace collector planned.
-- **Dashboards:** live on shiori (`http://shiori:3000`). Musubi-specific dashboards belong in the shiori-side codebase under `wiki/services/observability/dashboards/` (operator vault), not this repo.
-- **Alerts:** central, configured against shiori Mimir/Grafana. Rule definitions live with the dashboards on the shiori side.
+- **Logs:** structured JSON to stdout (required). Ship them with whatever collector your host runs.
+- **Traces:** OpenTelemetry via `OTEL_EXPORTER_OTLP_ENDPOINT` (empty disables tracing). No local trace collector is bundled.
+- **Dashboards and alerts:** built against your backend; they are not shipped in this repo.
 
 ## Incident response
 

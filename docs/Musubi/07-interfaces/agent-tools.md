@@ -14,7 +14,7 @@ The five tools every Musubi adapter exposes to the agents it hosts. Same names. 
 
 ## Why this exists
 
-Aoi runs across modalities — phone, voice, Discord, Claude Code. The user expects "Aoi, what was I just working on?" to behave the same way regardless of which surface answers. Today it doesn't, because every adapter (`openclaw-musubi`, `openclaw-livekit`, `musubi/adapters/mcp/`) has independently implemented its own agent-tool surface — different names (`musubi_recall` vs `musubi_search` vs `memory_recall`), different parameter shapes, different planes covered. Three implementations, none in sync.
+Atlas runs across modalities — phone, voice, Discord, Claude Code. The user expects "Atlas, what was I just working on?" to behave the same way regardless of which surface answers. Today it doesn't, because every adapter (`openclaw-musubi`, `openclaw-livekit`, `musubi/adapters/mcp/`) has independently implemented its own agent-tool surface — different names (`musubi_recall` vs `musubi_search` vs `memory_recall`), different parameter shapes, different planes covered. Three implementations, none in sync.
 
 The decision behind this spec is captured in [[13-decisions/0032-agent-tools-canonical-surface]]. This file is the contract every adapter implements.
 
@@ -166,7 +166,7 @@ Presence-to-presence message. The agent saying "tell my other self that X" — a
 
 | Name | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `to_presence` | string | yes | — | Recipient. Either the canonical `<agent>/<channel>` form (e.g. `aoi/voice`, `nyla/discord`) or a bare `<agent>` alias the adapter resolves to its default channel. `all` broadcasts. |
+| `to_presence` | string | yes | — | Recipient. Either the canonical `<agent>/<channel>` form (e.g. `atlas/voice`, `nova/discord`) or a bare `<agent>` alias the adapter resolves to its default channel. `all` broadcasts. |
 | `content` | string | yes | — | Min 1 char. |
 | `channel` | string | no | `default` | Channel within the recipient's inbox. Use `scheduler` for time-boxed reminders. |
 | `importance` | integer | no | 5 | 1–10. Priority hint. |

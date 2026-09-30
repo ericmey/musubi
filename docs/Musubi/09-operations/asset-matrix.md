@@ -30,7 +30,7 @@ Where each piece of data lives, who owns it, and what happens when the store is 
 | Write-log (vault ↔ Qdrant echo) | sqlite `lifecycle/work.sqlite:write_log` | — | sqlite `.backup` (daily) | (can regenerate partially) |
 | Schedule locks | sqlite `lifecycle/work.sqlite:schedule_locks` | — | sqlite `.backup` (daily) | (stateless; fine to lose) |
 | Config | `/etc/musubi/` + `.env` | — | Ansible git repo + `.vault.yml` | Git push (per change) |
-| Secrets | 1Password + `.vault.yml` | — | 1Password | Real-time |
+| Secrets | Secret manager (the bundled role uses 1Password Connect) + `.vault.yml` | — | Secret manager, off-host | Real-time |
 | OAuth tokens (issued) | JWT signed, not persisted | — | Re-issue from signing key | — |
 | Qdrant config | `/etc/musubi/qdrant-config.yaml` | — | Ansible git | Per-change |
 

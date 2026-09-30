@@ -21,7 +21,7 @@ From [[09-operations/asset-matrix]], four stores need backup:
 3. **Artifact blobs** → rsync.
 4. **sqlite** (lifecycle/work.sqlite) → `sqlite3 .backup`.
 
-Everything else (config, secrets) is in Ansible's repo / 1Password — different lifecycle.
+Everything else (config, secrets) lives in your Ansible inventory and secret manager — different lifecycle.
 
 ## Storage tiers
 
@@ -198,7 +198,7 @@ Optional. If enabled in Ansible, a nightly `restic` backup pushes `/mnt/snapshot
 - Backblaze B2 / AWS S3, OR
 - A friend's offsite server.
 
-Encrypted with a key held in 1Password.
+Encrypted with a key held in your secret manager, off the host.
 
 Retention: 1 year of daily; 5 years of monthly.
 

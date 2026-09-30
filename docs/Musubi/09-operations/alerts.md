@@ -36,7 +36,7 @@ Fire these only when something is actually broken and worse if left until mornin
 | `backup_failure_24h` | No Qdrant snapshot in 24h | Manual snapshot + investigate cron |
 | `gpu_oom` | Any container OOMKilled | Restart; investigate model sizes |
 | `loop_detected` | Vault echo filter catching > 100/min | Pause sync; investigate |
-| `token_signing_key_missing` | JWT signing key file missing | Restore from 1Password; all auth fails |
+| `token_signing_key_missing` | JWT signing key file missing | Restore from your secret manager; all auth fails |
 
 ### Email (informational, next-morning)
 

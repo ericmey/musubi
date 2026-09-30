@@ -53,7 +53,7 @@ Check the `Machine-checkable: N/M` line, not just the state counts: if `N < M` t
 
 ## Agent attribution
 
-Agent(s) that worked on this PR (one per line): `<agent-id>` (e.g., `eric-cc-opus47`, `yua-cowork`, `codex-gpt5`, `gemini-3-1`). Include commit-author / co-author mapping so human reviewers know what tool shipped what.
+Agent(s) that worked on this PR (one per line): `<agent-id>` (e.g., `claude-code-opus`, `codex-gpt5`, `gemini-3-1`). Include commit-author / co-author mapping so human reviewers know what tool shipped what.
 
 ## Risk + rollback
 

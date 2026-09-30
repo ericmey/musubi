@@ -45,7 +45,7 @@ Migration tracker: openclaw-musubi PR #24 lands `musubi_get` + the alias path `m
 
 ### Thoughts
 
-Presences send and receive thoughts across OpenClaw instances (e.g. Aoi says "I restarted the LiveKit agent" → Rin's next turn sees it). Delivery is push-over-SSE from Musubi's `/v1/thoughts/stream` endpoint; send uses `/v1/thoughts/send`.
+Presences send and receive thoughts across OpenClaw instances (e.g. Atlas says "I restarted the LiveKit agent" → Nova's next turn sees it). Delivery is push-over-SSE from Musubi's `/v1/thoughts/stream` endpoint; send uses `/v1/thoughts/send`.
 
 ## Auth
 
@@ -77,8 +77,8 @@ Conventional shape — OpenClaw presence id → Musubi namespace:
 
 | OpenClaw config | Namespace convention |
 |---|---|
-| `presence.defaultId: "eric/openclaw"` | episodic: `eric/openclaw/episodic`, thought: `eric/openclaw/thought` |
-| `presence.perAgent: {"aoi": "eric/aoi"}` | episodic: `eric/aoi/episodic`, thought: `eric/aoi/thought` |
+| `presence.defaultId: "alex/openclaw"` | episodic: `alex/openclaw/episodic`, thought: `alex/openclaw/thought` |
+| `presence.perAgent: {"atlas": "alex/atlas"}` | episodic: `alex/atlas/episodic`, thought: `alex/atlas/thought` |
 
 The plugin never writes to `_shared` namespaces directly; cross-presence curated is populated by the Musubi Lifecycle Worker's synthesis/promotion pipeline, not by OpenClaw.
 
@@ -92,7 +92,7 @@ Content-Type: application/json
 Authorization: Bearer <presence-token>
 
 {
-  "namespace": "eric/openclaw",
+  "namespace": "alex/openclaw",
   "query_text": "how do I restart the livekit agent",
   "mode": "fast",
   "limit": 5,
@@ -119,7 +119,7 @@ Episodic mirror from an OpenClaw `agent_end` event:
 ```json
 POST /v1/episodic
 {
-  "namespace": "eric/aoi/episodic",
+  "namespace": "alex/atlas/episodic",
   "content": "<agent response text>",
   "tags": ["openclaw-mirror", "agent_end"],
   "topics": [],
@@ -128,7 +128,7 @@ POST /v1/episodic
   "capture_source": "openclaw-agent-end",
   "source_ref": "openclaw-session:<session-id>:<turn-ksuid>",
   "ingestion_metadata": {
-    "agent_id": "aoi",
+    "agent_id": "atlas",
     "session_id": "...",
     "turn_id": "..."
   }
@@ -146,8 +146,8 @@ POST /v1/thoughts/send
 Idempotency-Key: <uuid>
 
 {
-  "from_presence": "eric/aoi",
-  "to_presence": "eric/rin",
+  "from_presence": "alex/atlas",
+  "to_presence": "alex/nova",
   "channel": "default",
   "content": "Heads up: LiveKit agent restarted at 09:03 UTC.",
   "importance": 5
