@@ -86,22 +86,9 @@ make install
 make check    # lint, types, and the unit suite
 ```
 
-For a production deploy, the single-box Docker Compose stack is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). Pin by digest — tags are mutable, digests aren't, and the rest of the repo (ansible, CI, SECURITY.md) verifies by digest:
-
-```
-ghcr.io/ericmey/musubi-core@sha256:<digest>
-```
-
-Find the digest for a specific release on its GitHub Release page (the `publish-core-image` workflow attaches it) or via `docker buildx imagetools inspect ghcr.io/ericmey/musubi-core:<version>`.
-
-Verify the signature before pinning in production:
-
-```bash
-cosign verify \
-  --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/ericmey/musubi-core@sha256:<digest>
-```
+**Running it for real, connecting your agents, and operating it:** see the
+[user guide](docs/guide/README.md). It covers the single-box Compose stack, image pinning
+and signature checks, tokens, every agent plugin, upgrades and backups.
 
 ## Repository layout
 
@@ -121,6 +108,7 @@ src/musubi/                 importable package
   observability/            structured logging + Prometheus metrics
 
 tests/                      mirrors src/musubi/ path-for-path
+docs/guide/                 user guide: install, connect agents, use, operate
 docs/Musubi/                the architecture vault (Obsidian) — source of truth for design
 deploy/                     ansible, prometheus, grafana, docker-compose templates
 ```
