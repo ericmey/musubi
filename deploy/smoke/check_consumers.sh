@@ -28,6 +28,7 @@ is_placeholder_or_noop() {
 }
 
 while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%$'\r'}"
   [[ -z "$line" || "$line" == \#* ]] && continue
   if [[ "$line" != *$'\t'* ]]; then
     fail "consumer check row needs label<TAB>command" || true

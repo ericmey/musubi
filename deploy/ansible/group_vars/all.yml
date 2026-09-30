@@ -1,7 +1,6 @@
 ---
-# operator_ssh_user: ssh user used to reach the Musubi workload host.
-# Set via -e @~/.musubi-secrets/inventory-vars.yml. Required at runtime.
-operator_ssh_user: ""
+# operator_ssh_user (SSH user for the workload host) is required from
+# the operator's private inventory; do not supply a public fallback.
 
 musubi_service_user: musubi
 musubi_service_group: musubi

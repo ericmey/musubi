@@ -112,7 +112,7 @@ def test_remote_write_is_operator_configured() -> None:
 
 def test_telemetry_defaults_do_not_name_house() -> None:
     vars = _load(GROUP_VARS)
-    assert vars["operator_ssh_user"] == ""
+    assert "operator_ssh_user" not in vars
     assert vars["musubi_otel_otlp_endpoint"] == ""
     assert vars["musubi_prometheus_remote_write_url"] == ""
     assert vars["musubi_deployment_environment"] == "production"

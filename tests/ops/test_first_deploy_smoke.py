@@ -359,6 +359,21 @@ def test_check_consumers_runs_operator_declared_commands(tmp_path: Path) -> None
     assert "[PASS] consumer app B" in result.stdout
 
 
+def test_check_consumers_accepts_crlf_rows(tmp_path: Path) -> None:
+    checks = tmp_path / "consumers.tsv"
+    checks.write_bytes(b"agent A\ttest -d /tmp\r\n")
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "MUSUBI_CONSUMER_CHECKS_FILE": str(checks)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout
+    assert "[PASS] consumer agent A" in result.stdout
+
+
 def test_check_consumers_rejects_placeholders_and_noops(tmp_path: Path) -> None:
     checks = tmp_path / "consumers.tsv"
     checks.write_text("agent A\ttrue\napp B\t<app live smoke command>\n")
