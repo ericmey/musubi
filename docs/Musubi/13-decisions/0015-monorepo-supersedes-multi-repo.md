@@ -10,7 +10,7 @@ updated: 2026-04-18
 up: "[[13-decisions/index]]"
 reviewed: true
 supersedes: "[[13-decisions/0011-canonical-api-and-adapters]] (repo layout only)"
-superseded-by: "[[13-decisions/0016-vault-in-monorepo]] (Neutral → vault-stays-separate clause only; repo-layout decision stands)"
+superseded-by: "[[13-decisions/0016-vault-in-monorepo]] (vault location only); [[13-decisions/0046-standalone-python-sdk-and-livekit]] (SDK and LiveKit package location only)"
 ---
 
 # ADR 0015: Monorepo supersedes multi-repo adapter layout

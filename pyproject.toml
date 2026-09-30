@@ -127,6 +127,12 @@ ignore_missing_imports = true
 module = ["harness"]
 ignore_missing_imports = true
 
+# The extracted LiveKit plugin is optional on the Musubi server. Compatibility
+# imports are checked against its wheel in the migration verification.
+[[tool.mypy.overrides]]
+module = ["musubi_livekit", "musubi_livekit.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
