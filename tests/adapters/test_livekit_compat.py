@@ -6,7 +6,9 @@ import builtins
 import importlib
 import runpy
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -60,10 +62,16 @@ def test_missing_plugin_has_explicit_install_error(monkeypatch: pytest.MonkeyPat
 def test_foreign_missing_dependency_is_not_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
     original_import = builtins.__import__
 
-    def fail_plugin_import(name: str, *args: object, **kwargs: object) -> object:
+    def fail_plugin_import(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] | None = None,
+        level: int = 0,
+    ) -> ModuleType:
         if name == "musubi_livekit.cache":
             raise ModuleNotFoundError("foreign dependency missing", name="foreign_dependency")
-        return original_import(name, *args, **kwargs)
+        return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", fail_plugin_import)
     with pytest.raises(ModuleNotFoundError, match="foreign dependency missing") as exc:
