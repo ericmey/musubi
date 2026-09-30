@@ -24,8 +24,8 @@ Input:
 
 ```json
 {
-  "namespace": "yua/command-chair",
-  "query_text": "Vice LoRA promptsmith Shiori image flow",
+  "namespace": "atlas/desk",
+  "query_text": "billing service release checklist",
   "mode": "startup",
   "planes": ["episodic", "curated", "concept"],
   "candidate_limit": 30,
@@ -178,15 +178,15 @@ Operators can call the deployed service with:
 
 ```bash
 musubi context \
-  --namespace yua/command-chair \
-  --query "Vice LoRA promptsmith Shiori image flow" \
+  --namespace atlas/desk \
+  --query "billing service release checklist" \
   --planes episodic,curated,concept
 ```
 
 There is also a direct entry point:
 
 ```bash
-musubi-context --namespace yua/command-chair --query "startup"
+musubi-context --namespace atlas/desk --query "startup"
 ```
 
 Both call `/v1/context`; neither reads local Qdrant.

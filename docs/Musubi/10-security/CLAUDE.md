@@ -19,7 +19,7 @@ Local rules for `musubi/auth/`, `musubi/redaction/`, and anything touching PII. 
 - **Auth runs as middleware** in `musubi/auth/` before any business logic. Business logic never parses tokens.
 - **Redact on ingest, not on retrieval.** If a PII category is in scope for this deployment, the capture path strips it before the memory is stored.
 - **Audit log is append-only.** Every mutation, promotion, demotion, and login generates an audit record. Writes go to disk; reads are query-only.
-- **Secrets live in 1Password + ansible-vault.** No secrets in env files committed to the repo, even `.env.example`.
+- **Secrets live in a secret manager (1Password Connect in the bundled Ansible role) + ansible-vault.** No secrets in env files committed to the repo, even `.env.example`.
 
 ## Must not
 

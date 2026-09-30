@@ -42,7 +42,7 @@ On LUKS-encrypted NVMe. Content-addressed (filename = SHA-256 of blob) — no me
 - **Qdrant snapshots** → `/mnt/snapshots/` → SATA SSD (also LUKS).
 - **Vault git** → GitHub private repo (TLS in transit; GitHub's at-rest encryption; optional `git-crypt` for subsets).
 - **sqlite backups** → SATA.
-- **Off-site (restic)** → encrypted with repository password held in 1Password. `AES-256` via restic's built-in crypto. The repo password is independent of LUKS keys — catastrophic LUKS key loss doesn't affect off-site recovery.
+- **Off-site (restic)** → encrypted with a repository password held in your secret manager. `AES-256` via restic's built-in crypto. The repo password is independent of LUKS keys — catastrophic LUKS key loss doesn't affect off-site recovery.
 
 ## Data in transit
 
@@ -63,11 +63,11 @@ LAN loopback traffic is plaintext; the host boundary is where TLS matters. If we
 | Qdrant API key | `/etc/musubi/.env` | With every deploy rotation |
 | OAuth signing key | Auth authority's keystore | Per auth authority docs |
 | Vault git deploy key | `/home/musubi/.ssh/id_ed25519` (0600) | Yearly |
-| Restic repo password | 1Password | Yearly |
+| Restic repo password | Secret manager (off-host) | Yearly |
 | Optional: CF API token | `/etc/musubi/.env` (TLS cert issuance) | As needed |
 | GEMINI_API_KEY (if used) | `/etc/musubi/.env` | Per-provider |
 
-**1Password is the root of trust.** If the host is wiped, 1Password still holds the restic password (off-site backup recovery) and SSH deploy keys (vault git re-clone). Losing 1Password access is catastrophic; it's backed up by Apple Keychain / the user's own backup strategy.
+**Your off-host secret manager is the root of trust.** If the host is wiped, it still holds the restic password (off-site backup recovery) and SSH deploy keys (vault git re-clone). Losing access to it is catastrophic, so back it up independently of the Musubi host.
 
 ## Content handling
 

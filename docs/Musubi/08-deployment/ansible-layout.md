@@ -255,7 +255,7 @@ Retention sweeps: 30-day log prune, 90-day snapshot prune, 180-day lifecycle-eve
 - OAuth client secrets for the MCP adapter
 - GitHub deploy key for vault git-sync
 
-Encrypted via `ansible-vault encrypt`. Password lives in 1Password.
+Encrypted via `ansible-vault encrypt`. Keep the vault password in your secret manager, never in the repo.
 
 ## Dry-run
 

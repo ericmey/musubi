@@ -54,7 +54,7 @@ Threat model, auth, redaction, data handling. Scoped to v1 — household + a few
 | Cross-namespace access | Token scope check on every call |
 | Privilege escalation | Operator scope is separate; normal tokens can't self-upgrade |
 | Lost/leaked token | Revoke via CLI; signing key rotation |
-| Host compromise | Encrypted backups; 1Password holds crown jewels |
+| Host compromise | Encrypted backups; the off-host secret manager holds the crown jewels |
 | In-transit exposure | TLS everywhere via Kong; internal traffic optional plaintext on loopback |
 | Prompt injection | LLM inputs quoted; no user-controlled system prompt |
 | Supply chain | Images pinned by digest; weights pinned by checksum |

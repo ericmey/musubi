@@ -33,9 +33,9 @@ Authorization: Bearer <jwt-or-opaque-token>
 
 Tokens carry a scope list; each scope is a namespace glob:
 
-- `eric/claude-code/episodic:rw` — read+write to that specific namespace.
-- `eric/*/episodic:r` — read any of Eric's episodic (rare; operator scope).
-- `eric/_shared/curated:rw` — shared curated.
+- `alex/claude-code/episodic:rw` — read+write to that specific namespace.
+- `alex/*/episodic:r` — read any of Alex's episodic (rare; operator scope).
+- `alex/_shared/curated:rw` — shared curated.
 - `**:r` — recursive read across all namespaces. Unlike `*`, which matches a
   single segment and requires the same segment count, `**` is special-cased to
   match any namespace at any depth. Recursive write is not granted; `**:rw` is
@@ -47,7 +47,7 @@ See [[10-security/auth]] for token issuance and validation.
 
 ### Scope by endpoint
 
-The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) requires **exact segment-count match** between the scope pattern and the endpoint's namespace. A scope like `eric/openclaw/*:rw` matches any 3-segment namespace under `eric/openclaw/` but does **not** match the 2-segment namespace `eric/openclaw`. Endpoints check scope at different segment counts, so a single presence typically needs multiple scope entries:
+The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) requires **exact segment-count match** between the scope pattern and the endpoint's namespace. A scope like `alex/openclaw/*:rw` matches any 3-segment namespace under `alex/openclaw/` but does **not** match the 2-segment namespace `alex/openclaw`. Endpoints check scope at different segment counts, so a single presence typically needs multiple scope entries:
 
 | Endpoint | Namespace source | Segments | Required access |
 |---|---|---|---|
@@ -73,11 +73,11 @@ The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) req
 A typical presence token (e.g. one issued to a specific OpenClaw agent or the LiveKit voice worker) carries the following scopes. Tune per deployment, but this is the baseline that covers every common operation without over-granting:
 
 ```
-eric/aoi:r                 # 2-seg: retrieve (cross-plane), thoughts/stream
-eric/aoi/*:rw              # 3-seg wildcard: captures, thoughts/send, plane-specific retrieve,
+alex/atlas:r                 # 2-seg: retrieve (cross-plane), thoughts/stream
+alex/atlas/*:rw              # 3-seg wildcard: captures, thoughts/send, plane-specific retrieve,
                            #                 GET by id, PATCH, DELETE across episodic / thought / concept / curated / artifact
-eric/_shared/curated:r     # read shared curated (lifecycle-promoted knowledge)
-eric/_shared/concept:r     # read shared concepts
+alex/_shared/curated:r     # read shared curated (lifecycle-promoted knowledge)
+alex/_shared/concept:r     # read shared concepts
 ```
 
 Notes:
@@ -212,7 +212,7 @@ Real-time thought delivery for consumers that need push semantics without pollin
 **Request:**
 
 ```http
-GET /v1/thoughts/stream?namespace=eric/openclaw&include=openclaw,all
+GET /v1/thoughts/stream?namespace=alex/openclaw&include=openclaw,all
 Accept: text/event-stream
 Authorization: Bearer <token>
 Last-Event-ID: <optional — KSUID of last seen thought; triggers replay>
@@ -229,7 +229,7 @@ Query params:
 ```
 event: thought
 id: 2iVVRLuCjwsSIxfv8KKaZg3NoXc
-data: {"object_id":"...","from_presence":"eric/claude-code","to_presence":"openclaw","namespace":"eric/openclaw","content":"...","channel":"default","importance":7,"sent_at":"2026-04-19T23:14:22.104Z"}
+data: {"object_id":"...","from_presence":"alex/claude-code","to_presence":"openclaw","namespace":"alex/openclaw","content":"...","channel":"default","importance":7,"sent_at":"2026-04-19T23:14:22.104Z"}
 
 event: ping
 data: {"at":"2026-04-19T23:14:52.000Z"}
@@ -247,7 +247,7 @@ Event semantics:
 
 Replay is capped at **500 events per reconnect** (the window that covers typical disconnect gaps without blowing up the range query). If more events matched, the response carries the header `X-Musubi-Replay-Truncated: true` so the client can backfill the missing span via `POST /v1/thoughts/history` (which supports pagination) rather than silently losing events.
 
-**Fanout semantics — BROADCAST (NORMATIVE).** Two clients subscribed to the same presence receive **the same events**. Example: user has OpenClaw open in two browsers + a LiveKit worker connected for `eric/openclaw` — all three streams see every thought addressed to `openclaw` or `all`. This is intentional and MUST NOT be regressed to competing-consumer round-robin under any "scaling" justification.
+**Fanout semantics — BROADCAST (NORMATIVE).** Two clients subscribed to the same presence receive **the same events**. Example: user has OpenClaw open in two browsers + a LiveKit worker connected for `alex/openclaw` — all three streams see every thought addressed to `openclaw` or `all`. This is intentional and MUST NOT be regressed to competing-consumer round-robin under any "scaling" justification.
 
 **Backpressure:** slow-consumer events drop in-memory for that connection (metered via `thoughts_stream_dropped_events_total{reason="slow_consumer"}`); reconnect + `Last-Event-ID` recovers them because thoughts are durable in Qdrant.
 
@@ -288,8 +288,8 @@ Request shape:
 
 ```json
 {
-  "namespace": "yua/command-chair",
-  "query_text": "Vice LoRA promptsmith Shiori image flow",
+  "namespace": "atlas/desk",
+  "query_text": "billing service release checklist",
   "mode": "startup",
   "planes": ["episodic", "curated", "concept"],
   "candidate_limit": 30,
@@ -313,7 +313,7 @@ Response shape:
           "kind": "project-stance",
           "staleness": "durable",
           "content": "...",
-          "evidence_handle": "yua/command-chair/episodic/<object_id>",
+          "evidence_handle": "atlas/desk/episodic/<object_id>",
           "why_surfaced": "durable project-stance; BM25 lexical match"
         }
       ]
@@ -354,21 +354,21 @@ The `namespace` field accepts three shapes, distinguished by segment count and t
 
 - **3-segment concrete** (`<tenant>/<presence>/<plane>`) — single-plane query. `planes` is ignored; results come from that one plane.
 - **2-segment** (`<tenant>/<presence>`) — cross-plane query. Each entry in `planes` is expanded to `<namespace>/<plane>` server-side, the pipeline fans out in parallel, and results are merged by score into a single sorted response.
-- **Wildcard** (`*` in any segment) — read across channels for a tenant, across tenants for a channel, or any combination. `nyla/*/episodic` returns Nyla's episodic across all her channels; `*/voice/curated` spans every agent's voice curated. Wildcards expand server-side against the live Qdrant payload. **Writes still reject `*`** — channel-tagged provenance is preserved on every row.
+- **Wildcard** (`*` in any segment) — read across channels for a tenant, across tenants for a channel, or any combination. `nova/*/episodic` returns Nova's episodic across all her channels; `*/voice/curated` spans every agent's voice curated. Wildcards expand server-side against the live Qdrant payload. **Writes still reject `*`** — channel-tagged provenance is preserved on every row.
 
 See [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md) and [ADR-0031](../13-decisions/0031-retrieve-wildcard-namespace.md) for the design decisions.
 
 **Consumers should prefer 2-segment cross-plane calls** for any multi-plane query (prompt supplements, corpus recall). One HTTP request, server-side scoring merge, strict per-plane scope check. Do not reinvent fanout client-side.
 
-Worked example — pull top-5 matches across curated + concept + episodic for the `eric/openclaw` presence:
+Worked example — pull top-5 matches across curated + concept + episodic for the `alex/openclaw` presence:
 
 ```http
 POST /v1/retrieve
 Content-Type: application/json
-Authorization: Bearer <token-with-eric/openclaw:r-and-per-plane-scope>
+Authorization: Bearer <token-with-alex/openclaw:r-and-per-plane-scope>
 
 {
-  "namespace": "eric/openclaw",
+  "namespace": "alex/openclaw",
   "query_text": "how do I restart the livekit agent",
   "mode": "fast",
   "limit": 5,
@@ -383,7 +383,7 @@ Response (abbreviated):
   "rows": [
     {
       "object_id": "2iVV…",
-      "namespace": "eric/openclaw/curated",
+      "namespace": "alex/openclaw/curated",
       "plane": "curated",
       "title": "LiveKit Agent Restart Runbook",
       "score": 0.91,
@@ -392,11 +392,11 @@ Response (abbreviated):
     },
     {
       "object_id": "2iVW…",
-      "namespace": "eric/openclaw/episodic",
+      "namespace": "alex/openclaw/episodic",
       "plane": "episodic",
       "title": null,
       "score": 0.78,
-      "snippet": "Yesterday Aoi restarted the LiveKit agent via the control panel …",
+      "snippet": "Yesterday Atlas restarted the voice worker from the control panel …",
       "extra": { "capture_source": "openclaw-agent-end" }
     }
   ],
@@ -404,13 +404,13 @@ Response (abbreviated):
 }
 ```
 
-**Scope check semantics:** the token must carry read access to the **2-segment base** (`eric/openclaw:r` or broader) **and** to every **expanded target** (`eric/openclaw/curated:r`, `eric/openclaw/concept:r`, `eric/openclaw/episodic:r`). Missing any one of the expansion scopes → `403` for the entire request. This is deliberate: partial results would be misleading, and the consumer can see exactly which scope is missing from the error detail.
+**Scope check semantics:** the token must carry read access to the **2-segment base** (`alex/openclaw:r` or broader) **and** to every **expanded target** (`alex/openclaw/curated:r`, `alex/openclaw/concept:r`, `alex/openclaw/episodic:r`). Missing any one of the expansion scopes → `403` for the entire request. This is deliberate: partial results would be misleading, and the consumer can see exactly which scope is missing from the error detail.
 
 **For single-plane queries**, pass a 3-segment namespace and omit `planes`:
 
 ```json
 {
-  "namespace": "eric/openclaw/curated",
+  "namespace": "alex/openclaw/curated",
   "query_text": "...",
   "mode": "fast",
   "limit": 5
@@ -462,7 +462,7 @@ All request bodies are pydantic models. Examples:
 ```json
 POST /v1/episodic
 {
-  "namespace": "eric/claude-code/episodic",
+  "namespace": "alex/claude-code/episodic",
   "content": "CUDA 13 driver 575 installed; reboot required.",
   "tags": ["cuda", "ops"],
   "topics": ["infrastructure/gpu"],
@@ -481,7 +481,7 @@ POST /v1/episodic
 ```json
 POST /v1/retrieve
 {
-  "namespace": "eric/openclaw",
+  "namespace": "alex/openclaw",
   "query_text": "how do I restart the livekit agent",
   "mode": "fast",
   "limit": 5,
@@ -516,7 +516,7 @@ All responses are pydantic models. Errors follow the same shape:
 {
   "error": {
     "code": "FORBIDDEN",
-    "detail": "namespace 'eric/other-presence/episodic' not in token scope",
+    "detail": "namespace 'alex/other-presence/episodic' not in token scope",
     "hint": "request a token with scope including this namespace"
   }
 }
@@ -554,7 +554,7 @@ Rate limits live in Kong (simpler) or in the Core (more precise). v1: Kong. Post
 List endpoints use cursor pagination:
 
 ```
-GET /v1/episodic?namespace=eric/...&limit=50&cursor=<opaque>
+GET /v1/episodic?namespace=alex/...&limit=50&cursor=<opaque>
 ```
 
 Response includes `next_cursor` if more results exist. `null` when exhausted.
