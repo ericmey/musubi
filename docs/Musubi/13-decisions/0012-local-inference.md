@@ -70,7 +70,7 @@ No content leaves the host to a third-party inference API in the default configu
 
 - Privacy story is clean: everything stays on the host by default.
 - Ops burden includes keeping TEI + Ollama healthy, monitoring GPU, and managing the CUDA runtime.
-- LLM capability is capped at what fits in VRAM. Upgrade path: bigger GPU → more VRAM → bigger models ([[11-migration/scaling]]).
+- LLM capability is capped at what fits in VRAM. Upgrade path: bigger GPU → more VRAM → bigger models (`scaling`).
 - For non-routine work (e.g., drafting a long report for a person, not for the memory pipeline), the user can point adapters at a hosted API directly; that's out of scope for Musubi proper.
 
 Trade-offs:

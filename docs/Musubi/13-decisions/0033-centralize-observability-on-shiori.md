@@ -20,7 +20,7 @@ superseded-by: []
 
 ## Context
 
-[[_slices/slice-ops-observability]] (closed `done` 2026-04-19) planned a full local observability stack on the musubi workload host: Prometheus, Loki, Tempo, and Grafana, all running alongside the musubi service containers. The slice's `## Owned paths` listed `deploy/grafana/`, `deploy/loki/`, `deploy/prometheus/`, and `deploy/tempo/` as new — to be created together.
+`slice-ops-observability` (closed `done` 2026-04-19) planned a full local observability stack on the musubi workload host: Prometheus, Loki, Tempo, and Grafana, all running alongside the musubi service containers. The slice's `## Owned paths` listed `deploy/grafana/`, `deploy/loki/`, `deploy/prometheus/`, and `deploy/tempo/` as new — to be created together.
 
 Reality on the host as of 2026-05-03:
 
@@ -106,7 +106,7 @@ Deploy an OTel Collector container on musubi instead of prometheus. Its `prometh
 
 ## Related
 
-- [[_slices/slice-ops-observability]] — the slice that planned the now-superseded local stack. Updated by this PR.
+- `slice-ops-observability` — the slice that planned the now-superseded local stack. Updated by this PR.
 - [[09-operations/observability]] — observability strategy spec. Updated by this PR.
 - [[13-decisions/0010-single-host-v1]] — the single-host ADR for the musubi service deployment. This ADR doesn't conflict; observability host is a sibling, not a violation of single-host v1.
 - `deploy/runbooks/upgrade.md` — applies this change via `update.yml` after merge.

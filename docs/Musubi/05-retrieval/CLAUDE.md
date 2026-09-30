@@ -46,4 +46,4 @@ Local rules for slices under `musubi/retrieve/` and `musubi/rerank/`. Supplement
 
 ## Related slices
 
-- [[_slices/slice-retrieval-scoring]], [[_slices/slice-retrieval-hybrid]], [[_slices/slice-retrieval-fast]], [[_slices/slice-retrieval-deep]], [[_slices/slice-retrieval-rerank]], [[_slices/slice-retrieval-blended]], [[_slices/slice-retrieval-orchestration]].
+- `slice-retrieval-scoring`, `slice-retrieval-hybrid`, `slice-retrieval-fast`, `slice-retrieval-deep`, `slice-retrieval-rerank`, `slice-retrieval-blended`, `slice-retrieval-orchestration`.

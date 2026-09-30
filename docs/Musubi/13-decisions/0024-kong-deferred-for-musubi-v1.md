@@ -38,8 +38,8 @@ Since that ADR was accepted, additional operator context surfaced:
 - Musubi has not been given an `<external-domain>` address. The product is
   VLAN-internal today; no external clients exist.
 - Musubi Core ships its own JWT/OAuth 2.1 validation (via
-  [[_slices/slice-auth|slice-auth]]) and in-app rate-limiting
-  (via [[_slices/slice-ops-hardening-suite|slice-ops-hardening-suite]]).
+  slice-auth) and in-app rate-limiting
+  (via slice-ops-hardening-suite).
   The edge policies Kong was expected to provide are already enforced
   in-process.
 
@@ -110,7 +110,7 @@ the first-deploy runbook (now mandatory for that deploy).
 
 ### Neutral
 
-- [[_slices/slice-auth]] and [[_slices/slice-ops-hardening-suite]] remain the
+- `slice-auth` and `slice-ops-hardening-suite` remain the
   enforcement points. Their behaviour is unchanged by this ADR.
 
 ## Alternatives considered
@@ -157,9 +157,9 @@ the first-deploy runbook (now mandatory for that deploy).
 ## References
 
 - [[13-decisions/0014-kong-over-caddy]] — the ADR this one defers.
-- [[_slices/slice-auth]] — in-process auth, the policy that makes this
+- `slice-auth` — in-process auth, the policy that makes this
   deferral safe.
-- [[_slices/slice-ops-hardening-suite]] — in-app rate limiting.
+- `slice-ops-hardening-suite` — in-app rate limiting.
 - [first-deploy runbook](../../../deploy/runbooks/first-deploy.md) — the procedure
   updated to reflect this decision.
 - `.agent-context.local.md` → *Homelab topology* (gitignored) — operator

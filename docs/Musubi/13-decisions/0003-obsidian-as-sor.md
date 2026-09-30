@@ -51,7 +51,7 @@ See Context. The key rejection: making Qdrant the writer of curated content. Cur
 ## Consequences
 
 - Vault watcher is a first-class component, not an afterthought ([[04-data-model/vault-schema]], [[06-ingestion/vault-sync]]).
-- Echo-prevention write-log becomes necessary ([[11-migration/phase-5-vault]]): when the system writes a vault file, the resulting filesystem event must not be re-indexed as if a human wrote it.
+- Echo-prevention write-log becomes necessary (`phase-5-vault`): when the system writes a vault file, the resulting filesystem event must not be re-indexed as if a human wrote it.
 - Vault layout becomes part of the public API — users' filepaths matter for retrieval scoping.
 - Backup strategy: vault gets git pushes (frequent, cheap); Qdrant gets snapshots (less frequent, rebuildable).
 - Deploy story: moving vault to a new host is `git clone`. Qdrant can follow at its own pace.
@@ -66,4 +66,4 @@ Trade-offs:
 - [[13-decisions/0001-three-plane-architecture]]
 - [[04-data-model/vault-schema]]
 - [[06-ingestion/vault-sync]]
-- [[11-migration/phase-5-vault]]
+- `phase-5-vault`

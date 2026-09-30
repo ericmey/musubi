@@ -142,4 +142,4 @@ The POC collection `musubi_thoughts` becomes `musubi_thought` (singular; consist
 3. Re-embed with named dense + sparse (or copy old dense into `dense_legacy_v0` named vector; see [[11-migration/re-embedding]]).
 4. Alias `musubi_thoughts` → `musubi_thought`.
 
-See [[11-migration/phase-1-schema]] for the detailed migration runbook.
+See `phase-1-schema` for the detailed migration runbook.

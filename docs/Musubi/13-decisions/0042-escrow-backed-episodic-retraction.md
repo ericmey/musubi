@@ -381,6 +381,6 @@ API rule for changes without an accepted ADR.
 - [[13-decisions/0036-artifact-committed-generation-indexing]]
 - [[13-decisions/0039-durable-client-idempotency-receipts]]
 - [[13-decisions/data001-phase2-immutable-vectors]]
-- [[_slices/slice-api-v1-data001-episodic-patch-fence]]
+- `slice-api-v1-data001-episodic-patch-fence`
 - Issue #611 decision packet at commit `eaf3b9a`, SHA-256
   `478e4de3db2a2195a9bb244ef33c6157ffb96c40ae80013eaa99b4e6a0730477`.

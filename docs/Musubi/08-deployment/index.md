@@ -22,7 +22,7 @@ One dedicated Linux server:
 - **OS:** Ubuntu Server 24.04 LTS
 - **Role:** dedicated to Musubi + its inference workers; no shared tenants
 
-Everything in this section assumes this profile. If deployment scales to multi-host later, see [[11-migration/scaling]].
+Everything in this section assumes this profile. If deployment scales to multi-host later, see `scaling`.
 
 ## Topology
 

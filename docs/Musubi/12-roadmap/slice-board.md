@@ -12,7 +12,7 @@ reviewed: false
 ## Backlog
 
 - [ ] [[07-interfaces/canonical-api|Freeze Canonical API v0.1]] #slice/api-v0 @{2026-04-20}
-- [ ] [[11-migration/phase-1-schema|Migrate POC to named-vector schema]] #slice/migration-1 @{2026-04-20}
+- [ ] Migrate POC to named-vector schema #slice/migration-1 @{2026-04-20}
 - [ ] [[06-ingestion/vault-sync|Obsidian vault + file-watcher]] #slice/vault
 - [ ] [[06-ingestion/lifecycle-engine|Lifecycle Engine skeleton]] #slice/lifecycle
 - [ ] [[08-deployment/ansible-layout|Bootstrap Ansible playbook]] #slice/ops

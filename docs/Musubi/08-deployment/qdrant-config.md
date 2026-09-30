@@ -160,7 +160,7 @@ Defaults (`m=16`, `ef_construct=128`) balanced for our scale:
 - `ef_construct=128` — one-time index build cost; we never rebuild after initial promotion.
 - At query time, the SDK sets `params.hnsw_ef=128` for fast path, `256` for deep path.
 
-If scale reaches > 1M vectors per collection, revisit (see [[11-migration/scaling]]).
+If scale reaches > 1M vectors per collection, revisit (see `scaling`).
 
 ## Storage layout
 
@@ -228,7 +228,7 @@ Minor upgrades (`1.15 → 1.16`):
 3. Bring up 1.16 on a parallel port, run contract suite, compare.
 4. Swap if green.
 
-Major upgrades (`1.x → 2.x`): handle like any other breaking dependency — see [[11-migration/index]].
+Major upgrades (`1.x → 2.x`): handle like any other breaking dependency — see `index`.
 
 ## Observability
 

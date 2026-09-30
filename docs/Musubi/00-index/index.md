@@ -60,7 +60,7 @@ Plus a bridge layer:
 |---|---|---|
 | 00 | [[00-index/index|Index]] | You are here. Navigation, executive summary, guardrails. |
 | 01 | [[01-overview/index|Overview]] | Mission, scope, stakeholders, the three planes explained. |
-| 02 | [[02-current-state/index|Current state]] | Honest gap analysis. What the POC is vs what this doc asks for. |
+| 02 | Current state | Honest gap analysis. What the POC is vs what this doc asks for. |
 | 03 | [[03-system-design/index|System design]] | Component architecture. Core abstraction boundary. Namespaces. |
 | 04 | [[04-data-model/index|Data model]] | Schemas, relationships, lifecycle states. |
 | 05 | [[05-retrieval/index|Retrieval]] | Scoring formula, fast/deep/blended paths, orchestration queries. |
@@ -69,33 +69,33 @@ Plus a bridge layer:
 | 08 | [[08-deployment/index|Deployment]] | Ansible, bootstrap order, secrets, container topology. |
 | 09 | [[09-operations/index|Operations]] | Backup, observability, runbooks, canonical vs derived assets. |
 | 10 | [[10-security/index|Security]] | Auth, tenant isolation, PII handling, redaction. |
-| 11 | [[11-migration/index|Migration]] | Path from POC to target. Data migration plan. |
+| 11 | Migration | Path from POC to target. Data migration plan. |
 | 12 | [[12-roadmap/index|Roadmap]] | Phased implementation plan with agent-parallelizable slices. |
 | 13 | [[13-decisions/index|Decisions]] | ADRs for every load-bearing choice. |
 
 ## Key landing pages
 
-- [[00-index/dashboard|Vault Dashboard]] — live status snapshot, review progress, gap hotspots.
+- Vault Dashboard — live status snapshot, review progress, gap hotspots.
 - [[00-index/reading-tour|Reading Tour]] — plain-English guided path for first-time review.
 - [[00-index/architecture.canvas|Architecture Canvas]] — visual map of the whole system.
-- [[_slices/index|Slice Registry]] — the parallelizable work units for coding agents.
-- [[_slices/slice-dag.canvas|Slice DAG]] — visual dependency graph of all slices.
-- [[_slices/completed-work|Completed Work]] — shipped slices + phase completion stats.
+- Slice Registry — the parallelizable work units for coding agents.
+- Slice DAG — visual dependency graph of all slices.
+- Completed Work — shipped slices + phase completion stats.
 - [[_tools/README|Vault Tools]] — `check.py` (vault/slice/spec linter) and `slice_watch.py` (transition notifier).
 - [[00-index/obsidian-setup|Obsidian Setup]] — verify-after-restart checklist for plugin configs.
-- [[00-index/work-log|Work Log]] — dated record of infrastructure + implementation events. Where "X is now real" gets written down.
-- [[_inbox/operator-notes|Operator Notes]] — scratchpad for reactions while reviewing.
+- Work Log — dated record of infrastructure + implementation events. Where "X is now real" gets written down.
+- Operator Notes — scratchpad for reactions while reviewing.
 - [[00-index/executive-summary|Executive Summary]] — top 5 decisions, top 5 risks, top 5 next steps.
 - [[CLAUDE|Coding Agent Entry Point]] — CLAUDE.md. Start here if you're an agent, not a human.
 - [[00-index/agent-guardrails|Agent Guardrails]] — rules for a fleet of coding agents working in this repo.
 - [[00-index/agent-handoff|Agent Handoff Protocol]] — the lifecycle of a slice, step-by-step.
 - [[00-index/definition-of-done|Definition of Done]] — the universal merge checklist.
 - [[00-index/research-questions|Research Questions]] — consolidated open questions across the vault.
-- [[00-index/stubs|Stubs & Placeholders]] — what's intentionally brief and why.
+- Stubs & Placeholders — what's intentionally brief and why.
 - [[00-index/test-index|Test Contract Index]] — every spec's behaviour-under-test.
 - [[00-index/glossary|Glossary]] — vocabulary used across the vault.
 - [[00-index/conventions|Conventions]] — naming, frontmatter, link style.
-- [[_bases/index|Bases]] — dynamic filters over the vault (by status, by section, etc.).
+- Bases — dynamic filters over the vault (by status, by section, etc.).
 
 ## External research grounding
 

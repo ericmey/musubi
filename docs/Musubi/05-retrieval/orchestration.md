@@ -244,7 +244,7 @@ degradation under load.
 
 ## Error propagation
 
-Musubi uses `Result[T, E]` for this function (see [[02-current-state/preserved]]). The error variant:
+Musubi uses `Result[T, E]` for this function (see `preserved`). The error variant:
 
 ```python
 class RetrievalError(BaseModel):

@@ -53,7 +53,7 @@ On LUKS-encrypted NVMe. Content-addressed (filename = SHA-256 of blob) — no me
 - Core → GitHub (git push): SSH with deploy key, ED25519.
 - Core → off-site backup: SSH or HTTPS per restic config.
 
-LAN loopback traffic is plaintext; the host boundary is where TLS matters. If we ever add a second host (see [[11-migration/scaling]]), cross-host traffic must be TLS.
+LAN loopback traffic is plaintext; the host boundary is where TLS matters. If we ever add a second host (see `scaling`), cross-host traffic must be TLS.
 
 ## Secrets
 

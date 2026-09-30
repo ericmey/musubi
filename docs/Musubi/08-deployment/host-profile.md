@@ -17,7 +17,7 @@ The dedicated Ubuntu box. What it looks like, how it's provisioned, how componen
 
 > Concrete hostnames and IPs in this spec use placeholder tokens (`<musubi-host>`, `<musubi-ip>`, `<kong-gateway>`, `<homelab-domain>`, etc.). Real values live in `.agent-context.local.md` at the repo root (gitignored); agents substitute when running real commands.
 
-> **Deployed 2026-04-17.** A physical machine matching this profile is online as `<musubi-host>` on the homelab VLAN. Base services (Qdrant, Ollama) are running natively (not containerised) from a pre-Ansible manual install. The concrete realised state (exact hardware serials, packages pulled, services and ports in use right now) is in `.agent-context.local.md` § *Realised deployment state (2026-04-18)*. See [[00-index/work-log]] for the dated event.
+> **Deployed 2026-04-17.** A physical machine matching this profile is online as `<musubi-host>` on the homelab VLAN. Base services (Qdrant, Ollama) are running natively (not containerised) from a pre-Ansible manual install. The concrete realised state (exact hardware serials, packages pulled, services and ports in use right now) is in `.agent-context.local.md` § *Realised deployment state (2026-04-18)*. See `work-log` for the dated event.
 
 ## Hardware
 
@@ -158,7 +158,7 @@ Monitored continuously; alerts at 75% on any dimension. See [[09-operations/aler
 
 ## Non-goals for v1
 
-- Hot standby / HA. See [[11-migration/scaling#high-availability]] for the plan.
+- Hot standby / HA. See the archived migration notes (`11-migration/scaling`) for the plan.
 - Autoscaling. One box is the capacity plan.
 - Multi-tenant isolation at the host level. Token scope handles tenant separation logically.
 
@@ -192,7 +192,7 @@ The HF cache under `/home/ericmey/musubi-hf-cache/hub/` (BGE-M3, SPLADE v3,
 BGE-reranker-v2-m3) was rsynced into `/var/lib/musubi/tei-models/` before the
 compose stack came up. That preserved ~6.9 GB of downloads (SPLADE v3 is
 gated on HuggingFace and would 401 otherwise). Automating this rsync in
-`bootstrap.yml` is a tracked follow-up (see [[00-index/work-log]] 2026-04-20).
+`bootstrap.yml` is a tracked follow-up (see `work-log` 2026-04-20).
 
 ## Known deployment gotchas
 
@@ -234,4 +234,4 @@ Each of these is a candidate for future `_slices/slice-ops-*` or `slice-musubi-*
 
 ## Test Contract
 
-Realized by **[[_slices/slice-ops-ansible]]** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.
+Realized by **`slice-ops-ansible`** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.

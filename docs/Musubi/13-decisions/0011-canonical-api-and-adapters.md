@@ -65,7 +65,7 @@ Rules:
 
 - Eight repos to manage. Python packaging (`musubi-client` as a wheel) mandatory.
 - Contract test suite ([[07-interfaces/contract-tests]]) becomes the shared quality gate. Changes to the API propagate through the suite, which fails adapters until they update.
-- Versioning is per-repo with compatibility commitments ([[11-migration/schema-evolution]]).
+- Versioning is per-repo with compatibility commitments (`schema-evolution`).
 - Release cadence: Core + client most frequently; adapters at their own pace, with a pinned client range.
 - Onboarding a new adapter is a well-trodden path: clone adapter template, depend on `musubi-client`, implement the protocol translation, wire up contract tests.
 

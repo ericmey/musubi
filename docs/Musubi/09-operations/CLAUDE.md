@@ -51,4 +51,4 @@ When an alert fires:
 
 ## Related slices
 
-- [[_slices/slice-ops-observability]], [[_slices/slice-ops-backup]].
+- `slice-ops-observability`, `slice-ops-backup`.

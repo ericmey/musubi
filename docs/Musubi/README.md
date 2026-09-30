@@ -23,7 +23,7 @@ Every document in this vault is either a **specification** (the target system), 
 
 ## What this vault is *not*
 
-- Not a reflection of the current Musubi POC. See [[02-current-state/index|Current State]] for an honest gap analysis.
+- Not a reflection of the current Musubi POC. See Current State for an honest gap analysis.
 - Not a product roadmap. See [[12-roadmap/index|Roadmap]] for sequencing.
 - Not a marketing document. Nothing here is aspirational — every claim is either implementable or flagged as a research question.
 
@@ -31,14 +31,14 @@ Every document in this vault is either a **specification** (the target system), 
 
 | If you are… | Start here |
 |---|---|
-| Opening the vault for the first time | [[00-index/dashboard]] |
+| Opening the vault for the first time | `dashboard` |
 | A coding agent picking up work | [[00-index/agent-guardrails]] → [[12-roadmap/phased-plan]] → your assigned slice |
 | A human reviewer | [[00-index/executive-summary]] |
 | Doing deployment | [[08-deployment/index]] |
 | Implementing a retrieval path | [[05-retrieval/scoring-model]] |
 | Writing a new adapter | [[07-interfaces/canonical-api]] → [[07-interfaces/sdk]] |
 | Debugging in production | [[09-operations/runbooks]] |
-| Looking for what's unfinished | [[00-index/research-questions]] or [[_bases/research-stubs]] |
+| Looking for what's unfinished | [[00-index/research-questions]] or `research-stubs` |
 
 ## Vault layout
 
@@ -70,10 +70,10 @@ See [[00-index/conventions]] for the full schema.
 Every note carries a `status:` frontmatter field — `complete`, `draft`, `stub`,
 or `research-needed`. Browse the live views:
 
-- [[_bases/by-status]] — every note, sortable by status.
-- [[_bases/research-stubs]] — only stubs and research-needed notes.
+- `by-status` — every note, sortable by status.
+- `research-stubs` — only stubs and research-needed notes.
 - [[00-index/research-questions]] — narrative of the open questions.
-- [[00-index/dashboard]] — at-a-glance section health.
+- `dashboard` — at-a-glance section health.
 
 The graph view is colour-coded by status (see `.obsidian/graph.json`) — open
 the graph and research-needed nodes glow red; complete nodes are green. Open
@@ -86,9 +86,9 @@ orphan nodes in the graph to find unlinked notes.
 - **Templater** — scaffolds new notes per folder. Try *Cmd+P → Templater: Create new note from template*.
 - **Linter** — runs on save. Normalises frontmatter key order, deduplicates tags, trims trailing whitespace. Configured in `.obsidian/plugins/obsidian-linter/data.json`.
 - **Tasks** — custom statuses include `[R]` (Research) and `[/]` (In Progress). Query blocks sit inside dashboards.
-- **Dataview** — live tables/lists over frontmatter. Powers [[00-index/dashboard]], [[00-index/research-questions]], [[00-index/stubs]], and the per-section indexes. DataviewJS is enabled.
+- **Dataview** — live tables/lists over frontmatter. Powers `dashboard`, [[00-index/research-questions]], `stubs`, and the per-section indexes. DataviewJS is enabled.
 - **Breadcrumbs** — turns `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` frontmatter into an explicit graph. Open the matrix or trail view from the command palette.
-- **Kanban** — boards at [[12-roadmap/slice-board]], [[11-migration/migration-board]], [[_inbox/research/research-board]].
+- **Kanban** — boards at [[12-roadmap/slice-board]], `migration-board`, `research-board`.
 - **Local REST API** — headless access from Musubi's own vault-sync pipeline.
 - **Style Settings** — surface for tuning the `musubi-status-colors` CSS snippet.
 - **Git** — auto-commit / push integration; open *Settings → Git* to enable.

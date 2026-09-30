@@ -14,7 +14,7 @@ supersedes: []
 # C6b: lifecycle Qdrant↔SQLite atomicity — design v2 (durable-intent outbox + coordinator)
 
 **Author:** Aoi · 2026-07-13 · **Status:** PROPOSED v2 — revised for Yua's fork rulings + corrections A–J
-(2026-07-13). Slice: [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] (Issue #437). Direction
+(2026-07-13). Slice: `slice-c6b-lifecycle-qdrant-sqlite-atomicity` (Issue #437). Direction
 (durable-intent outbox) ACCEPTED; this v2 is the contract that makes the outbox truthful across callers,
 retries, bypass paths, and long-term operation. Zero source until the red contract is encoded + reviewed.
 
@@ -171,7 +171,7 @@ bypasses so a silently-vanishing site fails loudly (red-proofed: blinding the sc
 the control fail `missing=…`).
 
 **Decision:** C6b does NOT migrate all of these in-scope (too large). C6b **depends on a concrete H5
-unification slice** ([[_slices/slice-h5-unify-state-mutation]], Issue TBD) that routes ALL state mutation
+unification slice** (`slice-h5-unify-state-mutation`, Issue TBD) that routes ALL state mutation
 through `LifecycleTransitionCoordinator`; **C6b atomicity closure is BLOCKED on H5.** C6b ships:
 
 - a **mechanical guard red** (AST/rg) that FORBIDS direct `state`-writing `set_payload` outside the
@@ -236,7 +236,7 @@ The red contract **labels each item**:
   `LifecycleTransitionCoordinator` + `LifecycleOutbox` (Phase 1) is implemented. C6b Phase 1 may land with
   **C6b still OPEN** on this evidence.
 - **Defect closure** — **G1** only. It stays RED through Phase 1 and flips green **only when
-  [[_slices/slice-h5-unify-state-mutation]] (Issue #439)** migrates every mutation path onto the
+  `slice-h5-unify-state-mutation` (Issue #439)** migrates every mutation path onto the
   coordinator. C6b closes as a defect only then.
 
 Red-proof plan: a temporary minimal coordinator+outbox (begin→PENDING commit; conditional set_payload;
@@ -246,8 +246,8 @@ restored, zero `src/` committed.
 
 ## Dependencies (acyclic)
 
-- **C6b `blocks`:** the C6 source slice [[_slices/slice-c6-lifecycle-event-loss]] **and**
-  [[_slices/slice-h5-unify-state-mutation]] (H5 consumes C6b's coordinator API).
+- **C6b `blocks`:** the C6 source slice `slice-c6-lifecycle-event-loss` **and**
+  `slice-h5-unify-state-mutation` (H5 consumes C6b's coordinator API).
 - **H5 `depends-on` C6b**, not the reverse — so no cycle. C6b **closure** is gated by H5 via the G1
   closure-gate (a documented state, NOT a DAG edge).
 

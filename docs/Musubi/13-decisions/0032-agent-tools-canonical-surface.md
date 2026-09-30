@@ -139,10 +139,10 @@ Keep finer-grained tools (per-plane `curated_get`, `concept_search`, `thought_hi
 ## Implementation order
 
 1. **This ADR + the spec** ([[07-interfaces/agent-tools]]) — gates everything below.
-2. **Backend slice `mode=recent`** ([[_slices/slice-retrieve-recent]]) — required by `musubi_recent` cross-modal. Adapters can ship the canonical names with a fallback recency path until this lands; the fallback is documented per adapter.
-3. **MCP adapter slice** ([[_slices/slice-mcp-canonical-tools]]) — adds the five canonical tools, deprecates `memory_capture` / `memory_recall`. Includes registering the MCP server with Claude Code.
+2. **Backend slice `mode=recent`** (`slice-retrieve-recent`) — required by `musubi_recent` cross-modal. Adapters can ship the canonical names with a fallback recency path until this lands; the fallback is documented per adapter.
+3. **MCP adapter slice** (`slice-mcp-canonical-tools`) — adds the five canonical tools, deprecates `memory_capture` / `memory_recall`. Includes registering the MCP server with Claude Code.
 4. **OpenClaw plugin extension** — extends the in-flight openclaw-musubi PR (`#24`) to add `musubi_recent` + alias `musubi_recall` → `musubi_search`.
-5. **LiveKit collapse** ([[_slices/slice-livekit-canonical-tools]]) — single canonical mixin, widens `musubi_recent` to cross-modal, drops the dormant v2 mixin.
+5. **LiveKit collapse** (`slice-livekit-canonical-tools`) — single canonical mixin, widens `musubi_recent` to cross-modal, drops the dormant v2 mixin.
 
 ## Related
 

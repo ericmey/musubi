@@ -2,7 +2,7 @@ name: Publish Musubi Core image
 
 # Publishes ghcr.io/<repository owner>/musubi-core, replacing the one-shot
 # `docker save | ssh | docker load` transfer used for the first
-# deploy. See [[_slices/slice-ops-core-image-publish]] and
+# deploy. See the original slice-ops-core-image-publish spec (archived) and
 # `deploy/runbooks/upgrade-image.md`.
 #
 # Triggers (rationale in the slice spec):

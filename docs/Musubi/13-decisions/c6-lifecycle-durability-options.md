@@ -70,4 +70,4 @@ machinery than this event rate warrants).
   and even a durable-on-accept audit still leaves mutation-without-audit. Closing that needs a
   transactional-outbox / two-phase / idempotent-replay pattern spanning both stores, a larger design than
   sink durability. C6 must not claim to have closed it. C6 contract + inventory:
-  [[_slices/slice-c6-lifecycle-event-loss]].
+  `slice-c6-lifecycle-event-loss`.

@@ -175,6 +175,6 @@ dangling locks on every PR.
 
 ## Related
 
-- [[_slices/index|Slice Registry]] — what this tool validates.
+- Slice Registry — what this tool validates.
 - [[00-index/agent-handoff|Agent Handoff Protocol]] — the lifecycle these checks enforce.
 - [[00-index/definition-of-done]] — merge gate checklist.

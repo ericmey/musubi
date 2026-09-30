@@ -90,7 +90,7 @@ unauthed; confirmed empty state). There is no production data at risk.
 ### B. Delay the decision until the Compose migration is actually executed
 
 - Why considered: defer until forced.
-- Why rejected: the [[_slices/slice-ops-first-deploy|first-deploy runbook]]
+- Why rejected: the first-deploy runbook
   calls for a concrete pin. Without this ADR, the runbook and the host drift,
   and the first attempt hits the mismatch during Compose up.
 

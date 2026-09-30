@@ -61,6 +61,6 @@ When adding a `## Test Contract` section to a spec, use `- [ ]` checkboxes. One 
 
 ## Related slices
 
-- [[_slices/slice-types]] — the only slice that writes `musubi/types/`, `musubi/models.py`.
-- [[_slices/slice-plane-episodic]], [[_slices/slice-plane-curated]], [[_slices/slice-plane-artifact]], [[_slices/slice-plane-concept]], [[_slices/slice-plane-thoughts]] — plane-specific slices.
-- [[_slices/slice-qdrant-layout]] — collection bootstrap.
+- `slice-types` — the only slice that writes `musubi/types/`, `musubi/models.py`.
+- `slice-plane-episodic`, `slice-plane-curated`, `slice-plane-artifact`, `slice-plane-concept`, `slice-plane-thoughts` — plane-specific slices.
+- `slice-qdrant-layout` — collection bootstrap.

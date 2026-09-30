@@ -75,11 +75,11 @@ The Obsidian architecture vault becomes a first-class directory inside the monor
 - **Mixed commit graph.** A "fix typo in 05-retrieval" commit lives alongside "feat(retrieve): hybrid scoring." Mitigation: Conventional Commits with `docs:` vs `feat:`/`fix:` prefixes already separates them visually in `git log --oneline`.
 - **Obsidian plugin churn could noise the repo.** On-save linting can produce frontmatter key-reorder commits if plugin versions drift between machines. Mitigation: the vault's obsidian-linter config sorts keys deterministically; any drift shows up in a PR diff and is easy to catch. If noise becomes a problem, we add a pre-commit hook that strips the linter's autosort from non-docs-changing PRs.
 - **Attachments could bloat history.** `_attachments/` today is small; if agents start dropping large screenshots or recordings, we move that dir to git-lfs. Tracked as a follow-up.
-- **Nested `.git`-inside-vault hazard during the migration.** Obsidian was previously backed by its own git repo; during the move that nested `.git/` was removed before committing. Documented in [[00-index/work-log]].
+- **Nested `.git`-inside-vault hazard during the migration.** Obsidian was previously backed by its own git repo; during the move that nested `.git/` was removed before committing. Documented in `work-log`.
 
 ### Neutral
 
-- **`_inbox/locks/` stays in-repo but becomes a secondary mechanism.** Primary coordination moves to **GitHub Issues** (one issue per active slice, assignee = owner, `status:*` labels) — see [`docs/AGENT-PROCESS.md`](../../AGENT-PROCESS.md) (one level up from the vault) for the full model. Agents still drop a `.lock` file for belt-and-braces but the authoritative lock is the Issue assignee.
+- **`_inbox/locks/` stays in-repo but becomes a secondary mechanism.** Primary coordination moves to **GitHub Issues** (one issue per active slice, assignee = owner, `status:*` labels) — see `docs/AGENT-PROCESS.md` (retired with the slice workflow, 2026-09-30) (one level up from the vault) for the full model. Agents still drop a `.lock` file for belt-and-braces but the authoritative lock is the Issue assignee.
 - **Nothing about the vault's content model changes.** All wikilinks remain relative; section numbering stays; frontmatter schema is unchanged. The move is purely where-it-lives.
 
 ## Alternatives considered
@@ -103,7 +103,7 @@ Rejected. Specs are load-bearing and agents need to write to `_slices/<slice>.md
 ## References
 
 - [[13-decisions/0015-monorepo-supersedes-multi-repo]] — updated to note this follow-on.
-- [`docs/AGENT-PROCESS.md`](../../AGENT-PROCESS.md) — multi-agent concurrency model (Issues as the lock board). *Outside the vault; Obsidian wikilinks don't resolve it.*
+- `docs/AGENT-PROCESS.md` (retired with the slice workflow, 2026-09-30) — multi-agent concurrency model (Issues as the lock board). *Outside the vault; Obsidian wikilinks don't resolve it.*
 - Root `CLAUDE.md` (repo root) — agent entry point; points at `docs/Musubi/` for specs.
 - [[00-index/agent-guardrails]], [[00-index/agent-handoff]] — unchanged in content; paths updated to reflect the new layout.
-- Migration commit: see [[00-index/work-log#2026-04-18 — Vault moved into the monorepo]].
+- Migration commit: see `work-log` (2026-04-18 — Vault moved into the monorepo).

@@ -155,7 +155,7 @@ Roadmap detail lives in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).
 
 This is a personal project that's been opened up for others to follow along, fork, and riff on. Contributions are welcome but the bar is: opened issue → discussion → PR. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and conventions.
 
-The internal design is captured in an Obsidian-style vault at [`docs/Musubi/`](docs/Musubi/). It's readable as-is on GitHub but renders best in Obsidian. Every architectural decision has an ADR; every working module has a `slice` spec with a Test Contract.
+The internal design is captured in an Obsidian-style vault at [`docs/Musubi/`](docs/Musubi/). It's readable as-is on GitHub but renders best in Obsidian. Every architectural decision has an ADR, and each architecture spec carries a Test Contract naming the tests that prove it.
 
 ## Security
 

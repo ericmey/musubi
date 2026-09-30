@@ -59,7 +59,7 @@ Each plane has its own Qdrant collection, its own retention rules, its own retri
 Trade-offs:
 
 - Cross-plane joins at query time (blended) add complexity vs a single collection. Handled via retrieval orchestration, not at storage level.
-- Migration takes a phase of work ([[11-migration/phase-4-planes]]).
+- Migration takes a phase of work (`phase-4-planes`).
 
 ## Links
 

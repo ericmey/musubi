@@ -14,7 +14,7 @@ The Musubi trajectory in phases, with rough targets and unknowns called out.
 
 ## v1: Solid Base (ships ~Q3 2026)
 
-Scope covered in [[11-migration/index]]. Recap:
+Scope covered in `index`. Recap:
 
 - Three-plane architecture (episodic / curated / concept) + artifacts.
 - Obsidian vault as curated source of truth.

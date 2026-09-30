@@ -49,4 +49,4 @@ Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong
 
 ## Related slices
 
-- [[_slices/slice-ops-ansible]], [[_slices/slice-ops-compose]].
+- `slice-ops-ansible`, `slice-ops-compose`.

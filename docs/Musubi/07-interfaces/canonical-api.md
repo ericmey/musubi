@@ -346,7 +346,7 @@ tests.
 | `blended` | Deep without the reranker — when you need lineage + cross-plane but not the rerank cost. | yes | `(matured, promoted)` |
 | `recent` | Time-ordered scroll, no ranking. Newest-first. Used by `musubi_recent`. | no (ignored if provided) | `(provisional, matured, promoted)` |
 
-`mode='recent'` additionally accepts `since` (epoch-seconds floor) and `tags` (AND filter). Per [[_slices/slice-retrieve-recent]]. Cross-modal fanout (`<tenant>/*/episodic`) works the same way as for ranked modes.
+`mode='recent'` additionally accepts `since` (epoch-seconds floor) and `tags` (AND filter). Per `slice-retrieve-recent`. Cross-modal fanout (`<tenant>/*/episodic`) works the same way as for ranked modes.
 
 #### Cross-plane retrieve: one call, not N
 

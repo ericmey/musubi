@@ -5,7 +5,7 @@ tags: [embeddings, migration, named-vectors, section/migration, status/complete,
 type: migration-phase
 status: complete
 updated: 2026-04-17
-up: "[[11-migration/index]]"
+up: "`index`"
 reviewed: false
 ---
 # Re-embedding
@@ -128,7 +128,7 @@ BGE-M3 → something with a different dimension (say, 768 → 1024) is fine — 
 
 ## Reranker swap
 
-Reranker doesn't store vectors; it runs at query time. Swapping the reranker is "deploy new container, flip config" — no data change. See [[11-migration/phase-3-reranker]] for the pattern.
+Reranker doesn't store vectors; it runs at query time. Swapping the reranker is "deploy new container, flip config" — no data change. See `phase-3-reranker` for the pattern.
 
 ## LLM swap
 
