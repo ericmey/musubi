@@ -158,7 +158,7 @@ async def test_control_successful_sparse() -> None:
 async def test_control_successful_blended(monkeypatch: pytest.MonkeyPatch) -> None:
     """Healthy blended retrieval returns hits and NO warnings."""
     query = BlendedRetrievalQuery(
-        namespace="test/blended", query_text="test", mode="blended", planes=["episodic"]
+        namespace="test/ns", query_text="test", mode="blended", planes=["episodic"]
     )
 
     async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
@@ -212,7 +212,7 @@ async def test_c5_hybrid_timeout() -> None:
 
 async def test_h11_blended_all_plane_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     query = BlendedRetrievalQuery(
-        namespace="test/blended", query_text="test", mode="blended", planes=["episodic", "curated"]
+        namespace="test/ns", query_text="test", mode="blended", planes=["episodic", "curated"]
     )
 
     async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
@@ -281,7 +281,7 @@ async def test_m15_rerank_failure_silent_fallback() -> None:
 
 async def test_partial_plane_failure_surfaces_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     query = BlendedRetrievalQuery(
-        namespace="test/blended", query_text="test", mode="blended", planes=["episodic", "curated"]
+        namespace="test/ns", query_text="test", mode="blended", planes=["episodic", "curated"]
     )
     calls = {"n": 0}
 
@@ -332,7 +332,7 @@ async def test_healthy_zero_match_has_no_warning(monkeypatch: pytest.MonkeyPatch
     """Contract §2: a healthy no-match is `200 OK` with `warnings == []`. Today blended appends the
     free-text 'no hits in any plane' warning, marking a healthy empty result as degraded."""
     query = BlendedRetrievalQuery(
-        namespace="test/blended", query_text="test", mode="blended", planes=["episodic"]
+        namespace="test/ns", query_text="test", mode="blended", planes=["episodic"]
     )
 
     async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:

@@ -51,9 +51,13 @@ Empty at first. Phase 6 populates it.
 
 Empty at first. Artifact upload API (already stubbed) starts writing here.
 
-### Blended namespace
+### Multi-plane retrieval
 
-Introduce `eric/_shared/blended` namespace addressing that fans out to multiple plane collections. See [[05-retrieval/blended]]. Implementation: a retrieve-time expansion, not a physical collection.
+The original phase plan proposed `eric/_shared/blended` as a virtual address.
+The current public API does not support that address. Use a two-segment
+namespace and an explicit `planes` list for one presence, or a scoped wildcard
+for multiple presences. Core expands the request at retrieval time; there is no
+physical blended collection. See [[05-retrieval/blended]].
 
 ### Capture routing
 
@@ -83,8 +87,8 @@ Keep `musubi_episodic_v2` as a read-only fallback for one week. If bugs surface,
 > thought_send to livekit-voice: "hello"
 > thought_check as livekit-voice: (see the thought)
 
-# Blended retrieve
-> retrieve from eric/_shared/blended: "restart livekit"
+# Blended retrieve through the current public API
+> POST /v1/retrieve {"namespace":"eric/*","planes":["episodic","curated"],"mode":"blended","query_text":"restart livekit"}
 # Results should span episodic (for past attempts) + curated (for runbook; if any).
 ```
 
@@ -95,5 +99,5 @@ Keep `musubi_episodic_v2` as a read-only fallback for one week. If bugs surface,
 ## Pitfalls
 
 - **Thought payload differences.** POC thoughts have `from`/`to` as plain strings; v1 normalizes to presence names like `eric/claude-code`. Migration must canonicalize.
-- **Blended namespace expansion is retrieval-only.** Never materialize a `blended` collection; it's a virtual address.
+- **Multi-plane expansion is retrieval-only.** Never materialize a `blended` collection; the old virtual-address proposal was not the public API that shipped.
 - **Deleting old collections too early.** Wait at least a week with fallback available.

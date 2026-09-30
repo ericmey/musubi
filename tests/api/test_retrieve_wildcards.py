@@ -81,6 +81,16 @@ def _seed_episodic(plane: EpisodicPlane, namespace: str, content: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_blended_name_is_valid_presence_but_not_plane() -> None:
+    targets, err = _resolve_targets("team/blended", ["episodic"])
+    assert err is None
+    assert targets == [("team/blended/episodic", "episodic")]
+
+    targets, err = _resolve_targets("team/voice/blended", None)
+    assert targets == []
+    assert err is not None and "unknown plane" in err
+
+
 def test_wildcard_in_tenant_segment_3seg_accepted() -> None:
     targets, err = _resolve_targets("*/voice/episodic", None)
     assert err is None

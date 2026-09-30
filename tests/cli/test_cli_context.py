@@ -53,6 +53,15 @@ def _context_reply() -> dict[str, object]:
     }
 
 
+@pytest.mark.httpx_mock(assert_all_requests_were_expected=False)
+def test_context_requires_explicit_namespace(runner: CliRunner, httpx_mock: HTTPXMock) -> None:
+    result = runner.invoke(app, ["context", "--token", _TOKEN])
+    assert result.exit_code == 2
+    # Rich truncates the missing-option text at narrow CI terminal widths.
+    # The provided token leaves namespace as the only required missing input.
+    assert not httpx_mock.get_requests()
+
+
 def test_context_posts_to_api_and_renders_grouped_output(
     runner: CliRunner,
     httpx_mock: HTTPXMock,
@@ -92,7 +101,16 @@ def test_context_json_flag_emits_raw_response(
     httpx_mock.add_response(method="POST", url=f"{_BASE}/context", json=_context_reply())
     result = runner.invoke(
         app,
-        ["context", "--query", "Vice LoRA", "--token", _TOKEN, "--json"],
+        [
+            "context",
+            "--namespace",
+            "yua/command-chair",
+            "--query",
+            "Vice LoRA",
+            "--token",
+            _TOKEN,
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -120,7 +138,17 @@ def test_context_nonjson_renders_warnings(runner: CliRunner, httpx_mock: HTTPXMo
     httpx_mock.add_response(method="POST", url=f"{_BASE}/context", json=_degraded_reply())
     result = runner.invoke(
         app,
-        ["context", "--query", "Vice LoRA", "--planes", "episodic", "--token", _TOKEN],
+        [
+            "context",
+            "--namespace",
+            "yua/command-chair",
+            "--query",
+            "Vice LoRA",
+            "--planes",
+            "episodic",
+            "--token",
+            _TOKEN,
+        ],
     )
     assert result.exit_code == 0, result.output
     if "plane_timeout_episodic" not in result.output:
@@ -135,7 +163,16 @@ def test_context_json_preserves_warnings(runner: CliRunner, httpx_mock: HTTPXMoc
     httpx_mock.add_response(method="POST", url=f"{_BASE}/context", json=_degraded_reply())
     result = runner.invoke(
         app,
-        ["context", "--query", "Vice LoRA", "--token", _TOKEN, "--json"],
+        [
+            "context",
+            "--namespace",
+            "yua/command-chair",
+            "--query",
+            "Vice LoRA",
+            "--token",
+            _TOKEN,
+            "--json",
+        ],
     )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output).get("warnings") == ["plane_timeout_episodic"]

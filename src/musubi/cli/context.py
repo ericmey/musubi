@@ -23,9 +23,9 @@ def context(
         typer.Option(
             "--namespace",
             "-n",
-            help="Two- or three-segment namespace, e.g. yua/command-chair.",
+            help="Required two- or three-segment namespace, e.g. my-team/my-agent.",
         ),
-    ] = "yua/command-chair",
+    ],
     query_text: Annotated[
         str,
         typer.Option("--query", "-q", help="Moment/task to align context against."),

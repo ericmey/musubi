@@ -251,7 +251,7 @@ async def test_partial_failure_warning_is_structured_and_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     query = BlendedRetrievalQuery(
-        namespace="test/blended", query_text="q", mode="blended", planes=["episodic", "curated"]
+        namespace="test/ns", query_text="q", mode="blended", planes=["episodic", "curated"]
     )
     calls = {"n": 0}
 

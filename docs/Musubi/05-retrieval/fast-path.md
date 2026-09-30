@@ -110,7 +110,7 @@ Fast Talker call shape:
 ```python
 results = await musubi.retrieve(
     RetrievalQuery(
-        namespace="eric/livekit-voice/blended",     # see blended.md — blended scope
+        namespace="eric/livekit-voice/episodic",  # one concrete target
         query_text=user_utterance,
         mode="fast",
         limit=5,

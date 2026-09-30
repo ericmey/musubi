@@ -204,10 +204,14 @@ recorded in [[13-decisions/0038-network-protect-read-only-ops-endpoints]].
 
 Retrieval is trickier — a query might span namespaces (blended). Rule:
 
-- The `namespace` in the query (the address) determines access.
-- If the namespace is a blended address (`eric/_shared/blended`), the token must have read access to the underlying planes it expands to (see [[05-retrieval/blended]]).
+- The `namespace` in the query names a concrete target or a scoped wildcard.
+- For multi-plane or wildcard retrieval, the token must have read access to each
+  concrete namespace selected by the request. Core checks every expanded target
+  before querying it (see [[05-retrieval/blended]]).
 
-For opaque clients, the simplest pattern: token has `eric/_shared/blended:r` and Core handles the fanout. But the underlying plane reads are also scope-checked internally — defense in depth.
+For example, a client reading `eric/_shared/curated` and
+`eric/_shared/concept` needs read scope for both. The old
+`eric/_shared/blended` virtual address is not a public retrieval address.
 
 ## Refresh tokens
 

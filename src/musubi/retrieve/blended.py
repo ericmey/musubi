@@ -14,7 +14,7 @@ from musubi.embedding.tei import TEIRerankerClient
 from musubi.retrieve.deep import DeepResult, DeepRetrievalLLM, RetrievalQuery, run_deep_retrieve
 from musubi.retrieve.scoring import ScoredHit
 from musubi.retrieve.warnings import RetrievalWarning, plane_error, plane_timeout
-from musubi.types.common import Err, LifecycleState, Ok, Result
+from musubi.types.common import Err, LifecycleState, Ok, Result, validate_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -94,26 +94,50 @@ async def run_blended_retrieve(
     llm: DeepRetrievalLLM | None = None,
 ) -> Result[BlendedResult, BlendedRetrievalError]:
     """Execute blended retrieval across planes."""
+    # The public API treats tenant/blended as a literal presence. This older
+    # internal scope means cross-presence expansion only when the caller
+    # explicitly supplies the presences; no household list is assumed.
+    legacy_scope = query.namespace.endswith("/blended")
+    if legacy_scope and not query.presences:
+        return Err(
+            error=BlendedRetrievalError(
+                code="invalid_collections",
+                detail="The /blended namespace scope requires explicit presences; use a scoped wildcard retrieve through the public API.",
+            )
+        )
+    if legacy_scope:
+        parts = query.namespace.split("/")
+        try:
+            if len(parts) != 2:
+                raise ValueError("legacy blended scope must be tenant/blended")
+            for presence in query.presences or ():
+                validate_namespace(f"{parts[0]}/{presence}/episodic")
+        except ValueError as exc:
+            return Err(
+                error=BlendedRetrievalError(
+                    code="invalid_collections",
+                    detail=f"Invalid explicit blended presence: {exc}",
+                )
+            )
+
     # 1. Expand namespace
     expanded_namespaces: list[tuple[str, str]] = []
-    if query.namespace.endswith("/blended"):
+    if legacy_scope:
         tenant = query.namespace.split("/")[0]
-        presences = query.presences or ["claude-code", "claude-desktop", "livekit-voice"]
         if "curated" in query.planes:
             expanded_namespaces.append(("curated", f"{tenant}/_shared/curated"))
         if "concept" in query.planes:
             expanded_namespaces.append(("concept", f"{tenant}/_shared/concept"))
         if "episodic" in query.planes:
-            for p in presences:
-                expanded_namespaces.append(("episodic", f"{tenant}/{p}/episodic"))
+            for presence in query.presences or ():
+                expanded_namespaces.append(("episodic", f"{tenant}/{presence}/episodic"))
         if "artifact" in query.planes:
             expanded_namespaces.append(("artifact", f"{tenant}/_shared/artifact"))
     else:
-        # Standard fallback if not /blended
         parts = query.namespace.split("/")
         base_ns = "/".join(parts[:2]) if len(parts) >= 3 else query.namespace
-        for p in query.planes:
-            expanded_namespaces.append((p, f"{base_ns}/{p}"))
+        for plane in query.planes:
+            expanded_namespaces.append((plane, f"{base_ns}/{plane}"))
 
     # 2. Call run_deep_retrieve per plane/namespace
     coros = []
