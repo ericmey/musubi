@@ -15,13 +15,13 @@ all:
       hosts:
         ansible-controller:
           ansible_host: "{{ ansible_control_host | default('localhost') }}"
-          ansible_user: "{{ operator_ssh_user | mandatory }}"
+          ansible_user: "{{ operator_ssh_user | default('', true) or undef(hint='operator_ssh_user is required in the private inventory') }}"
           ansible_connection: "{{ ansible_control_connection | default('local') }}"
     musubi:
       hosts:
         musubi-workload:
           ansible_host: "{{ musubi_host }}"
-          ansible_user: "{{ operator_ssh_user | mandatory }}"
+          ansible_user: "{{ operator_ssh_user | default('', true) or undef(hint='operator_ssh_user is required in the private inventory') }}"
           ansible_become: true
           musubi_hostname: "{{ musubi_host }}"
           musubi_core_bind: "{{ musubi_ip }}"
