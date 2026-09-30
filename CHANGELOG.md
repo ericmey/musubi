@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.4](https://github.com/sourceblender/musubi/compare/v1.27.3...v1.27.4) (2026-09-30)
+
+
+### Documentation
+
+* **roadmap:** retire the stale rolling project plans ([#852](https://github.com/sourceblender/musubi/issues/852)) ([59f0dc6](https://github.com/sourceblender/musubi/commit/59f0dc63b5f4a18538ab9fa6d870bb886110c1d0))
+
 ## [1.27.3](https://github.com/sourceblender/musubi/compare/v1.27.2...v1.27.3) (2026-09-30)
 
 
