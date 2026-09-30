@@ -374,9 +374,7 @@ async def test_legacy_blended_namespace_fails_instead_of_using_house_presences()
         assert "wildcard" in res.error.detail
         mock_deep.assert_not_called()
 
-        empty_query = BlendedRetrievalQuery(
-            namespace="eric/blended", query_text="Q", presences=[]
-        )
+        empty_query = BlendedRetrievalQuery(namespace="eric/blended", query_text="Q", presences=[])
         empty_res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), empty_query
         )
