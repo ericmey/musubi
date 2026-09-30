@@ -37,7 +37,7 @@ body:
     id: scope
     attributes:
       label: Scope
-      description: Which module(s) would this touch? Would it be additive or a breaking change? Does it need a new slice spec?
+      description: Which module(s) would this touch? Would it be additive or a breaking change? Does it need a new or changed spec?
       placeholder: |
         - Adds a `source_adapter` field to `Thought`.
         - Touches `src/musubi/types/thought.py`, `src/musubi/planes/thoughts/plane.py`, the canonical OpenAPI.
@@ -47,7 +47,7 @@ body:
     id: willing_to_implement
     attributes:
       label: Implementation willingness
-      description: Would you be open to writing the slice yourself, or are you asking someone else to pick it up?
+      description: Would you be open to implementing it yourself, or are you asking someone else to pick it up?
       options:
         - "Yes, I'd like to implement this."
         - "Maybe — depends on complexity / feedback."

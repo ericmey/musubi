@@ -14,12 +14,12 @@ labels: ["spec"]
 
 Prose description of the change. Include the "why" — what drove this, what constraint or discovery forced it.
 
-## Impact on slices
+## Impact on code and tests
 
-Which slices' `owns_paths`, Test Contracts, or `depends-on` graphs are affected?
+Which modules, Test Contract bullets or open issues does this change affect?
 
-- `slice-<id>` — impact description
-- `slice-<id>` — impact description
+- `src/musubi/<module>/` or `#<issue>`: impact description
+- `test_<name>`: added / changed / removed
 
 ## Proposed by
 

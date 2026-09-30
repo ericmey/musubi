@@ -6,8 +6,6 @@ These are Claude Code's `.claude/skills/<name>/SKILL.md` definitions — slash-c
 
 | Skill | Purpose | Mirror in `.agents/skills/` |
 |---|---|---|
-| `pick-slice` | Find a `status:ready` slice, claim it via the Dual-update rule, branch, open draft PR. | ✓ |
-| `handoff` | Verify DoD + Test Contract closure, flip state to `in-review`, mark PR ready. | ✓ |
 | `spec-check` | Run vault-hygiene gates (`make agent-check`) + generate the Test Contract coverage matrix for the PR. | ✓ |
 
 ## Mirror pattern with `.agents/skills/`
@@ -33,7 +31,7 @@ When you edit one skill, you edit both. Pair edits:
 
 1. Remove (or rename) in both directories in the same commit.
 2. Update both README tables.
-3. If any agent definition or entry doc references the skill by name (`musubi-slice-worker.md` invokes the `pick-slice` skill, for example), update those references.
+3. If any agent definition or entry doc references the skill by name (for example, `CLAUDE.md` lists the `spec-check` skill), update those references.
 
 ## Why not a single source-of-truth + rendering script?
 
@@ -48,7 +46,7 @@ A lightweight drift check could be added to `docs/Musubi/_tools/check.py` in the
 ## Where the authoritative rules live
 
 - Universal rules every agent on the project follows, regardless of skill invocation: `docs/Musubi/00-index/agent-guardrails.md`.
-- Multi-agent coordination: `docs/AGENT-PROCESS.md`.
+- Contributor contract and workflow: `AGENTS.md`.
 - Per-tool entry point: `CLAUDE.md` (Claude Code), `AGENTS.md` (everyone else), `GEMINI.md` (Gemini CLI), `.cursor/rules/musubi.mdc` (Cursor).
 
 Skills implement *workflows*, not *rules*. If a skill's output would contradict the guardrails, the guardrails win.

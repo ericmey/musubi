@@ -161,7 +161,8 @@ you're blocked on someone else: unassign and say why.
 ## Definition of Done
 
 - [ ] Every Test Contract bullet is in closure state 1, 2 or 3.
-- [ ] Coverage ≥ 85 % on changed files (≥ 90 % under `planes/**` and `retrieve/**`).
+- [ ] Coverage gates met (≥ 85 % on changed files as a floor; per-module gates in
+  [definition-of-done.md](docs/Musubi/00-index/definition-of-done.md)).
 - [ ] `make check` and `make agent-check` green; `gh pr checks` green.
 - [ ] Spec updated in the same PR if behaviour changed (`spec-update:` trailer).
 - [ ] PR body starts with `Closes #<n>.` (or `No tracking Issue: <reason>`) and describes what shipped.

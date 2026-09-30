@@ -33,7 +33,7 @@ test:
 test-cov:
 	uv run pytest --cov=musubi --cov-report=term-missing --cov-fail-under=85
 
-# Full gate for slice-worker handoff. Runs fmt (check-only) + lint + typecheck + test + coverage.
+# Full gate before handoff. Runs fmt (check-only) + lint + typecheck + test + coverage.
 check:
 	uv run ruff format --check .
 	uv run ruff check .

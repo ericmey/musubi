@@ -1,61 +1,46 @@
 <!--
-Close the related Issue by putting `Closes #<n>` in the body (GitHub resolves it on merge).
-If this PR changes a spec in the same commit set, add the `spec-update: <doc-path>` trailer
-to the relevant commit.
+First line of the body: `Closes #<n>.` (GitHub only links on Closes/Fixes/Resolves),
+or `No tracking Issue: <one-sentence reason>` for a chore/docs change with no issue.
+If this PR changes a spec, add the `spec-update: <doc-path>` trailer to that commit.
 -->
 
-## Slice
-
-- ID: `slice-<id>`
-- Issue: #
-- Spec(s) implemented: `docs/Musubi/<NN>/<doc>.md#<section>` (one per line)
+Closes #
 
 ## Summary
 
-<One or two sentences — what landed, why. The "why" matters more than the "what"; the diff shows the what.>
+<One or two sentences: what landed and why. The diff shows the what; the why matters more.>
 
-## Test Contract coverage matrix (required)
+Spec(s) implemented or changed: `docs/Musubi/<NN>/<doc>.md#<section>` (one per line, or "none")
 
-Per [agent-guardrails.md §Test Contract Closure Rule](../docs/Musubi/00-index/agent-guardrails.md#test-contract-closure-rule), every bullet in the spec's `## Test Contract` section must be in one of three states: **passing test** / **skipped with reason** / **declared out-of-scope in slice work log**. Fill in one row per bullet. No silent omissions.
+## Test Contract coverage (required when a spec is implemented)
 
-**Generate the matrix mechanically:**
-
-```bash
-make tc-coverage SLICE=<your-slice-id>     # emits the table below; paste it in
-```
-
-The tool at `docs/Musubi/_tools/tc_coverage.py` parses every Test Contract bullet in your slice's linked specs and classifies each. Three states block merge:
-
-- `✗ missing` — write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log.
-- `✗ unparseable` — the spec states a numbered obligation that is not `test_name`-shaped, so the gate **cannot check it**. Rewrite it as a backticked test name or move it out of the Test Contract.
-- `✗ no-test-contract` — a linked spec has no `## Test contract` section at all. Declare the contract or unlink the spec.
-
-Check the `Machine-checkable: N/M` line, not just the state counts: if `N < M` the gate examined less than the specs stated. The last two states were silently dropped before Issue #669, which let a `✓ Closure Rule satisfied` be earned over a fraction of the contract.
+Per the Test Contract Closure Rule in [AGENTS.md](../AGENTS.md), every bullet in the spec's
+`## Test Contract` is in exactly one state: **passing test**, **skipped with a reason naming the
+follow-up issue**, or **declared out of scope here**. One row per bullet. No silent omissions.
 
 | # | Bullet | State | Evidence |
 |---|---|---|---|
 | 1 | `test_foo_does_bar` | ✓ passing | `tests/module/test_foo.py:42` |
-| 2 | `test_baz_edge_case` | ⏭ skipped (deferred to `slice-xyz`: reason) | `tests/module/test_foo.py:110` |
-| 3 | `test_out_of_scope_behavior` | ⊘ out-of-scope | declared in slice work log |
+| 2 | `test_baz_edge_case` | ⏭ skipped (deferred to #123: reason) | `tests/module/test_foo.py:110` |
+| 3 | `test_out_of_scope_behavior` | ⊘ out of scope | reason + follow-up issue, stated here |
 
 ## Definition of Done
 
-- [ ] Slice frontmatter: `status: in-progress → in-review`, `owner` set.
-- [ ] First commit in branch history is the test file (`test(...)` commit precedes any `feat(...)`).
-- [ ] `make check` passes (ruff format --check + ruff check + mypy --strict + pytest + coverage `fail_under=85`).
-- [ ] `make agent-check` passes (vault frontmatter + slice DAG + spec hygiene via `docs/Musubi/_tools/check.py`).
-- [ ] Import discipline respected (`sdk` → `types` only; `adapters` → `sdk+types` only; `api` composes `planes`/`retrieve`/`lifecycle`).
-- [ ] No edits to `src/musubi/types/`, `src/musubi/api/`, `openapi.yaml`, or `proto/` unless this slice owns them.
-- [ ] Spec `status:` updated if prose changed. Commit trailer `spec-update: <doc-path>` present.
-- [ ] Method-ownership honoured — no methods deferred to a slice whose `owns_paths` wouldn't contain their implementation (per [agent-guardrails.md §Method-ownership rule](../docs/Musubi/00-index/agent-guardrails.md#method-ownership-rule)).
-- [ ] Slice note's `## Work log` has a handoff entry describing what landed and naming any deferred Test Contract bullets + their follow-up home.
-- [ ] If this realises a spec: an entry in `docs/Musubi/00-index/work-log.md` too.
+- [ ] First commit on the branch is the test file (`test(...)` before any `feat(...)`).
+- [ ] `make check` passes (ruff format --check + ruff check + mypy --strict + pytest + coverage).
+- [ ] `make agent-check` passes (docs frontmatter, spec Test Contracts, wikilinks).
+- [ ] `gh pr checks` green.
+- [ ] Import discipline respected (`sdk` → `types` only; `adapters` → `sdk` + `types` only; `api` composes `planes`/`retrieve`/`lifecycle`).
+- [ ] No changes to `src/musubi/api/`, `openapi.yaml` or `proto/` without an ADR (additive) or a version bump (breaking).
+- [ ] Spec updated in this PR if behaviour changed (`spec-update:` trailer).
+- [ ] The body above describes what shipped, not the original plan.
 
 ## Agent attribution
 
-Agent(s) that worked on this PR (one per line): `<agent-id>` (e.g., `claude-code-opus`, `codex-gpt5`, `gemini-3-1`). Include commit-author / co-author mapping so human reviewers know what tool shipped what.
+Agent(s) that worked on this PR, one per line (e.g. `claude-code-opus`, `codex-gpt5`, `gemini-3-1`),
+with the commit-author mapping so reviewers know which tool shipped what.
 
 ## Risk + rollback
 
 - Risk level: low / medium / high (one-line justification).
-- Rollback plan: `git revert <sha>` is sufficient / requires also doing X / migration needed.
+- Rollback plan: `git revert <sha>` is sufficient / also requires X / migration needed.

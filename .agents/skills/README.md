@@ -6,8 +6,6 @@ These are the skill definitions non-Claude coding agents discover at session sta
 
 | Skill | Purpose | Mirror in `.claude/skills/` |
 |---|---|---|
-| `pick-slice` | Find a `status:ready` slice, claim it via the Dual-update rule, branch, open draft PR. | ✓ |
-| `handoff` | Verify DoD + Test Contract closure, flip state to `in-review`, mark PR ready. | ✓ |
 | `spec-check` | Run vault-hygiene gates (`make agent-check`) + generate the Test Contract coverage matrix for the PR. | ✓ |
 
 ## Mirror pattern with `.claude/skills/`
@@ -35,7 +33,7 @@ Current divergence between pairs is 1 line each (tool-specific reference). Maint
 ## Where the authoritative rules live
 
 - Universal rules: `docs/Musubi/00-index/agent-guardrails.md`.
-- Multi-agent coordination: `docs/AGENT-PROCESS.md`.
+- Contributor contract and workflow: `AGENTS.md`.
 - Non-Claude entry point: `AGENTS.md` at the repo root. (Gemini CLI: `GEMINI.md`. Cursor: `.cursor/rules/musubi.mdc`. Claude Code: `CLAUDE.md`.)
 
 Skills implement *workflows*, not *rules*. Guardrails win any conflict.

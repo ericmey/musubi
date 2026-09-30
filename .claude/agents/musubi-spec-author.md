@@ -41,7 +41,7 @@ Plus the body:
 - One H1 matching `title`.
 - A one-line intent sentence immediately under H1.
 - Content sections (Context, Decision, Consequences, Alternatives — for ADRs; domain-specific sections for specs).
-- A **Test Contract** section if the spec is implementation-bearing. This is where the slice agent will translate bullets to pytest functions.
+- A **Test Contract** section if the spec is implementation-bearing. This is where the implementer translates bullets into pytest functions.
 - A **References** / **Links** section with wikilinks to every adjacent spec you used.
 
 ## Hard rules
@@ -52,7 +52,7 @@ Plus the body:
 - **Don't overturn an accepted ADR in a spec**. If you need to reverse a decision, that is itself a new ADR with `supersedes:` pointing at the old one.
 - **Present-tense, declarative prose.** Not "we should consider maybe doing X" — either "X is the decision" or it's not ready to be a spec yet (→ write a research-question instead).
 - **Cite external sources** with regular markdown links (not wikilinks). ArXiv, RFCs, vendor docs, blog posts.
-- **If you're not sure which section a new spec belongs to**, put it in `_inbox/research/` as a research-question first. Specs under `01-13/` need a known home.
+- **If you're not sure which section a new spec belongs to**, open an issue proposing where it belongs before writing it. Specs under `01-13/` need a known home.
 
 ## When drafting an ADR
 
