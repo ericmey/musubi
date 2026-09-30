@@ -256,14 +256,16 @@ ansible-playbook \
 curl -sS http://musubi.example.local:8100/v1/ops/status | jq .
 
 # Inspect the upgrade log:
-ssh ericmey@musubi.example.local \
+ssh "${OPERATOR_SSH_USER:?set operator SSH user}@musubi.example.local" \
  'sudo tail -1 /var/log/musubi/upgrade-history.jsonl | jq .'
 
 # Live consumer blast-radius smoke. Run once before deploy with
 # MUSUBI_CONSUMER_PHASE=pre-deploy and again here with post-deploy.
 # Set MUSUBI_CONSUMER_CHECKS_FILE to a private TSV with one
 # label<TAB>real-consumer-command per line. Each command must exercise its
-# consumer, not only curl Musubi. Missing/empty files and no-ops fail closed.
+# consumer, not only curl Musubi. A test command that skips every case
+# and exits zero is not a valid check; require an executed live case.
+# Missing/empty files and obvious no-ops fail closed.
 MUSUBI_CONSUMER_PHASE=post-deploy \
 MUSUBI_CONSUMER_CHECKS_FILE="$HOME/.musubi-secrets/consumer-checks.tsv" \
 deploy/smoke/check_consumers.sh

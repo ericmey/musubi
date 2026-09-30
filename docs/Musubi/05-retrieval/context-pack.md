@@ -217,3 +217,5 @@ running. The private TSV contains one `label<TAB>command` per live consumer;
 each command must exercise that consumer, not just Core health. Missing, empty,
 placeholder and failing checks stop the gate. If any fail after deploy, roll back
 the versioned image pin before continuing adoption.
+Test runners that skip all live cases and exit zero do not count as consumer
+checks; the command must assert that at least one live case actually ran.
