@@ -41,7 +41,6 @@ class BlendedRetrievalQuery:
     planes: Sequence[str] = ("curated", "concept", "episodic")
     include_lineage: bool = True
     state_filter: Sequence[LifecycleState] | None = None
-    presences: Sequence[str] | None = None
 
 
 # Provenance weights for resolving duplicate ties (curated > concept > episodic-matured > episodic-provisional)
@@ -94,8 +93,10 @@ async def run_blended_retrieve(
     llm: DeepRetrievalLLM | None = None,
 ) -> Result[BlendedResult, BlendedRetrievalError]:
     """Execute blended retrieval across planes."""
-    # The public API already rejects /blended as a namespace plane. Refuse it here too so
-    # direct callers cannot silently search a house-specific list of presences.
+    # The public API rejects a three-segment /blended plane; a two-segment
+    # tenant/blended is a valid literal presence there. Direct callers of this
+    # older function cannot distinguish that from the retired expansion, so
+    # refuse the ambiguous form rather than silently search house presences.
     if query.namespace.endswith("/blended"):
         return Err(
             error=BlendedRetrievalError(

@@ -75,7 +75,6 @@ class RetrievalQuery(BaseModel):
     planes: list[str] = Field(default_factory=lambda: ["curated", "concept", "episodic"])
     include_lineage: bool = True
     include_archived: bool = False
-    presences: list[str] | None = None
     state_filter: list[LifecycleState] | None = None
     #: Inclusive epoch-seconds floor for ``mode="recent"``. Ignored by
     #: other modes (they rank with their own recency-weighting). Per
@@ -551,7 +550,6 @@ async def _run_single(
                 planes=legs_planes,
                 include_lineage=parsed_query.include_lineage,
                 state_filter=parsed_query.state_filter,
-                presences=parsed_query.presences,
             )
 
             # Blended timeout (5s)
