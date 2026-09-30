@@ -408,23 +408,18 @@ def test_settings_frozen_after_load(minimal_env: Path, _reset_cache: None) -> No
 
 
 def test_no_module_imports_os_environ_for_config() -> None:
-    """Smoke: ``os.environ`` must not be touched to read config outside musubi/config.py."""
-    import importlib
-    import pkgutil
-
+    """Scan source without importing optional adapters or running module side effects."""
     import musubi
 
     banned_modules: list[str] = []
-    for mod_info in pkgutil.walk_packages(musubi.__path__, prefix="musubi."):
-        if mod_info.name in {"musubi.config", "musubi.settings"}:
-            continue
-        module = importlib.import_module(mod_info.name)
-        src = getattr(module, "__file__", None)
-        if not src:
+    package_root = Path(musubi.__file__).parent
+    for src in package_root.rglob("*.py"):
+        module_name = "musubi." + ".".join(src.relative_to(package_root).with_suffix("").parts)
+        if module_name in {"musubi.config", "musubi.settings"}:
             continue
         text = Path(src).read_text(encoding="utf-8")
         if "os.environ" in text or "os.getenv" in text:
-            banned_modules.append(mod_info.name)
+            banned_modules.append(module_name)
     assert banned_modules == [], (
         f"modules reading os.environ/os.getenv outside musubi.config: {banned_modules}"
     )
