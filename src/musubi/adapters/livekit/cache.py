@@ -5,10 +5,10 @@ from musubi_livekit directly.
 """
 
 try:
-    from musubi_livekit.cache import ContextCache, RetrievalStatus
+    from musubi_livekit.cache import RETRIEVAL_UNAVAILABLE, ContextCache, RetrievalStatus
 except ModuleNotFoundError as exc:
     if exc.name == "musubi_livekit":
         raise ModuleNotFoundError("Install musubi-livekit to use musubi.adapters.livekit") from exc
     raise
 
-__all__ = ["ContextCache", "RetrievalStatus"]
+__all__ = ["RETRIEVAL_UNAVAILABLE", "ContextCache", "RetrievalStatus"]
