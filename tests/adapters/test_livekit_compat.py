@@ -46,6 +46,7 @@ def test_legacy_exports_are_plugin_objects(module: str, exports: tuple[str, ...]
     plugin_name = "musubi_livekit" + (f".{module}" if module else "")
     legacy = importlib.import_module(legacy_name)
     plugin = importlib.import_module(plugin_name)
+    assert set(legacy.__all__) == set(exports)
     for name in exports:
         assert getattr(legacy, name) is getattr(plugin, name)
 
