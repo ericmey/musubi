@@ -57,7 +57,7 @@ Clients are built to tolerate this:
 - MCP clients retry with backoff.
 - LiveKit fast-talker has pre-session cache ([[07-interfaces/livekit-adapter]]).
 
-When v1 outgrows single-host ([[11-migration/scaling]]), we re-open this ADR.
+When v1 outgrows single-host (`scaling`), we re-open this ADR.
 
 ## Alternatives
 
@@ -74,7 +74,7 @@ When v1 outgrows single-host ([[11-migration/scaling]]), we re-open this ADR.
 - Deployment story is one host, one Ansible inventory entry, one systemd unit.
 - Backups are the main durability story; snapshots + vault git push + blob rsync cover loss.
 - Updates are planned downtime (usually <2 minutes with pre-pulled images). Announce in `ops` presence.
-- Upgrade to multi-host = a phase of work, planned in [[11-migration/scaling]].
+- Upgrade to multi-host = a phase of work, planned in `scaling`.
 
 Trade-offs:
 
@@ -86,4 +86,4 @@ Trade-offs:
 - [[08-deployment/index]]
 - [[09-operations/capacity]]
 - [[09-operations/backup-restore]]
-- [[11-migration/scaling]]
+- `scaling`

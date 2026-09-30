@@ -12,7 +12,7 @@ reviewed: false
 
 Day-two concerns: backup, monitoring, incident response, the asset matrix that tells us what's canonical vs. derived.
 
-Everything here assumes single-host v1 ([[08-deployment/index]]). Multi-host ops is in [[11-migration/scaling]].
+Everything here assumes single-host v1 ([[08-deployment/index]]). Multi-host ops is in `scaling`.
 
 ## Docs in this section
 

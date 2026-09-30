@@ -26,7 +26,7 @@ Full text: [[00-index/agent-guardrails]].
 
 ## Your first 30 minutes
 
-1. **Pick a slice.** Open [[_slices/index]] or the [[_slices/slice-dag.canvas|slice DAG]]. Choose a slice with `status: ready` whose every `depends-on` slice is `status: done`. No such slice? Pick up a cross-slice ticket in `_inbox/cross-slice/` instead.
+1. **Pick a slice.** Open `index` or the slice DAG. Choose a slice with `status: ready` whose every `depends-on` slice is `status: done`. No such slice? Pick up a cross-slice ticket in `_inbox/cross-slice/` instead.
 2. **Lock it.** Create `_inbox/locks/<slice-id>.lock` (see [[00-index/agent-handoff#2. Lock]]). Flip the slice's `status` frontmatter to `in-progress` and set `owner:` to your agent id.
 3. **Read the specs.** Every slice note links its source specs. Read them. Also open the section's `CLAUDE.md` (e.g. `04-data-model/CLAUDE.md`) for local rules.
 4. **Write the test file.** Translate the spec's **Test Contract** section into pytest functions, one per bullet. Commit as `test(<scope>): initial test contract for <slice-id>`. Tests fail — that's expected.
@@ -98,13 +98,13 @@ See [[00-index/conventions]] for the full style guide.
 | Need to… | Look at |
 |---|---|
 | See the whole architecture visually | [[00-index/architecture.canvas]] |
-| Pick a slice | [[_slices/slice-dag.canvas]] or [[_slices/index]] |
+| Pick a slice | `slice-dag.canvas` or `index` |
 | Know what "done" means | [[00-index/definition-of-done]] |
 | Coordinate with another agent | [[00-index/agent-handoff]] |
-| Find a test fixture | [[_slices/test-fixtures]] |
+| Find a test fixture | `test-fixtures` |
 | Understand a term | [[00-index/glossary]] |
 | See existing decisions | [[13-decisions/index]] |
-| Understand the POC you're migrating from | [[02-current-state/index]] |
+| Understand the POC you're migrating from | `index` |
 
 ## Prohibited patterns (automatic revert)
 
@@ -126,4 +126,4 @@ See [[00-index/conventions]] for the full style guide.
 - [ ] PR description references the slice id and the specs implemented.
 - [ ] Definition of Done items checked.
 
-Now go read [[_slices/index]] and pick one.
+Now go read `index` and pick one.

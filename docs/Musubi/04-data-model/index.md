@@ -90,4 +90,4 @@ When evolving a schema:
 3. **Never rename fields in-place.** Add new field, deprecate old, leave both for one minor version, remove.
 4. **Renames in the vault frontmatter** are handled the same way — but via a one-time migration script committed as an ADR, because human files are involved.
 
-See [[11-migration/schema-evolution]].
+See `schema-evolution`.

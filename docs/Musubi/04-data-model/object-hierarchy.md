@@ -193,4 +193,4 @@ Every pydantic model in `musubi/types/` must have:
 
 ## Test Contract
 
-Realized by **[[_slices/slice-types]]** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.
+Realized by **`slice-types`** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.

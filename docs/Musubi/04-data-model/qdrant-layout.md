@@ -277,7 +277,7 @@ Ballpark targets for the reference host (see [[03-system-design/process-topology
 - **`musubi_artifact`**: 100K points (one per artifact), ~100MB.
 - **`musubi_thought`**: 50K points, ~500MB.
 
-If storage grows past disk budget, we partition by age (move chunks older than 1 year to on-disk-only collection) or move blobs to MinIO. See [[11-migration/scaling]].
+If storage grows past disk budget, we partition by age (move chunks older than 1 year to on-disk-only collection) or move blobs to MinIO. See `scaling`.
 
 ## Multi-tenant future-proofing
 

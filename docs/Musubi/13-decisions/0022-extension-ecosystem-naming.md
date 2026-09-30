@@ -118,7 +118,7 @@ Git tags scope per-subpackage: `musubi-v1.2.0`, `musubi-livekit-v0.1.0`, `musubi
 
 ### Timing
 
-**The restructure is not part of this ADR.** It's queued as [[_slices/slice-ops-workspace-packaging]] for when demand materialises — LiveKit worker wants a thin `pip install musubi-livekit`, or the SDK wants independent PyPI publishing, or similar. Until then, consumers can use the git-URL-with-subdirectory install pattern against the current `src/musubi/adapters/<name>/` tree. The ADR establishes the destination; the slice executes the move.
+**The restructure is not part of this ADR.** It's queued as `slice-ops-workspace-packaging` for when demand materialises — LiveKit worker wants a thin `pip install musubi-livekit`, or the SDK wants independent PyPI publishing, or similar. Until then, consumers can use the git-URL-with-subdirectory install pattern against the current `src/musubi/adapters/<name>/` tree. The ADR establishes the destination; the slice executes the move.
 
 ## Consequences
 
@@ -189,7 +189,7 @@ Check out `openclaw-musubi` as a submodule under `external/openclaw/` so `git cl
 - [[07-interfaces/mcp-adapter]] — MCP spec; implementation in-monorepo.
 - [[07-interfaces/livekit-adapter]] — LiveKit spec; implementation in-monorepo.
 - [[07-interfaces/openclaw-adapter]] — OpenClaw spec (contract only; implementation in `openclaw-musubi`).
-- [[_slices/slice-adapter-openclaw]] — retired by this ADR.
-- [[_slices/slice-adapter-mcp]] — done; stays in-monorepo.
-- [[_slices/slice-adapter-livekit]] — done; stays in-monorepo.
-- [[_slices/slice-ops-workspace-packaging]] — stubbed by this ADR.
+- `slice-adapter-openclaw` — retired by this ADR.
+- `slice-adapter-mcp` — done; stays in-monorepo.
+- `slice-adapter-livekit` — done; stays in-monorepo.
+- `slice-ops-workspace-packaging` — stubbed by this ADR.

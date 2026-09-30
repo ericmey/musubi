@@ -85,7 +85,7 @@ Musubi runs on one host in v1, so wall-clock skew is a non-issue. But we still e
 - `valid_from ≤ valid_until` when both set.
 - Transition events (LifecycleEvent) record their own `occurred_epoch`; monotone across a single object's event history.
 
-If multi-host comes in a later phase, we'll introduce Hybrid Logical Clocks for causal ordering. Not needed for v1. See [[11-migration/scaling]].
+If multi-host comes in a later phase, we'll introduce Hybrid Logical Clocks for causal ordering. Not needed for v1. See `scaling`.
 
 ## Supersession and validity
 

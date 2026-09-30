@@ -14,7 +14,7 @@ The consolidated pipeline of open research questions across the vault. Every ite
 
 Task emoji legend (parsed by the [Tasks plugin](https://publish.obsidian.md/tasks/)): `[R]` = Research, `[/]` = In progress, `[x]` = Resolved.
 
-Browse live: [[_bases/research-stubs]].
+Browse live: `research-stubs`.
 
 ## Live index of research-needed notes
 
@@ -77,7 +77,7 @@ group by folder
 
 ### 11 — Migration
 
-- [R] Pydantic migration playbook — per-collection or big-bang? Source: [[11-migration/phase-1-schema]].
+- [R] Pydantic migration playbook — per-collection or big-bang? Source: `phase-1-schema`.
 
 ### 12 — Roadmap (v2/v3)
 
@@ -96,4 +96,4 @@ group by folder
 
 ## How this stays current
 
-When a spec is flipped from `research-needed` or `draft` to `complete`, remove its questions here (or mark them `[x]`). The Base at [[_bases/research-stubs]] auto-updates from frontmatter.
+When a spec is flipped from `research-needed` or `draft` to `complete`, remove its questions here (or mark them `[x]`). The Base at `research-stubs` auto-updates from frontmatter.

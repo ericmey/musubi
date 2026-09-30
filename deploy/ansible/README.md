@@ -153,7 +153,7 @@ Ansible vault, command output, diffs, or this repository. Updating either
 
 ## Boundaries
 
-This directory ships the host-level Ansible scaffold. Compose service
-ownership, backup automation, and observability each have their own slices;
-see [`docs/Musubi/_slices/`](../../docs/Musubi/_slices/) for the canonical
-list.
+This directory ships the host-level Ansible scaffold. Compose services,
+backup automation and observability are documented under
+[`docs/Musubi/08-deployment/`](../../docs/Musubi/08-deployment/) and
+[`docs/Musubi/09-operations/`](../../docs/Musubi/09-operations/).

@@ -23,7 +23,7 @@ How coding agents coordinate without stepping on each other. This is a *protocol
 
 ### 1. Pick up
 
-- Browse [[_slices/index]] or open [[12-roadmap/slice-board]] (Kanban).
+- Browse `index` or open [[12-roadmap/slice-board]] (Kanban).
 - Choose a slice with `status: ready` whose **depends-on** slices are all `status: done`.
 - Avoid slices where all files under `owns_paths` have a lock present (see 2).
 
@@ -162,5 +162,5 @@ Slice `status` values and their transitions:
 
 - [[00-index/agent-guardrails]] — the rules.
 - [[00-index/definition-of-done]] — the checklist.
-- [[_slices/index]] — the registry.
+- `index` — the registry.
 - [[12-roadmap/slice-board]] — live board.

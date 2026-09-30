@@ -5,22 +5,19 @@ on:
     branches: [main]
     paths:
       - "docs/Musubi/**"
-      - "docs/AGENT-PROCESS.md"
       - ".github/workflows/vault-check.yml"
   pull_request:
     branches: [main]
     paths:
       - "docs/Musubi/**"
-      - "docs/AGENT-PROCESS.md"
       - ".github/workflows/vault-check.yml"
 
 permissions:
   contents: read
-  issues: read
 
 jobs:
   hygiene:
-    name: Vault hygiene (frontmatter + slice DAG + spec contracts + wikilinks)
+    name: Vault hygiene (frontmatter + spec contracts + wikilinks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -35,26 +32,7 @@ jobs:
         run: pip install --no-cache-dir pyyaml
 
       - name: check.py all (authoritative gate)
-        # Single source of truth — same script `make agent-check` runs locally,
-        # so CI and agent-side gates stay aligned. Covers:
-        #   - frontmatter schema on every note
-        #   - slice DAG (no cycles, owns_paths non-conflict, status valid)
-        #   - spec Test Contract hygiene (presence, implements: field)
-        #   - wikilink resolution (.md + .canvas + .base; skips code spans + _templates/)
-        #   - vault ↔ GitHub Issue drift (Dual-update rule, via GH_TOKEN below).
-        env:
-          # gh is pre-installed on ubuntu-latest; surface the Actions token as
-          # GH_TOKEN so check.py's `_fetch_slice_issues` shell-out can read
-          # Issue labels and enforce the Dual-update rule in CI (not just
-          # locally via `make issue-check`).
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # PR-event only: the body of the PR under review. check.py's
-          # `check_pr_closing_slices` keys on this to enforce that a PR
-          # closing a slice's tracking Issue already has `status: done`
-          # in the slice frontmatter — otherwise the push-event vault
-          # check would fail only AFTER merge (too late). On push events
-          # `github.event.pull_request` is null, so the expression
-          # evaluates to empty string, PR_BODY is empty, and the check
-          # silently skips.
-          PR_BODY: ${{ github.event.pull_request.body }}
+        # Same script `make agent-check` runs locally. Covers frontmatter schema,
+        # spec Test Contract hygiene (presence, implements: field), and wikilink
+        # resolution (.md + .canvas + .base; skips code spans + _templates/).
         run: python3 docs/Musubi/_tools/check.py all

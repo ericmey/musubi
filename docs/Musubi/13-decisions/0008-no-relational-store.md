@@ -81,4 +81,4 @@ Trade-offs:
 - [[13-decisions/0010-single-host-v1]]
 - [[06-ingestion/lifecycle-engine]]
 - [[09-operations/asset-matrix]]
-- [[11-migration/scaling]]
+- `scaling`

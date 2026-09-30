@@ -13,7 +13,7 @@ reviewed: true
 
 This vault came out of a research agent, not hand-authoring. Don't start at `00` and read to `13`. The agent organized the files alphabetically; the numbers are filing, not a reading order.
 
-Instead, follow one of these tours. Each stop has a plain-English prompt for what to look for. Flip `reviewed: true` in frontmatter (or check the Properties panel) as you go — the [[00-index/dashboard|dashboard]] tracks your progress.
+Instead, follow one of these tours. Each stop has a plain-English prompt for what to look for. Flip `reviewed: true` in frontmatter (or check the Properties panel) as you go — the dashboard tracks your progress.
 
 ## Fast tour (~20 min) — just the spine
 
@@ -22,7 +22,7 @@ Goal: form a mental model. Skim each for headlines; don't sweat details.
 1. **[[01-overview/mission]]** — *What problem does Musubi solve?*
 2. **[[01-overview/three-planes]]** — *What are the three buckets of memory, and why?*
 3. **[[00-index/executive-summary]]** — *Top 5 decisions, top 5 risks, top 5 next steps, in one page.*
-4. **[[02-current-state/index]]** — *What already exists (the POC) vs what this doc asks for.*
+4. **`index`** — *What already exists (the POC) vs what this doc asks for.*
 5. **[[12-roadmap/index]]** — *Where is this going?*
 
 Stop here if you just want a strategy-level grip.
@@ -47,14 +47,14 @@ After the fast tour, add these. Each answers a "how?" question.
 Once you're comfortable, explore by interest:
 
 - **Security model** — [[10-security/index]]
-- **Migration plan** — [[11-migration/index]] + [[11-migration/migration-board]]
+- **Migration plan** — `index` + `migration-board`
 - **GPU / model topology** — [[08-deployment/gpu-inference-topology]]
 - **Hybrid search internals** — [[05-retrieval/hybrid-search]] + [[05-retrieval/reranker]]
 - **Obsidian-as-source-of-truth pattern** — [[06-ingestion/vault-sync]] + [[13-decisions/0003-obsidian-as-sor]]
 
 ## As you read
 
-Keep [[_inbox/operator-notes]] open in a side pane. Jot reactions, questions, and disagreements there — don't try to fix specs inline on a first pass.
+Keep `operator-notes` open in a side pane. Jot reactions, questions, and disagreements there — don't try to fix specs inline on a first pass.
 
 When you find something missing or wrong, add a checklist item to operator-notes in the form:
 
@@ -80,6 +80,6 @@ SORT section ASC
 
 ## What's next after the tour
 
-- Open [[00-index/dashboard]] — it's the single page you'll return to.
+- Open `dashboard` — it's the single page you'll return to.
 - Open [[00-index/research-questions]] — these are the gaps Eric (or an agent) needs to answer.
 - Open the graph (Cmd+G) — colour-coded by status. Red glow = research-needed. Find the dense cluster; that's the heart of the design.

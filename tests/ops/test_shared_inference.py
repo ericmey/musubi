@@ -25,7 +25,6 @@ TRANSITION_HTPASSWD = ANSIBLE / "templates" / "shared-inference.htpasswd.transit
 AUTH_MIGRATION = ANSIBLE / "shared-inference-auth-migrate.yml"
 ENV = ANSIBLE / "templates" / "env.production.j2"
 ADR = ROOT / "docs" / "Musubi" / "13-decisions" / "0045-authenticated-shared-inference-services.md"
-SLICE = ROOT / "docs" / "Musubi" / "_slices" / "slice-ops-shared-inference.md"
 UPGRADE_RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade.md"
 
 
@@ -796,7 +795,6 @@ def test_live_values_do_not_enter_public_sources() -> None:
         ANSIBLE / "shared-inference-migrate.yml",
         ANSIBLE / "group_vars" / "all.yml",
         ADR,
-        SLICE,
     )
     ipv4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
     hostname = re.compile(r"\b(?:musubi|mizuki)\.mey\.house\b", re.I)

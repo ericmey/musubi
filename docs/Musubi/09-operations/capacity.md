@@ -110,7 +110,7 @@ Cost: parts of a second box.
 
 Qdrant on a big-RAM box, Core + inference on another. Networking ~1ms on LAN.
 
-At this scale, revisit the single-host-only assumption throughout the stack. See [[11-migration/scaling]].
+At this scale, revisit the single-host-only assumption throughout the stack. See `scaling`.
 
 ### 5. Cluster Qdrant
 

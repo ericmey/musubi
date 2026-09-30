@@ -141,7 +141,7 @@ line.
 ## Related
 
 - [[13-decisions/0015-monorepo-supersedes-multi-repo]]
-- [[_slices/slice-ops-core-image-publish]] (the publish workflow)
+- `slice-ops-core-image-publish` (the publish workflow)
 - `.github/workflows/release-please.yml`
 - `.release-please-config.json` + `.release-please-manifest.json`
 

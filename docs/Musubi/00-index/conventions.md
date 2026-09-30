@@ -27,11 +27,11 @@ You never need to memorize "what's in 05." Use the dashboard, the graph, the can
 Every note has a `reviewed:` checkbox in frontmatter. The workflow:
 
 1. Open a note, read it, flip `reviewed` to `true` in the Properties panel (top of the file).
-2. As questions occur, append them to [[_inbox/operator-notes]] with a `[R]` checkbox — they show up automatically in [[00-index/research-questions]] and the [[_inbox/research/research-board|Research Board]].
+2. As questions occur, append them to `operator-notes` with a `[R]` checkbox — they show up automatically in [[00-index/research-questions]] and the Research Board.
 3. Strong questions graduate into their own file under `_inbox/research/` via the **Research Question** template.
 4. When a question is answered, update the source spec and either flip the research question to `[x]` or convert it into an ADR in `13-decisions/`.
 
-The [[00-index/dashboard]] shows review progress per section. The [[_bases/to-review]] Base lists everything you haven't marked yet.
+The `dashboard` shows review progress per section. The `to-review` Base lists everything you haven't marked yet.
 
 ## Markdown & vault style
 
@@ -272,7 +272,7 @@ has been tuned for them.
 | **Tasks** | Tracks roadmap / research checklists across files. Custom statuses include `R` (research). |
 | **Dataview** | Live tables over frontmatter inside dashboards and section indexes. DataviewJS is enabled. |
 | **Breadcrumbs** | Interprets `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` as graph edges. Reverse edges are implied automatically. |
-| **Kanban** | Boards at [[12-roadmap/slice-board]], [[11-migration/migration-board]], [[_inbox/research/research-board]]. |
+| **Kanban** | Boards at [[12-roadmap/slice-board]], `migration-board`, `research-board`. |
 | **Local REST API** | Programmatic access to the vault from Musubi's own vault-sync. |
 | **Style Settings** | Lets you tune the `musubi-status-colors` CSS snippet without editing files. |
 | **Bases** (core) | Spreadsheet-style views over frontmatter. Used for all status dashboards. |

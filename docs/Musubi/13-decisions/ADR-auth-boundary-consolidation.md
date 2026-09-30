@@ -430,7 +430,7 @@ Exact deferrals carried forward from the accepted stack:
   multi-worker or horizontally replicated API deployment.
 - **D5 Phase C** — multipart ingress-cap + streamed digest; design PROVEN @239029a, impl not started.
 - **REQ8** — public route absent-vs-invalid bearer. **Implemented and closed under #413**
-  ([[_slices/slice-req8-presented-invalid-bearer]]); a presented-invalid bearer is a typed 401 on
+  (`slice-req8-presented-invalid-bearer`); a presented-invalid bearer is a typed 401 on
   every route, absent stays public. Kong re-enable precondition recorded in that slice.
 
 Pre-existing (different root cause / different ADR): `_operator_scope_hint` rate-tier read; DQ-001

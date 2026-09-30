@@ -42,5 +42,5 @@ Expanding scope requires an ADR.
 
 ## Related slices
 
-- [[_slices/slice-auth]] — the only slice writing `musubi/auth/`.
+- `slice-auth` — the only slice writing `musubi/auth/`.
 - Redaction has no dedicated slice yet — ride inside `slice-ingestion-capture` until it grows.

@@ -34,7 +34,6 @@ deploy
 .claude
 .agents
 .cursor
-.operator
 .agent-context.local.md
 .agent-context.local/
 .agent-brief*.local.md

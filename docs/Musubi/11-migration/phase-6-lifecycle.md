@@ -5,9 +5,9 @@ tags: [lifecycle, migration, phase-6, scheduler, section/migration, status/stub,
 type: migration-phase
 status: stub
 updated: 2026-04-17
-up: "[[11-migration/index]]"
-prev: "[[11-migration/phase-5-vault]]"
-next: "[[11-migration/phase-7-adapters]]"
+up: "`index`"
+prev: "`phase-5-vault`"
+next: "`phase-7-adapters`"
 reviewed: false
 ---
 # Phase 6: Lifecycle

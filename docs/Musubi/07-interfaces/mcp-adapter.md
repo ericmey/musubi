@@ -34,17 +34,17 @@ The MCP adapter exposes the **canonical agent-tools surface** ([[07-interfaces/a
 
 | Canonical tool | Status | Musubi call |
 |---|---|---|
-| `musubi_recent` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.retrieve(mode="recent")` (depends on [[_slices/slice-retrieve-recent]]) |
-| `musubi_search` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.retrieve(mode="deep")` |
-| `musubi_get` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.{plane}.get()` |
-| `musubi_remember` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.episodic.capture()` |
-| `musubi_think` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.thoughts.send()` |
+| `musubi_recent` | tracked in `slice-mcp-canonical-tools` | `client.retrieve(mode="recent")` (depends on `slice-retrieve-recent`) |
+| `musubi_search` | tracked in `slice-mcp-canonical-tools` | `client.retrieve(mode="deep")` |
+| `musubi_get` | tracked in `slice-mcp-canonical-tools` | `client.{plane}.get()` |
+| `musubi_remember` | tracked in `slice-mcp-canonical-tools` | `client.episodic.capture()` |
+| `musubi_think` | tracked in `slice-mcp-canonical-tools` | `client.thoughts.send()` |
 
-**Implementation status (April 2026):** the current adapter (`src/musubi/adapters/mcp/tools.py`) registers only `memory_capture` + `memory_recall` — pre-canonical names from the v1.0 cut. ADR 0032 supersedes those; the canonical surface lands via [[_slices/slice-mcp-canonical-tools]], which keeps `memory_capture` + `memory_recall` as deprecated aliases for one minor release before removal.
+**Implementation status (April 2026):** the current adapter (`src/musubi/adapters/mcp/tools.py`) registers only `memory_capture` + `memory_recall` — pre-canonical names from the v1.0 cut. ADR 0032 supersedes those; the canonical surface lands via `slice-mcp-canonical-tools`, which keeps `memory_capture` + `memory_recall` as deprecated aliases for one minor release before removal.
 
 ### Granular plane tools (optional, not required by the canonical surface)
 
-The MCP adapter MAY expose finer-grained per-plane tools for power-use scenarios that the agent-level surface doesn't cover. These are **optional** and tracked in [[_slices/slice-adapter-mcp]] as follow-up work — not v1.0 scope, not required for canonical conformance.
+The MCP adapter MAY expose finer-grained per-plane tools for power-use scenarios that the agent-level surface doesn't cover. These are **optional** and tracked in `slice-adapter-mcp` as follow-up work — not v1.0 scope, not required for canonical conformance.
 
 | Tool | Musubi call | Notes |
 |---|---|---|

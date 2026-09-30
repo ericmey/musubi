@@ -13,11 +13,11 @@ reviewed: true
 
 This repo is worked on by a fleet of coding agents (Claude Code, Claude Cowork, Codex, Cursor, Gemini, Grok, …) in parallel. This document is the **contract** between them. Violating these rules produces merge conflicts, duplicated abstractions, silent scope reduction, and drift. Read this first, every time.
 
-> **Agent onboarding path:** start at `CLAUDE.md` at the repo root (the entry point), then `docs/AGENT-PROCESS.md` (multi-agent concurrency model), then this file, then [[00-index/agent-handoff]], then your slice file in [[_slices/index|_slices/]]. The section your slice touches has a local `CLAUDE.md` (e.g. `04-data-model/CLAUDE.md`) — read that before editing any file in that section.
+> **Agent onboarding path:** start at `CLAUDE.md` at the repo root (the entry point), then `docs/AGENT-PROCESS.md` (multi-agent concurrency model), then this file, then [[00-index/agent-handoff]], then your slice file in _slices/. The section your slice touches has a local `CLAUDE.md` (e.g. `04-data-model/CLAUDE.md`) — read that before editing any file in that section.
 
 ## The four non-negotiables
 
-1. **Stay inside your slice.** Every slice has its own note in [[_slices/index|_slices/]] with an explicit `slice_id`, `owns_paths` list, and `forbidden_paths` list. You may read anywhere. You may only *write* to files under `owns_paths`. If you need to change a file outside your slice, **open a cross-slice ticket** (a markdown file in `docs/Musubi/_inbox/cross-slice/<slice-id>-<target>.md` plus a GitHub Issue using the `cross-slice` template) and flip your slice to `blocked` until a human or meta-agent resolves it.
+1. **Stay inside your slice.** Every slice has its own note in _slices/ with an explicit `slice_id`, `owns_paths` list, and `forbidden_paths` list. You may read anywhere. You may only *write* to files under `owns_paths`. If you need to change a file outside your slice, **open a cross-slice ticket** (a markdown file in `docs/Musubi/_inbox/cross-slice/<slice-id>-<target>.md` plus a GitHub Issue using the `cross-slice` template) and flip your slice to `blocked` until a human or meta-agent resolves it.
 2. **The canonical API is frozen per version.** If your slice is not `slice-api-v*`, you do not modify `src/musubi/api/`, `openapi.yaml`, or `proto/`. Additive changes (new optional fields, new endpoints) require an ADR; breaking changes bump the version.
 3. **Every spec has a Test Contract. Write tests first.** The spec in `04-data-model/`, `05-retrieval/`, `06-ingestion/`, etc. contains a **Test Contract** section. Your first commit in a slice is the test file realising that contract. Your PR is not mergeable until the contract tests pass AND branch coverage on your owned files is ≥ 85 % (90 % for `src/musubi/planes/**` and `src/musubi/retrieve/**`).
 4. **Do not silently rebase the spec.** If your implementation forces a spec change, update the spec file **in the same PR** as the code change and tag the commit with `spec-update: <doc-path>` in the trailer.
@@ -170,7 +170,7 @@ A slice is done when all are true:
 - [ ] `make agent-check` (aka `make vault-check`) is green.
 - [ ] Docs in the corresponding `docs/Musubi/<section>/` are updated to reflect what was built (spec changes tagged `spec-update: <doc-path>` in the relevant commit).
 - [ ] A human OR a `musubi-reviewer` sub-agent has reviewed and merged the PR; you did not self-approve (see [docs/AGENT-PROCESS.md §7](../../docs/AGENT-PROCESS.md#7-review)).
-- [ ] The slice's entry in [[_slices/index]] is marked `done`; the GitHub Issue is closed via `Closes #<n>` in the PR.
+- [ ] The slice's entry in `index` is marked `done`; the GitHub Issue is closed via `Closes #<n>` in the PR.
 
 ## Prohibited patterns (automatic revert)
 

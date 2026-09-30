@@ -63,7 +63,7 @@ Kong already does everything the spec expected Caddy to do, with richer plugin e
 
 - **Gateway HA is not free.** If the Kong VM (`<kong-gateway>`) is down, Musubi is unreachable from clients even if the Musubi host itself is healthy. Mitigation: the Kong VM is a small VM on `<pve-node-1>` and cheap to rebuild from the same Ansible VM-upgrade pattern used elsewhere in the homelab; a future ADR could add a standby Caddy on the Musubi host that activates on Kong-down (not pursued in v1).
 - **Dependency on the network hop.** Musubi → client latency now includes one extra LAN hop through `<kong-gateway>`. For the fast-path <400ms budget this is ~1-2ms overhead; negligible.
-- **Spec mismatch to fix.** Multiple spec notes reference Caddy; this ADR triggers a sweep. See [[00-index/work-log]] for the dated update.
+- **Spec mismatch to fix.** Multiple spec notes reference Caddy; this ADR triggers a sweep. See `work-log` for the dated update.
 
 ### Neutral
 

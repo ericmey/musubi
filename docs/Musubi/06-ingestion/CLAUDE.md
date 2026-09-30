@@ -48,5 +48,5 @@ Changing cadence requires an ADR and updates to [[09-operations/runbooks]].
 
 ## Related slices
 
-- [[_slices/slice-ingestion-capture]], [[_slices/slice-vault-sync]], [[_slices/slice-embedding]].
-- [[_slices/slice-lifecycle-engine]], [[_slices/slice-lifecycle-maturation]], [[_slices/slice-lifecycle-synthesis]], [[_slices/slice-lifecycle-promotion]], [[_slices/slice-lifecycle-reflection]].
+- `slice-ingestion-capture`, `slice-vault-sync`, `slice-embedding`.
+- `slice-lifecycle-engine`, `slice-lifecycle-maturation`, `slice-lifecycle-synthesis`, `slice-lifecycle-promotion`, `slice-lifecycle-reflection`.

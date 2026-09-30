@@ -53,7 +53,7 @@ Recent activity in the calling agent's scope. No query. Default scope is **cross
 | `since` | ISO-8601 timestamp | no | none | Inclusive lower bound. Absent = "newest items, ignoring time." |
 | `tags` | array of strings | no | none | Filter to rows whose `tags` contains every listed tag. |
 
-**SDK call**: the canonical landing is `client.retrieve(namespace=<scope-resolved>, mode="recent", limit=…)` once `mode=recent` ships (see [[_slices/slice-retrieve-recent]]). The exact request shape — including how `since` and `tags` are wired (top-level vs. inside a `filters` object) — is defined by that slice; the agent-facing parameter names above are stable, the over-the-wire mapping is the slice author's call. Until `mode=recent` lands, adapters MAY paginate `GET /v1/episodic?namespace=…&limit=…` and sort client-side by event timestamp; the fallback is documented per adapter and is presence-scoped only (cross-channel needs the wildcards primitive).
+**SDK call**: the canonical landing is `client.retrieve(namespace=<scope-resolved>, mode="recent", limit=…)` once `mode=recent` ships (see `slice-retrieve-recent`). The exact request shape — including how `since` and `tags` are wired (top-level vs. inside a `filters` object) — is defined by that slice; the agent-facing parameter names above are stable, the over-the-wire mapping is the slice author's call. Until `mode=recent` lands, adapters MAY paginate `GET /v1/episodic?namespace=…&limit=…` and sort client-side by event timestamp; the fallback is documented per adapter and is presence-scoped only (cross-channel needs the wildcards primitive).
 
 **Response shape**
 
@@ -250,7 +250,7 @@ Every adapter runs the canonical agent-tools contract suite (extends [[07-interf
 | MCP | `[[_slices/slice-mcp-canonical-tools]]` | proposed |
 | OpenClaw plugin | `[[_slices/slice-openclaw-canonical-tools]]` | proposed (extends openclaw-musubi PR #24) |
 | LiveKit | `[[_slices/slice-livekit-canonical-tools]]` | proposed |
-| Backend `mode=recent` | `[[_slices/slice-retrieve-recent]]` | proposed |
+| Backend `mode=recent` | ``slice-retrieve-recent`` | proposed |
 
 ## Related
 

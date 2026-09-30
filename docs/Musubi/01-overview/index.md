@@ -57,7 +57,7 @@ See [[13-decisions/0003-obsidian-as-sor]] for the full rationale and alternative
 
 ## What changed from the POC
 
-The current POC (see [[02-current-state/index]]) is a two-collection Qdrant + MCP server. It conflates the three planes into one `musubi_memories` collection and has no curated / artifact distinction. This redesign:
+The current POC (see `index`) is a two-collection Qdrant + MCP server. It conflates the three planes into one `musubi_memories` collection and has no curated / artifact distinction. This redesign:
 
 - Splits collections by plane and introduces named vectors.
 - Moves from MCP-as-server to canonical-API-as-server + MCP-as-adapter.

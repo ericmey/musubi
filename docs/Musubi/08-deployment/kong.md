@@ -160,7 +160,7 @@ No other LAN ingress. `ufw` rules codified in [[08-deployment/ansible-layout#fir
 - **Kong down** → Musubi unreachable from clients even if healthy. Musubi Core keeps running; queued writes from adapters succeed when Kong recovers (adapters retry).
 - **Musubi Core down** → Kong returns 502 with a JSON error body; clients see `{"code":"upstream_unavailable", …}`. Adapter SDKs retry with exponential backoff.
 - **TLS cert expiry** → Kong's ACME renewal handles this; stale certs surface in Kong's health dashboard.
-- **`<kong-gateway>` / Kong VM destroyed** → rebuild from Ansible on `<pve-node-1>` following the standard VM-clone pattern ([[_slices/slice-adapter-mcp]] pattern is analogous). Kong config restores from declarative source (git). Musubi itself is unaffected.
+- **`<kong-gateway>` / Kong VM destroyed** → rebuild from Ansible on `<pve-node-1>` following the standard VM-clone pattern (`slice-adapter-mcp` pattern is analogous). Kong config restores from declarative source (git). Musubi itself is unaffected.
 
 ## Related
 
@@ -171,4 +171,4 @@ No other LAN ingress. `ufw` rules codified in [[08-deployment/ansible-layout#fir
 
 ## Test Contract
 
-Realized by **[[_slices/slice-ops-compose]]** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.
+Realized by **`slice-ops-compose`** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.

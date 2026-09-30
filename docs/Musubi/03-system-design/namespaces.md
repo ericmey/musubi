@@ -43,7 +43,7 @@ Why one-collection-per-plane instead of one-per-agent?
 - Qdrant payload filtering on an indexed KEYWORD field is O(log n); at our scale (≤ 10M points per plane) this is negligible.
 - Snapshot/restore of a shared collection captures all agents atomically.
 
-**If we outgrow this** (say, > 50M points in a plane): we split the largest collection by agent via a zero-downtime migration using Qdrant aliases. See [[11-migration/scaling]].
+**If we outgrow this** (say, > 50M points in a plane): we split the largest collection by agent via a zero-downtime migration using Qdrant aliases. See `scaling`.
 
 ### Filter on every query
 

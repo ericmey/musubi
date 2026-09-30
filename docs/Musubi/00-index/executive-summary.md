@@ -35,7 +35,7 @@ A single Musubi Core Server process owns all business logic and data-plane acces
 ## Top 5 next steps
 
 1. **Freeze the canonical API v0.1 contract.** Write the OpenAPI + gRPC proto files in [[07-interfaces/canonical-api]]. Every adapter consumes this; nothing else moves until it's signed off. Gate: [[07-interfaces/contract-tests]] passes.
-2. **Migrate POC collections to named-vector + hybrid-ready schema.** Existing `musubi_memories` and `musubi_thoughts` become backward-compat aliases over new collections with named dense + sparse vectors. Zero-downtime via Qdrant aliases. See [[11-migration/phase-1-schema]].
+2. **Migrate POC collections to named-vector + hybrid-ready schema.** Existing `musubi_memories` and `musubi_thoughts` become backward-compat aliases over new collections with named dense + sparse vectors. Zero-downtime via Qdrant aliases. See `phase-1-schema`.
 3. **Stand up the Obsidian vault + file-watcher ingestion.** This unlocks curated knowledge. Build the `MusubiVault` Python package (vault reader, frontmatter schema validator, Watchdog-based watcher, initial backfill). See [[06-ingestion/vault-sync]].
 4. **Write the Lifecycle Engine skeleton.** A dedicated worker process (separate from the API server) that runs maturation, synthesis, promotion, demotion. Starts as an hourly cron; graduates to event-driven. See [[06-ingestion/lifecycle-engine]].
 5. **Bootstrap Ansible deployment.** One playbook that stands up Qdrant + Musubi Core + Lifecycle Worker + vault bind-mount on a fresh Debian host. See [[08-deployment/ansible-layout]].

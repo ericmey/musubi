@@ -413,5 +413,5 @@ Cross-cutting:
 
 Realized by the following slices (all status: done) — each carries its own `## Test Contract` section with the canonical bullet list:
 
-- [[_slices/slice-api-v0-read]]
-- [[_slices/slice-api-v0-write]]
+- `slice-api-v0-read`
+- `slice-api-v0-write`

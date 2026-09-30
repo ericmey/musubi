@@ -5,9 +5,9 @@ tags: [bge-m3, hybrid-search, migration, phase-2, section/migration, sparse, sta
 type: migration-phase
 status: stub
 updated: 2026-04-17
-up: "[[11-migration/index]]"
-prev: "[[11-migration/phase-1-schema]]"
-next: "[[11-migration/phase-3-reranker]]"
+up: "`index`"
+prev: "`phase-1-schema`"
+next: "`phase-3-reranker`"
 reviewed: false
 ---
 # Phase 2: Hybrid Search

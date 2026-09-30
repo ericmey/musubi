@@ -69,7 +69,7 @@ The stack is pipelined: ANN → RRF → rerank → return. Users choose "fast" (
 Trade-offs:
 
 - More moving parts = more ops surface. TEI for embeddings + TEI-reranker for cross-encoder.
-- GPU budget is tight (~9.6GB of 10GB VRAM). Leaves little room for model upgrades without a GPU change. See [[11-migration/scaling]].
+- GPU budget is tight (~9.6GB of 10GB VRAM). Leaves little room for model upgrades without a GPU change. See `scaling`.
 
 ## Links
 
@@ -77,4 +77,4 @@ Trade-offs:
 - [[05-retrieval/hybrid-search]]
 - [[05-retrieval/reranker]]
 - [[11-migration/phase-2-hybrid-search]]
-- [[11-migration/phase-3-reranker]]
+- `phase-3-reranker`
