@@ -18,9 +18,14 @@ split this way.
 
 ## Capture and recall with the SDK
 
+Set `MUSUBI_TOKEN` to the token you minted in [Connect](connect.md), then:
+
 ```python
+import os
+
 from musubi_sdk import MusubiClient
 
+token = os.environ["MUSUBI_TOKEN"]
 ns = "acme/assistant/episodic"
 
 with MusubiClient(base_url="http://127.0.0.1:8100/v1", token=token) as client:
