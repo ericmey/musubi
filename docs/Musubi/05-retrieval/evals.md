@@ -67,7 +67,7 @@ queries:
       - object_id: 2W1eB2bbbbbbbbbbbbbbbb
         relevance: 2
     mode: fast
-    namespace: eric/claude-code/blended
+    namespace: eric/claude-code
     # expected budget
     latency_p95_ms: 400
 
@@ -79,7 +79,8 @@ queries:
       - object_id: 2W1eD4dddddddddddddddd
         relevance: 2
     mode: deep
-    namespace: eric/_shared/blended
+    namespace: eric/_shared
+    planes: [curated, concept]
     latency_p95_ms: 3000
 ```
 

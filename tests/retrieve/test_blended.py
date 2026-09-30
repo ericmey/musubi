@@ -410,6 +410,25 @@ async def test_legacy_blended_namespace_uses_only_explicit_presences() -> None:
         assert "eric/claude-code/episodic" not in called
 
 
+@pytest.mark.parametrize("presence", ["", "*", "x/../y", "Voice"])
+async def test_legacy_blended_namespace_rejects_invalid_explicit_presence(
+    presence: str,
+) -> None:
+    """No malformed or wildcard presence can become an internal query target."""
+    with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
+        query = BlendedRetrievalQuery(
+            namespace="eric/blended",
+            query_text="Q",
+            presences=["voice", presence],
+        )
+        res = await run_blended_retrieve(
+            cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
+        )
+        assert isinstance(res, Err)
+        assert res.error.code == "invalid_collections"
+        mock_deep.assert_not_called()
+
+
 # Scoring
 async def test_relevance_normalized_across_planes_pre_score() -> None:
     """Bullet 12"""

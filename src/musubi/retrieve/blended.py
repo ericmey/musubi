@@ -14,7 +14,7 @@ from musubi.embedding.tei import TEIRerankerClient
 from musubi.retrieve.deep import DeepResult, DeepRetrievalLLM, RetrievalQuery, run_deep_retrieve
 from musubi.retrieve.scoring import ScoredHit
 from musubi.retrieve.warnings import RetrievalWarning, plane_error, plane_timeout
-from musubi.types.common import Err, LifecycleState, Ok, Result
+from musubi.types.common import Err, LifecycleState, Ok, Result, validate_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,20 @@ async def run_blended_retrieve(
                 detail="The /blended namespace scope requires explicit presences; use a scoped wildcard retrieve through the public API.",
             )
         )
+    if legacy_scope:
+        parts = query.namespace.split("/")
+        try:
+            if len(parts) != 2:
+                raise ValueError("legacy blended scope must be tenant/blended")
+            for presence in query.presences or ():
+                validate_namespace(f"{parts[0]}/{presence}/episodic")
+        except ValueError as exc:
+            return Err(
+                error=BlendedRetrievalError(
+                    code="invalid_collections",
+                    detail=f"Invalid explicit blended presence: {exc}",
+                )
+            )
 
     # 1. Expand namespace
     expanded_namespaces: list[tuple[str, str]] = []

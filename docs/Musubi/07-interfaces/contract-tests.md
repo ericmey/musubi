@@ -187,7 +187,7 @@ def test_retrieve_blended_cross_plane(...):
     # Seed episodic + curated + concept.
     ...
     r = post(f"{musubi_url}/retrieve",
-             json={"namespace": "test/_shared/blended", "query_text": "...",
+             json={"namespace": "test/_shared", "query_text": "...",
                    "mode": "deep", "planes": ["episodic", "curated", "concept"]})
     planes = {res["plane"] for res in r.json()["results"]}
     assert {"episodic", "curated"}.issubset(planes)
