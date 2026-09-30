@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.27.3](https://github.com/sourceblender/musubi/compare/v1.27.2...v1.27.3) (2026-09-30)
+
+
+### Documentation
+
+* contributor docs for the issue-and-PR flow; one contract in AGENTS.md ([#850](https://github.com/sourceblender/musubi/issues/850)) ([c5a01b7](https://github.com/sourceblender/musubi/commit/c5a01b7952c3aa2c2567fa3f972619788773c503))
+* retire the slice workflow and archive the v1 build material ([#849](https://github.com/sourceblender/musubi/issues/849)) ([ae5d620](https://github.com/sourceblender/musubi/commit/ae5d620915bf98adba2b35e8c2509a59e926e315))
+
 ## [1.27.2](https://github.com/sourceblender/musubi/compare/v1.27.1...v1.27.2) (2026-09-30)
 
 
