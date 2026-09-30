@@ -31,9 +31,9 @@ x-tei: &tei
     start_period: 120s
 
 x-core: &core
-  # v1.27.0, cosign-signed by publish-core-image.yml; same digest as
+  # v1.27.1, cosign-signed by publish-core-image.yml; same digest as
   # deploy/ansible/group_vars/all.yml.
-  image: ghcr.io/ericmey/musubi-core@sha256:a31abf71b34076d14f520ad13e40cfa2ec770bd3ab8e00ef47b06009fd7848fe
+  image: ghcr.io/sourceblender/musubi-core@sha256:68a78833493c12482158989007089fce4fe640da073a49768768c2dd29cc0bb7
   platform: linux/amd64
   env_file: [.env.quickstart]
 
