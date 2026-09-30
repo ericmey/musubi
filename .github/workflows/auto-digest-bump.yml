@@ -152,6 +152,9 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
           DIGEST: ${{ steps.resolve.outputs.digest }}
           FILE: deploy/ansible/group_vars/all.yml
+          # The quickstart promises the same Core digest as group_vars (#836),
+          # so the pin bump moves both or fails.
+          QUICKSTART: quickstart/docker-compose.yml
           NEW_IMAGE: ghcr.io/${{ env.IMAGE_REPO }}@${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
@@ -193,9 +196,27 @@ jobs:
               raise SystemExit("musubi_core_version line not found in " + str(p))
 
           p.write_text(updated)
+
+          q = pathlib.Path(os.environ["QUICKSTART"])
+          qtext = q.read_text()
+          qtext, n_qimage = re.subn(
+              r'(?m)^(\s*image:\s*)ghcr\.io/[a-z0-9-]+/musubi-core@sha256:[0-9a-f]{64}[ \t]*$',
+              rf'\g<1>{new_image}',
+              qtext,
+          )
+          if n_qimage != 1:
+              raise SystemExit(f"quickstart core image pin: expected 1 in {q}, found {n_qimage}")
+          qtext, n_qtag = re.subn(
+              r'(?m)^(\s*#\s*)v[^\s,]+(, cosign-signed by publish-core-image\.yml)',
+              rf'\g<1>{tag}\g<2>',
+              qtext,
+          )
+          if n_qtag != 1:
+              raise SystemExit(f"quickstart version comment: expected 1 in {q}, found {n_qtag}")
+          q.write_text(qtext)
           PY
 
-          if git diff --quiet "$FILE"; then
+          if git diff --quiet "$FILE" "$QUICKSTART"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Already pinned to ${NEW_IMAGE} @ ${TAG}; nothing to do."
           else
@@ -221,7 +242,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git switch -c "${BRANCH}"
-          git add deploy/ansible/group_vars/all.yml
+          git add deploy/ansible/group_vars/all.yml quickstart/docker-compose.yml
           git commit -m "${TITLE}
 
           Automated by .github/workflows/auto-digest-bump.yml in response
