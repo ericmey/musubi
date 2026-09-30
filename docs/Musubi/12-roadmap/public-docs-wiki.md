@@ -339,7 +339,6 @@ This backlog counts as successful when:
 
 ## Related
 
-- [[12-roadmap/next-up]]
 - [[12-roadmap/index]]
 - [[00-index/reading-tour]]
 - [[07-interfaces/index]]
