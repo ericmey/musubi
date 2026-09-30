@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.6](https://github.com/sourceblender/musubi/compare/v1.27.5...v1.27.6) (2026-09-30)
+
+
+### Documentation
+
+* **deploy:** one convention for the ansible-vault password file ([#859](https://github.com/sourceblender/musubi/issues/859)) ([5f3e73d](https://github.com/sourceblender/musubi/commit/5f3e73dc5f3614e0f896793ce946fabbaf7cccc5))
+
 ## [1.27.5](https://github.com/sourceblender/musubi/compare/v1.27.4...v1.27.5) (2026-09-30)
 
 
