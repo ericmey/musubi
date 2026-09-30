@@ -1,6 +1,6 @@
-"""Adapters layer — protocol-specific shims over :mod:`musubi.sdk`.
+"""Adapters still shipped with Musubi core.
 
-Per ADR-0015 / ADR-0016, every adapter (LiveKit, MCP, OpenClaw) lives
-in-monorepo as a sub-package. Adapters import the SDK + types only;
-they never reach into ``api/``, ``planes/``, ``retrieve/`` etc.
+LiveKit ships from sourceblender/musubi-livekit. Other external plugins
+ship from their own repositories; remaining in-tree adapters are kept
+until their extraction has a verified replacement.
 """
