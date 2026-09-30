@@ -39,8 +39,3 @@ Expanding scope requires an ADR.
 - Bearer tokens (opaque, 256-bit random) issued per presence.
 - Optional mTLS on the LAN.
 - OAuth 2.1 / dynamic client registration only on the MCP adapter (spec requires it).
-
-## Related slices
-
-- `slice-auth` — the only slice writing `musubi/auth/`.
-- Redaction has no dedicated slice yet — ride inside `slice-ingestion-capture` until it grows.

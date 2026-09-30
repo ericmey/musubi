@@ -195,7 +195,7 @@ archive on an incomplete inventory. Tests updated:
 ## Slice ownership (for the tests-first slice)
 
 The tests-first slice (`slice-api-v1-ret003-wire`, Issue #435) lives at
-`docs/Musubi/_slices/slice-api-v1-ret003-wire.md`. The first commit is tests-first,
+`docs/Musubi/_slices/slice-api-v1-ret003-wire.md` (slice notes were archived out of the repo on 2026-09-30). The first commit is tests-first,
 **zero `src/`**. The 18 acceptance tests land in a single new test file
 `tests/api/test_retrieve_ret003_wire.py`.
 

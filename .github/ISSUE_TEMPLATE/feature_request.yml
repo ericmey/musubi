@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Musubi is a personal project with a deliberate scope. Feature requests are welcome but won't automatically be accepted — the bar is: the idea fits the three-plane / lifecycle-engine architecture, and either you or someone else is willing to write the slice spec and the implementation.
+        Musubi is a personal project with a deliberate scope. Feature requests are welcome but won't automatically be accepted — the bar is: the idea fits the three-plane / lifecycle-engine architecture, and either you or someone else is willing to write (or update) the spec and the implementation, through an issue and a reviewed PR.
 
         For open-ended "what if…" ideas, please start a [Discussion](https://github.com/sourceblender/musubi/discussions) instead.
 

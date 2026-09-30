@@ -78,17 +78,12 @@ Plus a bridge layer:
 - Vault Dashboard — live status snapshot, review progress, gap hotspots.
 - [[00-index/reading-tour|Reading Tour]] — plain-English guided path for first-time review.
 - [[00-index/architecture.canvas|Architecture Canvas]] — visual map of the whole system.
-- Slice Registry — the parallelizable work units for coding agents.
-- Slice DAG — visual dependency graph of all slices.
-- Completed Work — shipped slices + phase completion stats.
-- [[_tools/README|Vault Tools]] — `check.py` (vault/slice/spec linter) and `slice_watch.py` (transition notifier).
+- [[_tools/README|Vault Tools]] — `check.py`, the docs health check CI runs.
 - [[00-index/obsidian-setup|Obsidian Setup]] — verify-after-restart checklist for plugin configs.
-- Work Log — dated record of infrastructure + implementation events. Where "X is now real" gets written down.
 - Operator Notes — scratchpad for reactions while reviewing.
 - [[00-index/executive-summary|Executive Summary]] — top 5 decisions, top 5 risks, top 5 next steps.
 - [[CLAUDE|Coding Agent Entry Point]] — CLAUDE.md. Start here if you're an agent, not a human.
-- [[00-index/agent-guardrails|Agent Guardrails]] — rules for a fleet of coding agents working in this repo.
-- [[00-index/agent-handoff|Agent Handoff Protocol]] — the lifecycle of a slice, step-by-step.
+- [[00-index/agent-guardrails|Agent Guardrails]] — Qdrant and vault rules; the contributor contract is AGENTS.md at the repo root.
 - [[00-index/definition-of-done|Definition of Done]] — the universal merge checklist.
 - [[00-index/research-questions|Research Questions]] — consolidated open questions across the vault.
 - Stubs & Placeholders — what's intentionally brief and why.

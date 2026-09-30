@@ -43,7 +43,8 @@ Plain GitHub issues and pull requests. (Until 2026-09-30 the repo used "slices",
    with `-u`.
 4. **Open a draft PR early** with `Closes #<n>` as the first line of the body, so work in progress is
    visible and nobody starts the same thing.
-5. **Write the tests first,** from the Test Contract of the spec you're implementing (next section).
+5. **Write the tests first** when you're changing behaviour, from the Test Contract of the spec you're
+   implementing (next section).
 6. **Implement** the minimum to make them pass, within the rules below.
 7. **Verify and hand off:** run the checks in "Before handoff", update the PR body so it describes
    what actually shipped, and mark it ready (`gh pr ready <m>`). A PR with no tracking issue says so on
@@ -56,9 +57,11 @@ Plain GitHub issues and pull requests. (Until 2026-09-30 the repo used "slices",
    it in quietly.
 2. **The canonical API is frozen per version.** Changes to `src/musubi/api/`, `openapi.yaml` or
    `proto/` need an ADR if additive and a version bump if breaking.
-3. **Tests first.** Every spec has a `## Test Contract` section. Your first commit is the test file
-   realising it. A PR isn't mergeable until those tests pass and coverage is ≥ 85 % on the files you
-   changed (≥ 90 % under `src/musubi/planes/**` and `src/musubi/retrieve/**`).
+3. **Tests first, for behaviour changes.** Every spec has a `## Test Contract` section. When your PR
+   implements or changes behaviour, its first commit is the test file realising the relevant bullets,
+   and it isn't mergeable until those tests pass and the coverage gates hold (≥ 85 % on changed files,
+   ≥ 90 % under `src/musubi/planes/**` and `src/musubi/retrieve/**`). Docs-only and chore PRs don't
+   need a test commit.
 4. **Don't silently rewrite the spec.** If implementation forces a spec change, update the spec **in
    the same PR** with a `spec-update: <doc-path>` commit trailer.
 
@@ -117,6 +120,7 @@ Also:
   placeholder scheme in `.agent-context.local.md`).
 - New top-level dependencies without an ADR in `docs/Musubi/13-decisions/`.
 - `except Exception: pass`.
+- Mutating shared global state without a lock.
 - `git push --force` on shared branches; `--no-verify` on commits.
 - Silently deferring a Test Contract bullet (see the Closure Rule).
 - Committing anything in `.agent-context.local.md`, `.agent-brief.*.local.md`, `.env.local`,

@@ -11,7 +11,7 @@ reviewed: true
 
 # Agent Rules — Data Model (04)
 
-Local rules for any slice writing to `musubi/types/`, `musubi/schema/`, `musubi/models.py`, or `musubi/planes/**`. Supplements [[CLAUDE]] and [[00-index/conventions]].
+Local rules for any change to `musubi/types/`, `musubi/schema/`, `musubi/models.py`, or `musubi/planes/**`. Supplements [[CLAUDE]] and [[00-index/conventions]].
 
 ## Must
 
@@ -58,9 +58,3 @@ When adding a `## Test Contract` section to a spec, use `- [ ]` checkboxes. One 
 - [ ] `episodic_store` writes `state=provisional` on first insert.
 - [ ] `episodic_store` reinforces (does not duplicate) at similarity ≥ 0.92.
 ```
-
-## Related slices
-
-- `slice-types` — the only slice that writes `musubi/types/`, `musubi/models.py`.
-- `slice-plane-episodic`, `slice-plane-curated`, `slice-plane-artifact`, `slice-plane-concept`, `slice-plane-thoughts` — plane-specific slices.
-- `slice-qdrant-layout` — collection bootstrap.

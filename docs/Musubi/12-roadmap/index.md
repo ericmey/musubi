@@ -19,7 +19,6 @@ Where Musubi is headed after v1. Timelines are loose — this is a thinking road
 - [[12-roadmap/phased-plan]] — v1 → v2 → v3 direction with bullets per phase.
 - [[12-roadmap/ownership-matrix]] — who owns which module + what "ownership" means in a one-person shop.
 - [[12-roadmap/status]] — current state of v1 phases, what's in flight, what's next.
-- [[12-roadmap/slice-board]] — Kanban board for coding-agent slices.
 
 ## Live snapshot
 

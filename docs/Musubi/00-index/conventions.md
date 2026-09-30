@@ -27,11 +27,9 @@ You never need to memorize "what's in 05." Use the dashboard, the graph, the can
 Every note has a `reviewed:` checkbox in frontmatter. The workflow:
 
 1. Open a note, read it, flip `reviewed` to `true` in the Properties panel (top of the file).
-2. As questions occur, append them to `operator-notes` with a `[R]` checkbox — they show up automatically in [[00-index/research-questions]] and the Research Board.
-3. Strong questions graduate into their own file under `_inbox/research/` via the **Research Question** template.
+2. As questions occur, add them to the note you're reading with an `[R]` checkbox — they show up automatically in [[00-index/research-questions]].
+3. Strong questions graduate into a GitHub issue labelled `research`.
 4. When a question is answered, update the source spec and either flip the research question to `[x]` or convert it into an ADR in `13-decisions/`.
-
-The `dashboard` shows review progress per section. The `to-review` Base lists everything you haven't marked yet.
 
 ## Markdown & vault style
 
@@ -235,12 +233,6 @@ musubi/
 ├── 13-decisions/        ADRs + sources
 │
 ├── _templates/          Templater templates (spec, adr, runbook, ...)
-├── _bases/              Obsidian Bases (dynamic views over frontmatter)
-├── _inbox/              transient — research questions, cross-slice tickets, locks
-│   ├── research/        open research questions (use research-question template)
-│   ├── cross-slice/     coordination tickets between agent slices
-│   ├── locks/           lockfiles for single-agent-per-module discipline
-│   └── questions/       agent-filed blockers
 ├── _attachments/        images and binary drop-ins (kept out of the main graph)
 └── .obsidian/           vault config; committed to git
 ```
@@ -272,7 +264,6 @@ has been tuned for them.
 | **Tasks** | Tracks roadmap / research checklists across files. Custom statuses include `R` (research). |
 | **Dataview** | Live tables over frontmatter inside dashboards and section indexes. DataviewJS is enabled. |
 | **Breadcrumbs** | Interprets `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` as graph edges. Reverse edges are implied automatically. |
-| **Kanban** | Boards at [[12-roadmap/slice-board]], `migration-board`, `research-board`. |
 | **Local REST API** | Programmatic access to the vault from Musubi's own vault-sync. |
 | **Style Settings** | Lets you tune the `musubi-status-colors` CSS snippet without editing files. |
 | **Bases** (core) | Spreadsheet-style views over frontmatter. Used for all status dashboards. |

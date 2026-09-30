@@ -130,7 +130,7 @@ Settings → Templater → **Folder templates**. Each folder mapped to its templ
 - [x] `09-operations` → `_templates/runbook.md` ✅ 2026-04-17
 - [x] `10-security` → `_templates/spec.md` ✅ 2026-04-17
 - [x] `11-migration` → `_templates/migration-phase.md` ✅ 2026-04-17
-- [x] `_inbox/research` → `_templates/research-question.md` ✅ 2026-04-17
+- [x] ~~`_inbox/research` → `_templates/research-question.md`~~ (retired 2026-09-30; research questions are GitHub issues) ✅ 2026-04-17
 
 ### Dataview
 
@@ -158,12 +158,6 @@ Open the graph (Cmd+G) and check:
 
 Open a `status: research-needed` note in the vault — the node should glow red.
 
-### Kanban
-
-Open [[12-roadmap/slice-board]]. It should render as a board with lanes
-"Backlog / In progress / In review / Done / Shipped (v1)". If it renders as
-plain markdown, the plugin isn't picking up the `kanban-plugin: basic`
-frontmatter — close and reopen the file.
 
 ### Local REST API
 
@@ -171,7 +165,7 @@ Settings → Local REST API:
 
 - [x] Enable **HTTPS** on port 27124. ✅ 2026-04-17
 - [x] Copy the API key into your password manager — you'll need it for ✅ 2026-04-17
-      [[_tools/README|slice_watch.py]] integrations and any future scripts.
+      scripts that use the Local REST API.
 - [x] Test: `curl -k -H "Authorization: Bearer <key>" https://127.0.0.1:27124/vault/00-index/dashboard.md` ✅ 2026-04-17
 
 ## What to do if something drifts again

@@ -31,14 +31,14 @@ Every document in this vault is either a **specification** (the target system), 
 
 | If you are… | Start here |
 |---|---|
-| Opening the vault for the first time | `dashboard` |
-| A coding agent picking up work | [[00-index/agent-guardrails]] → [[12-roadmap/phased-plan]] → your assigned slice |
+| Opening the vault for the first time | [[00-index/reading-tour]] |
+| A coding agent picking up work | [[00-index/agent-guardrails]] → [[12-roadmap/phased-plan]] → your assigned issue |
 | A human reviewer | [[00-index/executive-summary]] |
 | Doing deployment | [[08-deployment/index]] |
 | Implementing a retrieval path | [[05-retrieval/scoring-model]] |
 | Writing a new adapter | [[07-interfaces/canonical-api]] → [[07-interfaces/sdk]] |
 | Debugging in production | [[09-operations/runbooks]] |
-| Looking for what's unfinished | [[00-index/research-questions]] or `research-stubs` |
+| Looking for what's unfinished | [[00-index/research-questions]] |
 
 ## Vault layout
 
@@ -58,8 +58,6 @@ Every document in this vault is either a **specification** (the target system), 
 12-roadmap/         v1/v2/v3 direction
 13-decisions/       ADRs
 _templates/         Templater templates for each note type
-_bases/             Obsidian Bases (dynamic status / gap views)
-_inbox/             research questions, locks, cross-slice tickets
 _attachments/       images / binaries (excluded from the graph)
 ```
 
@@ -70,10 +68,7 @@ See [[00-index/conventions]] for the full schema.
 Every note carries a `status:` frontmatter field — `complete`, `draft`, `stub`,
 or `research-needed`. Browse the live views:
 
-- `by-status` — every note, sortable by status.
-- `research-stubs` — only stubs and research-needed notes.
 - [[00-index/research-questions]] — narrative of the open questions.
-- `dashboard` — at-a-glance section health.
 
 The graph view is colour-coded by status (see `.obsidian/graph.json`) — open
 the graph and research-needed nodes glow red; complete nodes are green. Open
@@ -86,16 +81,15 @@ orphan nodes in the graph to find unlinked notes.
 - **Templater** — scaffolds new notes per folder. Try *Cmd+P → Templater: Create new note from template*.
 - **Linter** — runs on save. Normalises frontmatter key order, deduplicates tags, trims trailing whitespace. Configured in `.obsidian/plugins/obsidian-linter/data.json`.
 - **Tasks** — custom statuses include `[R]` (Research) and `[/]` (In Progress). Query blocks sit inside dashboards.
-- **Dataview** — live tables/lists over frontmatter. Powers `dashboard`, [[00-index/research-questions]], `stubs`, and the per-section indexes. DataviewJS is enabled.
+- **Dataview** — live tables/lists over frontmatter. Powers [[00-index/research-questions]] and the per-section indexes. DataviewJS is enabled.
 - **Breadcrumbs** — turns `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` frontmatter into an explicit graph. Open the matrix or trail view from the command palette.
-- **Kanban** — boards at [[12-roadmap/slice-board]], `migration-board`, `research-board`.
 - **Local REST API** — headless access from Musubi's own vault-sync pipeline.
 - **Style Settings** — surface for tuning the `musubi-status-colors` CSS snippet.
 - **Git** — auto-commit / push integration; open *Settings → Git* to enable.
 
 ### Built-in, enabled and configured
 
-- **Bases** — spreadsheet views over frontmatter. Our dashboards live in `_bases/`.
+- **Bases** — available for spreadsheet views over frontmatter; the repo ships none.
 - **Graph view** — colour-groups wired to status/type tags.
 - **Backlinks / Outgoing / Properties / Canvas** — standard.
 

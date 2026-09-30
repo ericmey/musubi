@@ -54,9 +54,9 @@ Once you're comfortable, explore by interest:
 
 ## As you read
 
-Keep `operator-notes` open in a side pane. Jot reactions, questions, and disagreements there — don't try to fix specs inline on a first pass.
+Jot reactions, questions, and disagreements in a scratch note in a side pane — don't try to fix specs inline on a first pass.
 
-When you find something missing or wrong, add a checklist item to operator-notes in the form:
+When you find something missing or wrong, add a checklist item in the form:
 
 ```
 - [R] [[04-data-model/episodic-memory]] — I don't understand why X. Needs clearer example.
@@ -80,6 +80,5 @@ SORT section ASC
 
 ## What's next after the tour
 
-- Open `dashboard` — it's the single page you'll return to.
-- Open [[00-index/research-questions]] — these are the gaps Eric (or an agent) needs to answer.
+- Open [[00-index/research-questions]] — these are the open design gaps.
 - Open the graph (Cmd+G) — colour-coded by status. Red glow = research-needed. Find the dense cluster; that's the heart of the design.

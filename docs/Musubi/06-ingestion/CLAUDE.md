@@ -11,7 +11,7 @@ reviewed: true
 
 # Agent Rules — Ingestion & Lifecycle (06)
 
-Local rules for slices under `musubi/ingestion/`, `musubi/lifecycle/`, `musubi/vault_sync/`. Supplements [[CLAUDE]].
+Local rules for changes under `musubi/ingestion/`, `musubi/lifecycle/`, `musubi/vault_sync/`. Supplements [[CLAUDE]].
 
 ## Must
 
@@ -45,8 +45,3 @@ Changing cadence requires an ADR and updates to [[09-operations/runbooks]].
 - Use Qwen2.5-7B via Ollama locally by default. Gemini is the optional fallback.
 - **Prompt versions are frozen per ADR.** Store prompts in `musubi/llm/prompts/<name>/v<N>.txt`. A prompt change is a new file, never an edit.
 - Every LLM output is validated against a pydantic model before use.
-
-## Related slices
-
-- `slice-ingestion-capture`, `slice-vault-sync`, `slice-embedding`.
-- `slice-lifecycle-engine`, `slice-lifecycle-maturation`, `slice-lifecycle-synthesis`, `slice-lifecycle-promotion`, `slice-lifecycle-reflection`.

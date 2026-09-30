@@ -28,4 +28,4 @@ What this section exists to answer.
 
 ## Status
 
-See [[_bases/by-status]] filtered to this section.
+Filter the graph view or search by `status:` to see this section's open notes.

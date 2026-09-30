@@ -14,8 +14,6 @@ The consolidated pipeline of open research questions across the vault. Every ite
 
 Task emoji legend (parsed by the [Tasks plugin](https://publish.obsidian.md/tasks/)): `[R]` = Research, `[/]` = In progress, `[x]` = Resolved.
 
-Browse live: `research-stubs`.
-
 ## Live index of research-needed notes
 
 ```dataview
@@ -87,7 +85,7 @@ group by folder
 
 ## Resolution path
 
-1. Pick a question. Convert it into a research note under `_inbox/research/<slug>.md` via the `research-question` template.
+1. Pick a question. Open a GitHub issue labelled `research` for it.
 2. Spend ≤ 1 day on prior art + a small prototype.
 3. Answer it. Fold the answer into the relevant spec and either:
    - Produce an ADR in [[13-decisions/index]], **or**

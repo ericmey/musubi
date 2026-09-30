@@ -45,10 +45,6 @@ operator's choice and live outside this repo (the original deployment's decision
 When an alert fires:
 
 1. Open the runbook linked from the alert.
-2. Follow the numbered steps. If a step fails unexpectedly, stop and file `_inbox/questions/<slice-id>-incident-<date>.md`.
+2. Follow the numbered steps. If a step fails unexpectedly, stop and record it on the incident's issue.
 3. Document the incident in `09-operations/incidents/<YYYY-MM-DD>-<slug>.md` (create if first of the day).
 4. If a runbook step is wrong or missing, fix it **in the same PR as the incident write-up**.
-
-## Related slices
-
-- `slice-ops-observability`, `slice-ops-backup`.

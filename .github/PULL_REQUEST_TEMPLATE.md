@@ -26,7 +26,7 @@ follow-up issue**, or **declared out of scope here**. One row per bullet. No sil
 
 ## Definition of Done
 
-- [ ] First commit on the branch is the test file (`test(...)` before any `feat(...)`).
+- [ ] Behaviour change: the first commit is the test file (`test(...)` before any `feat(...)`). Docs/chore PR: n/a.
 - [ ] `make check` passes (ruff format --check + ruff check + mypy --strict + pytest + coverage).
 - [ ] `make agent-check` passes (docs frontmatter, spec Test Contracts, wikilinks).
 - [ ] `gh pr checks` green.

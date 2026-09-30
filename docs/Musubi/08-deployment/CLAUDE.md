@@ -46,7 +46,3 @@ Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong
 | `musubi-core`    | built in repo               | API + planes              | no  |
 | `musubi-lifecycle` | built in repo             | scheduler + jobs          | no  |
 | `kong`          | `kong (managed outside this repo)`                   | TLS + reverse proxy       | no  |
-
-## Related slices
-
-- `slice-ops-ansible`, `slice-ops-compose`.

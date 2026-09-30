@@ -42,9 +42,3 @@ Local rules for `musubi/api/`, `openapi.yaml`, `proto/`, and all adapter/SDK rep
 | `musubi-livekit`    | Python     | LiveKit Agents toolkit. Fast Talker + Slow Thinker pattern. Hard 200ms. |
 | `musubi-openclaw`   | TypeScript | Desktop-app extension. Blended retrieval. Identity proxy.              |
 | (`curl` / direct)   | n/a        | REST is a first-class consumer; no translation layer needed.           |
-
-## Related slices
-
-- `slice-api-v0-read` — canonical API (one-at-a-time writer).
-- `slice-sdk-py` — Python SDK.
-- `slice-adapter-mcp`, `slice-adapter-livekit`, `slice-adapter-openclaw`.
