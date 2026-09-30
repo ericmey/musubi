@@ -96,11 +96,13 @@ With artifacts enabled, chunks surface alongside the other planes. Chunks are sc
 
 `blended` is a retrieval mode, not a namespace plane. The public API rejects a
 three-segment namespace whose final plane is `/blended`. A two-segment
-`tenant/blended` is a valid literal presence through the API, but direct calls
-to the older internal blended function reject that ambiguous form rather than
-expand it to a house-specific list. Use an explicit namespace for one presence
-or a scoped wildcard retrieve when searching across presences. Authorization
-still applies to every namespace returned.
+`tenant/blended` is a valid literal presence through the API. The older
+internal blended function expands `tenant/blended` across presences only when
+the caller supplies an explicit nonempty `presences` list; it rejects the
+implicit form rather than falling back to a household list. Public callers
+should use an explicit namespace for one presence or a scoped wildcard
+retrieve across presences. Authorization still applies to every namespace
+returned.
 
 See [[10-security/auth]] for the token-scope mapping.
 

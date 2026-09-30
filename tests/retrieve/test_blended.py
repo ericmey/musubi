@@ -374,6 +374,41 @@ async def test_legacy_blended_namespace_fails_instead_of_using_house_presences()
         assert "wildcard" in res.error.detail
         mock_deep.assert_not_called()
 
+        empty_query = BlendedRetrievalQuery(
+            namespace="eric/blended", query_text="Q", presences=[]
+        )
+        empty_res = await run_blended_retrieve(
+            cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), empty_query
+        )
+        assert isinstance(empty_res, Err)
+        assert empty_res.error.code == "invalid_collections"
+        mock_deep.assert_not_called()
+
+
+async def test_legacy_blended_namespace_uses_only_explicit_presences() -> None:
+    """An explicit presence list keeps the legacy internal form usable."""
+    hit = ScoredHit(
+        object_id="1",
+        plane="episodic",
+        state="matured",
+        score=0.9,
+        score_components=ScoreComponents(0, 0, 0, 0, 0),
+        payload={},
+    )
+    with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
+        mock_deep.return_value = Ok(value=DeepResult(hits=[hit]))
+        query = BlendedRetrievalQuery(
+            namespace="eric/blended", query_text="Q", presences=["voice", "cli"]
+        )
+        res = await run_blended_retrieve(
+            cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
+        )
+        assert res.is_ok()
+        called = [call.args[3].namespace for call in mock_deep.call_args_list]
+        assert "eric/voice/episodic" in called
+        assert "eric/cli/episodic" in called
+        assert "eric/claude-code/episodic" not in called
+
 
 # Scoring
 async def test_relevance_normalized_across_planes_pre_score() -> None:

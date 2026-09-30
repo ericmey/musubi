@@ -41,6 +41,7 @@ class BlendedRetrievalQuery:
     planes: Sequence[str] = ("curated", "concept", "episodic")
     include_lineage: bool = True
     state_filter: Sequence[LifecycleState] | None = None
+    presences: Sequence[str] | None = None
 
 
 # Provenance weights for resolving duplicate ties (curated > concept > episodic-matured > episodic-provisional)
@@ -93,24 +94,36 @@ async def run_blended_retrieve(
     llm: DeepRetrievalLLM | None = None,
 ) -> Result[BlendedResult, BlendedRetrievalError]:
     """Execute blended retrieval across planes."""
-    # The public API rejects a three-segment /blended plane; a two-segment
-    # tenant/blended is a valid literal presence there. Direct callers of this
-    # older function cannot distinguish that from the retired expansion, so
-    # refuse the ambiguous form rather than silently search house presences.
-    if query.namespace.endswith("/blended"):
+    # The public API treats tenant/blended as a literal presence. This older
+    # internal scope means cross-presence expansion only when the caller
+    # explicitly supplies the presences; no household list is assumed.
+    legacy_scope = query.namespace.endswith("/blended")
+    if legacy_scope and not query.presences:
         return Err(
             error=BlendedRetrievalError(
                 code="invalid_collections",
-                detail="The /blended namespace scope is unsupported; use explicit namespaces or a wildcard retrieve.",
+                detail="The /blended namespace scope requires explicit presences; use a scoped wildcard retrieve through the public API.",
             )
         )
 
     # 1. Expand namespace
     expanded_namespaces: list[tuple[str, str]] = []
-    parts = query.namespace.split("/")
-    base_ns = "/".join(parts[:2]) if len(parts) >= 3 else query.namespace
-    for p in query.planes:
-        expanded_namespaces.append((p, f"{base_ns}/{p}"))
+    if legacy_scope:
+        tenant = query.namespace.split("/")[0]
+        if "curated" in query.planes:
+            expanded_namespaces.append(("curated", f"{tenant}/_shared/curated"))
+        if "concept" in query.planes:
+            expanded_namespaces.append(("concept", f"{tenant}/_shared/concept"))
+        if "episodic" in query.planes:
+            for presence in query.presences or ():
+                expanded_namespaces.append(("episodic", f"{tenant}/{presence}/episodic"))
+        if "artifact" in query.planes:
+            expanded_namespaces.append(("artifact", f"{tenant}/_shared/artifact"))
+    else:
+        parts = query.namespace.split("/")
+        base_ns = "/".join(parts[:2]) if len(parts) >= 3 else query.namespace
+        for plane in query.planes:
+            expanded_namespaces.append((plane, f"{base_ns}/{plane}"))
 
     # 2. Call run_deep_retrieve per plane/namespace
     coros = []
