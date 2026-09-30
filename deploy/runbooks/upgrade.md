@@ -24,7 +24,7 @@ the repository:
 set -euo pipefail
 cd ~/musubi
 git pull --ff-only origin main
-export ANSIBLE_VAULT_PASSWORD_FILE="${HOME}/ansible/.vault_pass"
+: "${ANSIBLE_VAULT_PASSWORD_FILE:?export ANSIBLE_VAULT_PASSWORD_FILE to your ansible-vault password file}"
 export MUSUBI_ANSIBLE_ARGS="-i deploy/ansible/inventory.yml -e @${HOME}/.musubi-secrets/inventory-vars.yml -e @${HOME}/.musubi-secrets/vault.yml"
 export TEI_IMAGE="$(python3 -c 'import yaml; print(yaml.safe_load(open("deploy/ansible/group_vars/all.yml"))["musubi_tei_image"])')"
 export MUSUBI_SSH="$(python3 -c 'import os, yaml; values = yaml.safe_load(open(os.path.expanduser("~/.musubi-secrets/inventory-vars.yml"))); print(values["operator_ssh_user"] + "@" + values["musubi_host"])')"

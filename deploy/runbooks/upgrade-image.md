@@ -132,8 +132,8 @@ docker run --rm \
 # Merge only after the command above reports every live credential and control PASS.
 gh pr merge <number> --squash
 git pull --ff-only
-ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/.vault_pass \
-  MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
+# ANSIBLE_VAULT_PASSWORD_FILE must already be exported (deploy/ansible/README.md).
+MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
   scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
