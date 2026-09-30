@@ -43,7 +43,7 @@ Every document in this vault is either a **specification** (the target system), 
 ## Vault layout
 
 ```
-00-index/           navigation, glossary, conventions, dashboards
+00-index/           navigation, glossary, conventions
 01-overview/        mission, personas, three planes
 02-current-state/   POC inventory + gap analysis
 03-system-design/   components, topology, failure modes
@@ -80,7 +80,7 @@ orphan nodes in the graph to find unlinked notes.
 
 - **Templater** — scaffolds new notes per folder. Try *Cmd+P → Templater: Create new note from template*.
 - **Linter** — runs on save. Normalises frontmatter key order, deduplicates tags, trims trailing whitespace. Configured in `.obsidian/plugins/obsidian-linter/data.json`.
-- **Tasks** — custom statuses include `[R]` (Research) and `[/]` (In Progress). Query blocks sit inside dashboards.
+- **Tasks** — custom statuses include `[R]` (Research) and `[/]` (In Progress). Query blocks sit inside index pages.
 - **Dataview** — live tables/lists over frontmatter. Powers [[00-index/research-questions]] and the per-section indexes. DataviewJS is enabled.
 - **Breadcrumbs** — turns `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` frontmatter into an explicit graph. Open the matrix or trail view from the command palette.
 - **Local REST API** — headless access from Musubi's own vault-sync pipeline.

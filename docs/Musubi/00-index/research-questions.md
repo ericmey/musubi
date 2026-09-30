@@ -23,7 +23,7 @@ TABLE WITHOUT ID
   status AS "Status",
   updated AS "Updated"
 FROM ""
-WHERE status = "research-needed" AND !contains(file.folder, "_templates") AND !contains(file.folder, "_bases") AND !contains(file.folder, "_inbox")
+WHERE status = "research-needed" AND !contains(file.folder, "_templates")
 SORT section ASC
 ```
 
@@ -94,4 +94,4 @@ group by folder
 
 ## How this stays current
 
-When a spec is flipped from `research-needed` or `draft` to `complete`, remove its questions here (or mark them `[x]`). The Base at `research-stubs` auto-updates from frontmatter.
+When a spec is flipped from `research-needed` or `draft` to `complete`, remove its questions here (or mark them `[x]`). The table above is a live Dataview query over frontmatter, so it updates itself.

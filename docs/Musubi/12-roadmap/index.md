@@ -30,7 +30,7 @@ TABLE WITHOUT ID
   length(filter(rows, (r) => r.status = "research-needed")) AS "🔬",
   length(filter(rows, (r) => r.status = "stub")) AS "🧷"
 FROM ""
-WHERE section AND !contains(file.folder, "_templates") AND !contains(file.folder, "_bases") AND !contains(file.folder, "_inbox") AND !contains(file.folder, "_attachments")
+WHERE section AND !contains(file.folder, "_templates") AND !contains(file.folder, "_attachments")
 GROUP BY section
 SORT section ASC
 ```

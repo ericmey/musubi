@@ -13,7 +13,7 @@ reviewed: true
 
 This vault came out of a research agent, not hand-authoring. Don't start at `00` and read to `13`. The agent organized the files alphabetically; the numbers are filing, not a reading order.
 
-Instead, follow one of these tours. Each stop has a plain-English prompt for what to look for. Flip `reviewed: true` in frontmatter (or check the Properties panel) as you go — the dashboard tracks your progress.
+Instead, follow one of these tours. Each stop has a plain-English prompt for what to look for. Flip `reviewed: true` in frontmatter (or check the Properties panel) as you go — the *Review progress* table below tracks it.
 
 ## Fast tour (~20 min) — just the spine
 
@@ -73,7 +73,7 @@ TABLE WITHOUT ID
   length(filter(rows, (r) => r.reviewed != true)) AS "· unread",
   length(rows) AS "total"
 FROM ""
-WHERE section AND !contains(file.folder, "_templates") AND !contains(file.folder, "_bases") AND !contains(file.folder, "_inbox") AND !contains(file.folder, "_attachments")
+WHERE section AND !contains(file.folder, "_templates") AND !contains(file.folder, "_attachments")
 GROUP BY section
 SORT section ASC
 ```

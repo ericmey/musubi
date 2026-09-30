@@ -145,7 +145,7 @@ Settings → Dataview:
 Settings → Linter → General:
 
 - [x] **Lint on save** = ON ✅ 2026-04-17
-- [x] **Folders to ignore** contains `_templates`, `_bases`, `_attachments`, `_inbox`, `_tools` ✅ 2026-04-17
+- [x] **Folders to ignore** contains `_templates`, `_attachments`, `_tools` ✅ 2026-04-17
 
 ### Graph view
 
@@ -166,7 +166,7 @@ Settings → Local REST API:
 - [x] Enable **HTTPS** on port 27124. ✅ 2026-04-17
 - [x] Copy the API key into your password manager — you'll need it for ✅ 2026-04-17
       scripts that use the Local REST API.
-- [x] Test: `curl -k -H "Authorization: Bearer <key>" https://127.0.0.1:27124/vault/00-index/dashboard.md` ✅ 2026-04-17
+- [x] Test: `curl -k -H "Authorization: Bearer <key>" https://127.0.0.1:27124/vault/00-index/index.md` ✅ 2026-04-17
 
 ## What to do if something drifts again
 
