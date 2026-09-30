@@ -21,17 +21,16 @@ split this way.
 ```python
 from musubi_sdk import MusubiClient
 
-client = MusubiClient(base_url="http://127.0.0.1:8100/v1", token=token)
 ns = "acme/assistant/episodic"
 
-client.episodic.capture(
-    namespace=ns,
-    content="The team agreed to ship the beta on Friday after the security review.",
-    tags=["release"],
-    importance=7,
-)
-
-hits = client.retrieve(namespace=ns, query_text="when does the beta ship?", mode="fast")
+with MusubiClient(base_url="http://127.0.0.1:8100/v1", token=token) as client:
+    client.episodic.capture(
+        namespace=ns,
+        content="The team agreed to ship the beta on Friday after the security review.",
+        tags=["release"],
+        importance=7,
+    )
+    hits = client.retrieve(namespace=ns, query_text="when does the beta ship?", mode="fast")
 ```
 
 `mode` selects the retrieval path:
@@ -41,6 +40,8 @@ hits = client.retrieve(namespace=ns, query_text="when does the beta ship?", mode
 - `blended`: several planes in one ranked list.
 - `recent`: newest first, no query needed.
 
+The `with` block closes the client's connections when it ends; call
+`client.close()` yourself if you keep a client open instead.
 `AsyncMusubiClient` has the same methods for async code.
 
 ## Build a context pack
