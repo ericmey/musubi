@@ -211,7 +211,7 @@ Retrieval is trickier — a query might span namespaces (blended). Rule:
 
 For example, a client reading `eric/_shared/curated` and
 `eric/_shared/concept` needs read scope for both. The old
-`eric/_shared/blended` plane is not a public retrieval address.
+`eric/_shared/blended` virtual address is not a public retrieval address.
 
 ## Refresh tokens
 
