@@ -210,7 +210,7 @@ Before and after the deploy, run the live consumer blast-radius smoke:
 MUSUBI_CONSUMER_PHASE=pre-deploy \
 MUSUBI_CONSUMER_COMMAND_CHAIR_CMD='<command-chair live smoke command>' \
 MUSUBI_CONSUMER_PHONE_AGENTS_CMD='<phone-agent live smoke command>' \
-MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD='<openclaw-on-nova live smoke command>' \
+MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD='<openclaw-on-nyla live smoke command>' \
 MUSUBI_CONSUMER_VICE_CMD='<vice live app smoke command>' \
 deploy/smoke/check_consumers.sh
 ```
