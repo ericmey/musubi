@@ -1,7 +1,6 @@
 """Musubi — shared memory + knowledge plane.
 
-See the architecture vault for design. Code is sliced: each public subpackage
-realises one slice from ``_slices/`` in the vault, one Test Contract at a time.
+See the architecture docs for design and the Test Contracts for behavior.
 """
 
 __version__ = "1.27.7"

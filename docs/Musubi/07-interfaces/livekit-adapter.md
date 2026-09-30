@@ -17,7 +17,10 @@ Integrates Musubi into LiveKit voice agent workers. Implements the Slow Thinker 
 [sourceblender/musubi-livekit](https://github.com/sourceblender/musubi-livekit)
 as the `musubi-livekit` Python package, importable as `musubi_livekit`.
 It embeds into a LiveKit agent worker; it is not a standalone service.
-The Musubi HTTP API and SDK remain in the core repository.
+The Musubi HTTP API stays in core; the Python client is in
+`sourceblender/musubi-sdk`.
+The old `musubi.adapters.livekit` path remains as a forwarding import when
+`musubi-livekit` is installed; new code imports `musubi_livekit` directly.
 
 ## The dual-agent pattern
 

@@ -10,6 +10,7 @@ updated: 2026-04-19
 up: "[[13-decisions/index]]"
 reviewed: false
 extends: "[[13-decisions/0015-monorepo-supersedes-multi-repo]]"
+superseded-by: "[[13-decisions/0046-standalone-python-sdk-and-livekit]] (Python SDK and LiveKit package location only)"
 ---
 
 # ADR 0022: Extension ecosystem — non-Python integrations live in sibling `<system>-musubi` repos; Python integrations live in-monorepo as workspace subpackages
@@ -17,6 +18,10 @@ extends: "[[13-decisions/0015-monorepo-supersedes-multi-repo]]"
 **Status:** accepted
 **Date:** 2026-04-19
 **Deciders:** Eric
+
+**Partial supersession (2026-09-30):** [[13-decisions/0046-standalone-python-sdk-and-livekit]]
+places the Python SDK and LiveKit adapter in sibling repositories. The naming
+and canonical-API discipline for other integrations still applies.
 
 ## Goal
 
