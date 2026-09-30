@@ -11,25 +11,22 @@
 
 ## Upgrades
 
-1. **Find the new digest** on the release's GitHub page, and verify it with
-   `cosign verify` as in [Install](install.md#run-it-for-real-one-host).
-2. **Read the release notes** in [CHANGELOG.md](../../CHANGELOG.md).
-3. **Pin the new digest** in your Compose file, then pull it and recreate:
+The full procedure is the [image upgrade runbook](../../deploy/runbooks/upgrade-image.md).
+Its shape:
 
-   ```bash
-   docker compose --env-file .env.production pull
-   docker compose --env-file .env.production up -d
-   curl -fsS http://127.0.0.1:8100/v1/ops/health
-   ```
-
-4. **Check your agents** before calling the upgrade done: a real capture and
+1. **A release publishes a signed image,** and an automatic PR proposes the new
+   digest for `deploy/ansible/group_vars/all.yml`. That PR never merges itself.
+2. **Verify the digest** with `cosign verify`, as in
+   [Install](install.md#pin-and-verify-the-image), and read the release notes
+   in [CHANGELOG.md](../../CHANGELOG.md).
+3. **Run the credential preflight** the PR describes. It starts the candidate
+   image against your live tokens and must pass before you merge.
+4. **Dry-run, then deploy.** `scripts/musubi-deploy core,lifecycle-worker`
+   runs the playbook with `--check --diff` by default; only the image and
+   version lines should change. Add `--apply` to deploy.
+5. **Check your agents** before calling the upgrade done: a real capture and
    recall from each integration you run, not only a health check.
-5. **Roll back** by pinning the previous digest and repeating step 3.
-
-Ansible-managed hosts have a fuller procedure, with a credential preflight
-that runs the new image against your live tokens before it goes live:
-[upgrade runbook](../../deploy/runbooks/upgrade.md) and
-[image upgrade](../../deploy/runbooks/upgrade-image.md).
+6. **Roll back** by reverting the pin commit and deploying again.
 
 ## Backups
 

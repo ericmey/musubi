@@ -24,55 +24,68 @@ Stop it with `docker compose -f quickstart/docker-compose.yml down`
 
 ## Run it for real: one host
 
-Production is the same shape on one host: Musubi Core, Qdrant, three
-text-embeddings-inference services (dense, sparse, reranker) and Ollama, on
-one Docker network. Only Core publishes a port.
+The supported production path is Ansible, driven from a separate control
+machine. Start with the [first-deploy runbook](../../deploy/runbooks/first-deploy.md)
+and [`deploy/ansible/`](../../deploy/ansible/README.md). The playbooks install
+Docker and the NVIDIA container runtime on the host, render the Compose stacks
+from [`deploy/ansible/templates/`](../../deploy/ansible/templates/) with the
+pinned images in
+[`group_vars/all.yml`](../../deploy/ansible/group_vars/all.yml), and run a
+credential preflight against the new image before each deploy.
 
-1. **Pick an image by digest.** Images are published to
-   `ghcr.io/sourceblender/musubi-core`, signed with cosign, scanned, and
-   carry an SBOM. Tags move and digests don't, so pin the digest from the
-   release you want (its GitHub Release page, or
-   `docker buildx imagetools inspect ghcr.io/sourceblender/musubi-core:<version>`),
-   then verify it:
+**What the host needs:**
 
-   ```bash
-   cosign verify \
-     --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
-     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-     ghcr.io/sourceblender/musubi-core@sha256:<digest>
-   ```
+- Linux with systemd. The stack logs to journald, and the runbook assumes
+  Ubuntu.
+- An NVIDIA GPU. The three text-embeddings-inference services and Ollama
+  reserve it.
+- Docker with Compose v2 (the playbooks install both).
 
-2. **Start from the Compose stack.** [`docker-compose.yml`](../../docker-compose.yml)
-   is the canonical stack; [`deploy/docker/README.md`](../../deploy/docker/README.md)
-   describes the files and the start-up flow. **Set `services.core.image` to
-   the digest you verified.** The committed value is a placeholder, and the
-   stack won't start until you replace it.
+**The root [`docker-compose.yml`](../../docker-compose.yml) is a scaffold,
+not a runnable stack.** Every image line in it carries a placeholder digest.
+Don't `up` it as committed; use the rendered stack.
 
-3. **Configure it.** Copy
-   [`deploy/docker/.env.production.example`](../../deploy/docker/.env.production.example)
-   to `.env.production` and fill it in. Two values are secrets and belong in
-   your secret manager, not in the repo or in shell history:
-   - `JWT_SIGNING_KEY`: signs and verifies agent tokens (see
-     [Connect](connect.md)). Use a long random value; a key that looks like a
-     PEM or JSON public key is rejected.
-   - `QDRANT_API_KEY`: authenticates Core to Qdrant.
+### Pin and verify the image
 
-   `OAUTH_AUTHORITY` is the token issuer: every token's `iss` claim must match
-   it. Models, ports and data paths have working defaults in the example.
+Images are published to `ghcr.io/sourceblender/musubi-core`, signed with
+cosign, scanned, and carry an SBOM. Tags move and digests don't, so pin the
+digest from the release you want (its GitHub Release page, or
+`docker buildx imagetools inspect ghcr.io/sourceblender/musubi-core:<version>`),
+then verify it:
 
-4. **Start and check it.**
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/sourceblender/musubi-core@sha256:<digest>
+```
 
-   ```bash
-   docker compose --env-file .env.production config --quiet
-   docker compose --env-file .env.production up -d
-   curl -fsS http://127.0.0.1:8100/v1/ops/health
-   ```
+`group_vars/all.yml` carries the current release's pin, updated by an
+automatic PR after each release.
 
-5. **Set up backups before you rely on it.** See [Operate](operate.md#backups).
+### Secrets and settings
 
-For an Ansible-managed host (rendered Compose file, systemd unit, credential
-preflight before every deploy), use [`deploy/ansible/`](../../deploy/ansible/README.md)
-and the [first-deploy runbook](../../deploy/runbooks/first-deploy.md).
+[`deploy/docker/.env.production.example`](../../deploy/docker/.env.production.example)
+lists every setting Core reads. Two are secrets and belong in your secret
+manager (with Ansible, the encrypted `vault.yml`), never in the repo or in
+shell history:
 
-Put TLS in front of Core (a reverse proxy or gateway) before any agent
-reaches it over a network you don't fully control.
+- `JWT_SIGNING_KEY`: signs and verifies agent tokens (see
+  [Connect](connect.md)). Use a long random value; a key that looks like a PEM
+  or JSON public key is rejected.
+- `QDRANT_API_KEY`: authenticates Core to Qdrant.
+
+`OAUTH_AUTHORITY` is the token issuer: every token's `iss` claim must match
+it. Models, ports and data paths have working defaults.
+
+### Check it
+
+On the host, once the stack is up:
+
+```bash
+curl -fsS http://127.0.0.1:8100/v1/ops/health
+```
+
+Set up backups before you rely on it: see [Operate](operate.md#backups). Put
+TLS in front of Core (the runbook uses a gateway) before any agent reaches it
+over a network you don't fully control.
