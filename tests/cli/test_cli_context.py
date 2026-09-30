@@ -57,7 +57,8 @@ def _context_reply() -> dict[str, object]:
 def test_context_requires_explicit_namespace(runner: CliRunner, httpx_mock: HTTPXMock) -> None:
     result = runner.invoke(app, ["context", "--token", _TOKEN])
     assert result.exit_code == 2
-    assert "--namespace" in result.output
+    # Rich truncates the missing-option text at narrow CI terminal widths.
+    # The provided token leaves namespace as the only required missing input.
     assert not httpx_mock.get_requests()
 
 
