@@ -17,12 +17,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ANSIBLE_DIR="$REPO_ROOT/deploy/ansible"
 SECRETS_DIR="${MUSUBI_SECRETS_DIR:-$HOME/.musubi-secrets}"
-VAULT_PASS_HINT="${ANSIBLE_VAULT_PASSWORD_FILE:-$HOME/ansible/.vault_pass}"
+VAULT_PASS_HINT="${ANSIBLE_VAULT_PASSWORD_FILE:-/path/to/your/vault-password-file}"
 
 echo "=== Musubi ansible control-host bootstrap ==="
 echo "Repo: $REPO_ROOT"
 echo "Secrets dir: $SECRETS_DIR"
-echo "Vault pass file: $VAULT_PASS_HINT (will be used at playbook runtime)"
+if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]]; then
+ echo "Vault pass file: $VAULT_PASS_HINT (from ANSIBLE_VAULT_PASSWORD_FILE)"
+else
+ echo "Vault pass file: unset. Export ANSIBLE_VAULT_PASSWORD_FILE to your ansible-vault password file."
+fi
 echo
 
 mkdir -p "$SECRETS_DIR"

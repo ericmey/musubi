@@ -14,8 +14,10 @@ control host:
 - Clones this repo to `~/musubi` (fresh `git pull` before each deploy).
 - Keeps Musubi-specific secrets + inventory overrides under
  `~/.musubi-secrets/` (gitignored directory, 700-perm).
-- Reuses `~/ansible/.vault_pass` as the ansible-vault password file so the
- Musubi vault and the homelab fleet vault share one secret-management story.
+- Reads the ansible-vault password file named by `ANSIBLE_VAULT_PASSWORD_FILE`.
+ Export it once in the control host's shell profile (for example
+ `export ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible_vault_pass`, mode `0600`);
+ every command, runbook and script here uses that variable.
 
 Running playbooks from this repo's working tree on a developer laptop is
 possible for `--syntax-check` and `--check --diff` dry-runs, but the
@@ -66,8 +68,8 @@ After it prints the next-steps banner:
 ```bash
 cd ~/musubi && git pull --ff-only
 
-ANSIBLE_VAULT_PASSWORD_FILE=~/ansible/.vault_pass \
- ansible-playbook \
+# ANSIBLE_VAULT_PASSWORD_FILE is already exported (see above).
+ansible-playbook \
  -i deploy/ansible/inventory.yml \
  -e @~/.musubi-secrets/inventory-vars.yml \
  -e @~/.musubi-secrets/vault.yml \
@@ -145,8 +147,8 @@ Ansible vault, command output, diffs, or this repository. Updating either
 - **Repo = single source of truth.** Playbook edits go through PR review.
 - **Secrets live outside any git clone.** `~/.musubi-secrets/` survives
  `rm -rf ~/musubi && git clone` and can't be accidentally `git add`ed.
-- **One vault password across the homelab.** Reusing `~/ansible/.vault_pass`
- keeps a single ansible-vault story, not two.
+- **One vault password file, named once.** `ANSIBLE_VAULT_PASSWORD_FILE` is the
+ only place its path appears, so commands and scripts can't disagree about it.
 - **The committed inventory is a valid template**, not a file that has to
  be hand-patched before use. Running it unparameterised fails fast with a
  clear Jinja undefined-variable error.
