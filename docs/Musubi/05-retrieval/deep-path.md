@@ -25,11 +25,11 @@ Retrieval for planning, analysis, and background pre-fetch. Uses the full pipeli
 ```python
 results = await musubi.retrieve(
     RetrievalQuery(
-        namespace="eric/claude-code",
+        namespace="eric/claude-code/curated",
         query_text="how did we decide to promote concepts",
         mode="deep",
         limit=25,
-        planes=["curated", "concept", "episodic"],
+        planes=["curated"],
         include_lineage=True,
     )
 )

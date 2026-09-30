@@ -110,7 +110,7 @@ Fast Talker call shape:
 ```python
 results = await musubi.retrieve(
     RetrievalQuery(
-        namespace="eric/livekit-voice",  # one presence; episodic by default
+        namespace="eric/livekit-voice/episodic",  # one concrete target
         query_text=user_utterance,
         mode="fast",
         limit=5,
