@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.7](https://github.com/sourceblender/musubi/compare/v1.27.6...v1.27.7) (2026-09-30)
+
+
+### Documentation
+
+* **guide:** add a user guide: install, connect, use, operate ([#857](https://github.com/sourceblender/musubi/issues/857)) ([764a067](https://github.com/sourceblender/musubi/commit/764a067d61a0b9ce611ffcfcceb692c05301faf6))
+
 ## [1.27.6](https://github.com/sourceblender/musubi/compare/v1.27.5...v1.27.6) (2026-09-30)
 
 
