@@ -94,26 +94,22 @@ async def run_blended_retrieve(
     llm: DeepRetrievalLLM | None = None,
 ) -> Result[BlendedResult, BlendedRetrievalError]:
     """Execute blended retrieval across planes."""
+    # The public API already rejects /blended as a namespace plane. Refuse it here too so
+    # direct callers cannot silently search a house-specific list of presences.
+    if query.namespace.endswith("/blended"):
+        return Err(
+            error=BlendedRetrievalError(
+                code="invalid_collections",
+                detail="The /blended namespace scope is unsupported; use explicit namespaces or a wildcard retrieve.",
+            )
+        )
+
     # 1. Expand namespace
     expanded_namespaces: list[tuple[str, str]] = []
-    if query.namespace.endswith("/blended"):
-        tenant = query.namespace.split("/")[0]
-        presences = query.presences or ["claude-code", "claude-desktop", "livekit-voice"]
-        if "curated" in query.planes:
-            expanded_namespaces.append(("curated", f"{tenant}/_shared/curated"))
-        if "concept" in query.planes:
-            expanded_namespaces.append(("concept", f"{tenant}/_shared/concept"))
-        if "episodic" in query.planes:
-            for p in presences:
-                expanded_namespaces.append(("episodic", f"{tenant}/{p}/episodic"))
-        if "artifact" in query.planes:
-            expanded_namespaces.append(("artifact", f"{tenant}/_shared/artifact"))
-    else:
-        # Standard fallback if not /blended
-        parts = query.namespace.split("/")
-        base_ns = "/".join(parts[:2]) if len(parts) >= 3 else query.namespace
-        for p in query.planes:
-            expanded_namespaces.append((p, f"{base_ns}/{p}"))
+    parts = query.namespace.split("/")
+    base_ns = "/".join(parts[:2]) if len(parts) >= 3 else query.namespace
+    for p in query.planes:
+        expanded_namespaces.append((p, f"{base_ns}/{p}"))
 
     # 2. Call run_deep_retrieve per plane/namespace
     coros = []

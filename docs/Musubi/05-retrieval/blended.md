@@ -92,27 +92,12 @@ query = RetrievalQuery(
 
 With artifacts enabled, chunks surface alongside the other planes. Chunks are scored with provenance 0.7 (see [[05-retrieval/scoring-model]]).
 
-## Blended scope for the voice agent
+## Namespace scope
 
-`"blended"` is also a convention for a *namespace scope* that means "search across all my planes in this tenant." The voice agent uses:
-
-```python
-namespace = "eric/livekit-voice/blended"
-```
-
-The Core expands this at query time to:
-
-```python
-namespaces = [
-    "eric/_shared/curated",
-    "eric/_shared/concept",
-    "eric/livekit-voice/episodic",
-    "eric/claude-code/episodic",      # yes, the voice agent can pull from other presences' episodic
-    "eric/claude-desktop/episodic",
-]
-```
-
-Which presences' episodic are included in the blend is configurable per-presence (privacy scope). By default: same tenant, all presences; user can exclude specific presences via config.
+`blended` is a retrieval mode, not a namespace plane. The public API rejects a
+namespace ending in `/blended`; the internal retrieval function does too. Use an
+explicit namespace for one presence or a scoped wildcard retrieve when searching
+across presences. Authorization still applies to every namespace returned.
 
 See [[10-security/auth]] for the token-scope mapping.
 
@@ -151,9 +136,10 @@ Results = `[]`, response is 200 with `warnings: ["no hits in any plane"]`. Calle
 
 If one plane returns 100 hits and another returns 2, we still rerank everything together — the cross-encoder is plane-agnostic. No per-plane rate-limiting at the merge step.
 
-### Cross-namespace in blended scope
+### Cross-namespace retrieval
 
-Explicitly allowed. Token must carry scope for all expanded namespaces. Cross-tenant is still disallowed in v1.
+Use a scoped wildcard retrieve to search multiple namespaces. Token scope must
+cover the requested tenant; cross-tenant retrieval remains disallowed in v1.
 
 ## Test Contract
 
@@ -177,7 +163,7 @@ Scope:
 
 9. `test_default_planes_cover_curated_concept_episodic`
 10. `test_artifact_opted_in_surfaces_chunks`
-11. `test_blended_namespace_expands_to_tenant_presences`
+11. `test_legacy_blended_namespace_fails_instead_of_using_house_presences`
 
 Scoring:
 
