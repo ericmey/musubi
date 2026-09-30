@@ -17,13 +17,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ANSIBLE_DIR="$REPO_ROOT/deploy/ansible"
 SECRETS_DIR="${MUSUBI_SECRETS_DIR:-$HOME/.musubi-secrets}"
-VAULT_PASS_HINT="${ANSIBLE_VAULT_PASSWORD_FILE:-/path/to/your/vault-password-file}"
 
 echo "=== Musubi ansible control-host bootstrap ==="
 echo "Repo: $REPO_ROOT"
 echo "Secrets dir: $SECRETS_DIR"
 if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]]; then
- echo "Vault pass file: $VAULT_PASS_HINT (from ANSIBLE_VAULT_PASSWORD_FILE)"
+ echo "Vault pass file: $ANSIBLE_VAULT_PASSWORD_FILE (from ANSIBLE_VAULT_PASSWORD_FILE)"
 else
  echo "Vault pass file: unset. Export ANSIBLE_VAULT_PASSWORD_FILE to your ansible-vault password file."
 fi
@@ -105,8 +104,9 @@ be committed anywhere.
 ## Running a playbook
 
 \`\`\`bash
-ANSIBLE_VAULT_PASSWORD_FILE=$VAULT_PASS_HINT \\
- ansible-playbook \\
+# Once, in this host's shell profile:
+#   export ANSIBLE_VAULT_PASSWORD_FILE=/path/to/your/vault-password-file
+ansible-playbook \\
  -i $ANSIBLE_DIR/inventory.yml \\
  -e @$INVENTORY_VARS \\
  -e @$VAULT_YML \\
@@ -145,8 +145,8 @@ fi
 
 echo
 echo "=== Per-deploy command ==="
-echo "ANSIBLE_VAULT_PASSWORD_FILE=$VAULT_PASS_HINT \\"
-echo " ansible-playbook \\"
+echo "# With ANSIBLE_VAULT_PASSWORD_FILE exported (see deploy/ansible/README.md):"
+echo "ansible-playbook \\"
 echo " -i $ANSIBLE_DIR/inventory.yml \\"
 echo " -e @$INVENTORY_VARS \\"
 echo " -e @$VAULT_YML \\"
