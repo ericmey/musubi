@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.27.1](https://github.com/sourceblender/musubi/compare/v1.27.0...v1.27.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **ci:** auto-digest-bump moves the quickstart pin with group_vars ([#837](https://github.com/sourceblender/musubi/issues/837)) ([a83d846](https://github.com/sourceblender/musubi/commit/a83d846a4aa89e2cbb49f353c9a2bc8bc19449de))
+* **deploy:** classify the iris/agent credential in the candidate preflight ([#835](https://github.com/sourceblender/musubi/issues/835)) ([a4b8202](https://github.com/sourceblender/musubi/commit/a4b82027ea8d676d5997fd46c8485da345d9ea94))
+
+
+### Documentation
+
+* point navigation links at sourceblender/musubi ([#834](https://github.com/sourceblender/musubi/issues/834)) ([4a2c10b](https://github.com/sourceblender/musubi/commit/4a2c10b44426be6c8db0bbad9c491e84f77bfe87))
+
 ## [1.27.0](https://github.com/ericmey/musubi/compare/v1.26.18...v1.27.0) (2026-09-25)
 
 
