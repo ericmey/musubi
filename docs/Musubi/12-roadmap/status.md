@@ -14,7 +14,7 @@ Snapshot as of **2026-04-20**. Updated as reality evolves.
 
 ## Boards
 
-- [[12-roadmap/slice-board]] — slices in flight.
+- Work in flight: open issues and pull requests on GitHub.
 - `migration-board` — migration phases.
 - `research-board` — research pipeline.
 
@@ -34,7 +34,7 @@ external consumer needs thin wheels), 1 retired.
 | 5. Vault | **done** | Watcher + vault-sync shipped via `slice-vault-sync`. |
 | 6. Lifecycle | **done** | Engine, maturation, synthesis, promotion, reflection all shipped. |
 | 7. Adapters | **done** | MCP adapter shipped; LiveKit + OpenClaw (OpenClaw retired) landed. |
-| 8. Ops | **done (first deploy)** | Ansible + Compose + observability + backup + hardening + first-deploy runbook shipped AND executed: Musubi is live on `musubi.example.local` as of 2026-04-20. See `work-log`. |
+| 8. Ops | **done (first deploy)** | Ansible + Compose + observability + backup + hardening + first-deploy runbook shipped AND executed: Musubi is live on `musubi.example.local` as of 2026-04-20. |
 
 Phase 8's "first deploy" doesn't mean Ops is perfect forever — it means the
 stack was brought up end-to-end on the reference host, the health endpoint
@@ -68,7 +68,7 @@ See `index` for detail.
  `docker save | ssh | docker load` transfer the first deploy used.
 3. Automate the HF-cache rsync step in `bootstrap.yml` so a fresh host
  matches the current one without manual intervention.
-4. Resolve the `[R]` findings in `operator-notes` (Ollama model
+4. Resolve the operator's `[R]` findings (Ollama model
  drift — closed in tonight's deploy; health-URL contradiction — still
  open, `health.yml` probes Qdrant/Ollama on localhost but compose makes
  them bridge-only).
@@ -76,7 +76,7 @@ See `index` for detail.
 ## Recently completed
 
 - **2026-04-20** — First real deploy of Musubi stack on `musubi.example.local`.
- All six services healthy. See `work-log` for the full entry.
+ All six services healthy.
 - **2026-04-20** — ADR 0023 (Qdrant 1.15 → 1.17 pin bump) + ADR 0024 (Kong
  deferred for v1) + runbook reconciliation.
 - **2026-04-20** — `docs/architecture/` → `docs/Musubi/` vault rename

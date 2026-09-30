@@ -84,7 +84,7 @@ vault/
 │       └── calendar.md
 ├── artifacts/               # artifact files (namespace-tagged in frontmatter, not path-partitioned)
 ├── _archive/                # soft-deleted files
-└── _inbox/                  # ticket / questions / locks folders
+└── _inbox/                  # untriaged human input (see 04-data-model/vault-schema)
 ```
 
 The frontmatter in each file declares its namespace explicitly (`tenant: nyla, presence: curated, plane: curated`). The filesystem structure is a convenience for humans (easy nav in Obsidian) — the namespace of record is in the frontmatter, so moving a file across agent folders requires a frontmatter edit too.

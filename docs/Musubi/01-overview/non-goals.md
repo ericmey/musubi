@@ -10,7 +10,7 @@ reviewed: false
 ---
 # Non-Goals
 
-What Musubi explicitly will not do. Listed here so slice owners don't drift into scope creep.
+What Musubi explicitly will not do. Listed here so contributors don't drift into scope creep.
 
 ## Not a general-purpose vector DB
 

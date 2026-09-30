@@ -17,7 +17,7 @@ The dedicated Ubuntu box. What it looks like, how it's provisioned, how componen
 
 > Concrete hostnames and IPs in this spec use placeholder tokens (`<musubi-host>`, `<musubi-ip>`, `<kong-gateway>`, `<homelab-domain>`, etc.). Real values live in `.agent-context.local.md` at the repo root (gitignored); agents substitute when running real commands.
 
-> **Deployed 2026-04-17.** A physical machine matching this profile is online as `<musubi-host>` on the homelab VLAN. Base services (Qdrant, Ollama) are running natively (not containerised) from a pre-Ansible manual install. The concrete realised state (exact hardware serials, packages pulled, services and ports in use right now) is in `.agent-context.local.md` § *Realised deployment state (2026-04-18)*. See `work-log` for the dated event.
+> **Deployed 2026-04-17.** A physical machine matching this profile is online as `<musubi-host>` on the homelab VLAN. Base services (Qdrant, Ollama) are running natively (not containerised) from a pre-Ansible manual install. The concrete realised state (exact hardware serials, packages pulled, services and ports in use right now) is in `.agent-context.local.md` § *Realised deployment state (2026-04-18)*.
 
 ## Hardware
 
@@ -192,7 +192,7 @@ The HF cache under `/home/ericmey/musubi-hf-cache/hub/` (BGE-M3, SPLADE v3,
 BGE-reranker-v2-m3) was rsynced into `/var/lib/musubi/tei-models/` before the
 compose stack came up. That preserved ~6.9 GB of downloads (SPLADE v3 is
 gated on HuggingFace and would 401 otherwise). Automating this rsync in
-`bootstrap.yml` is a tracked follow-up (see `work-log` 2026-04-20).
+`bootstrap.yml` was a tracked follow-up (2026-04-20).
 
 ## Known deployment gotchas
 
@@ -230,7 +230,7 @@ Captured from operational work on 2026-04-18. The future Ansible role that event
       purged — the spec and deploy now agree on Qwen 3 4B per
       [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]].
 
-Each of these is a candidate for future `_slices/slice-ops-*` or `slice-musubi-*` work.
+Each of these is a candidate for a future issue.
 
 ## Test Contract
 

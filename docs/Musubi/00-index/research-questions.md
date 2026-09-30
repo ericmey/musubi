@@ -14,8 +14,6 @@ The consolidated pipeline of open research questions across the vault. Every ite
 
 Task emoji legend (parsed by the [Tasks plugin](https://publish.obsidian.md/tasks/)): `[R]` = Research, `[/]` = In progress, `[x]` = Resolved.
 
-Browse live: `research-stubs`.
-
 ## Live index of research-needed notes
 
 ```dataview
@@ -25,7 +23,7 @@ TABLE WITHOUT ID
   status AS "Status",
   updated AS "Updated"
 FROM ""
-WHERE status = "research-needed" AND !contains(file.folder, "_templates") AND !contains(file.folder, "_bases") AND !contains(file.folder, "_inbox")
+WHERE status = "research-needed" AND !contains(file.folder, "_templates")
 SORT section ASC
 ```
 
@@ -87,7 +85,7 @@ group by folder
 
 ## Resolution path
 
-1. Pick a question. Convert it into a research note under `_inbox/research/<slug>.md` via the `research-question` template.
+1. Pick a question. Open a GitHub issue labelled `research` for it.
 2. Spend ≤ 1 day on prior art + a small prototype.
 3. Answer it. Fold the answer into the relevant spec and either:
    - Produce an ADR in [[13-decisions/index]], **or**
@@ -96,4 +94,4 @@ group by folder
 
 ## How this stays current
 
-When a spec is flipped from `research-needed` or `draft` to `complete`, remove its questions here (or mark them `[x]`). The Base at `research-stubs` auto-updates from frontmatter.
+When a spec is flipped from `research-needed` or `draft` to `complete`, remove its questions here (or mark them `[x]`). The table above is a live Dataview query over frontmatter, so it updates itself.

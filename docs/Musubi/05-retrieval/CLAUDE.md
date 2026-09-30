@@ -11,7 +11,7 @@ reviewed: true
 
 # Agent Rules — Retrieval (05)
 
-Local rules for slices under `musubi/retrieve/` and `musubi/rerank/`. Supplements [[CLAUDE]].
+Local rules for changes under `musubi/retrieve/` and `musubi/rerank/`. Supplements [[CLAUDE]].
 
 ## Must
 
@@ -43,7 +43,3 @@ Local rules for slices under `musubi/retrieve/` and `musubi/rerank/`. Supplement
 3. Default weight to 0 (off) behind a flag.
 4. Tune weight behind a shadow-eval (see [[05-retrieval/evals]]).
 5. Graduate via ADR.
-
-## Related slices
-
-- `slice-retrieval-scoring`, `slice-retrieval-hybrid`, `slice-retrieval-fast`, `slice-retrieval-deep`, `slice-retrieval-rerank`, `slice-retrieval-blended`, `slice-retrieval-orchestration`.

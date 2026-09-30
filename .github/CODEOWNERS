@@ -14,7 +14,7 @@
 /openapi.yaml                       @ericmey
 /proto/                             @ericmey
 
-# Shared types — only slice-types writes here.
+# Shared types: changes here affect every module, so they need an owner's review.
 /src/musubi/types/                  @ericmey
 
 # Architecture vault (in-repo). Edits should come with explicit reasoning.

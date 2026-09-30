@@ -20,18 +20,16 @@ The `00–13` folder prefixes are **filing, not a reading plan**. They came from
 - Breadcrumbs frontmatter (`up`, `next`, `prev`, `depends-on`, `blocks`, `supersedes`) for the walkable graph.
 - [[00-index/architecture.canvas]] for the visual map of how components relate.
 
-You never need to memorize "what's in 05." Use the dashboard, the graph, the canvas, or full-text search.
+You never need to memorize "what's in 05." Use the index pages, the graph, the canvas, or full-text search.
 
 ## Review workflow
 
 Every note has a `reviewed:` checkbox in frontmatter. The workflow:
 
 1. Open a note, read it, flip `reviewed` to `true` in the Properties panel (top of the file).
-2. As questions occur, append them to `operator-notes` with a `[R]` checkbox — they show up automatically in [[00-index/research-questions]] and the Research Board.
-3. Strong questions graduate into their own file under `_inbox/research/` via the **Research Question** template.
+2. As questions occur, add them to the note you're reading with an `[R]` checkbox — they show up automatically in [[00-index/research-questions]].
+3. Strong questions graduate into a GitHub issue labelled `research`.
 4. When a question is answered, update the source spec and either flip the research question to `[x]` or convert it into an ADR in `13-decisions/`.
-
-The `dashboard` shows review progress per section. The `to-review` Base lists everything you haven't marked yet.
 
 ## Markdown & vault style
 
@@ -92,7 +90,7 @@ superseded-by: "[[newer-adr]]"
 | `draft`            | Mostly written, but has open questions that could change the spec.                   |
 | `stub`             | Intentionally brief placeholder; link to upstream blocker in **Open questions**.     |
 | `research-needed`  | Contains a research-blocker that must be answered before the note can progress.       |
-| `living-document`  | Top-level readmes and dashboards; evergreen.                                         |
+| `living-document`  | Top-level readmes and index pages; evergreen.                                        |
 | ADR-only: `proposed` / `accepted` / `superseded` / `rejected` — see below.            |
 
 ### ADRs (section 13)
@@ -219,7 +217,7 @@ alongside the namespaced ones. Obsidian's tag pane nests them automatically.
 ```
 musubi/
 ├── README.md
-├── 00-index/            navigation, glossary, conventions, dashboards
+├── 00-index/            navigation, glossary, conventions
 ├── 01-overview/         mission, personas, three planes, research grounding
 ├── 02-current-state/    POC inventory + gap analysis
 ├── 03-system-design/    components, topology, failure modes
@@ -235,12 +233,6 @@ musubi/
 ├── 13-decisions/        ADRs + sources
 │
 ├── _templates/          Templater templates (spec, adr, runbook, ...)
-├── _bases/              Obsidian Bases (dynamic views over frontmatter)
-├── _inbox/              transient — research questions, cross-slice tickets, locks
-│   ├── research/        open research questions (use research-question template)
-│   ├── cross-slice/     coordination tickets between agent slices
-│   ├── locks/           lockfiles for single-agent-per-module discipline
-│   └── questions/       agent-filed blockers
 ├── _attachments/        images and binary drop-ins (kept out of the main graph)
 └── .obsidian/           vault config; committed to git
 ```
@@ -270,12 +262,11 @@ has been tuned for them.
 | **Templater** | New notes in each section scaffold from `_templates/`. |
 | **Linter** | On-save frontmatter + markdown normalisation. |
 | **Tasks** | Tracks roadmap / research checklists across files. Custom statuses include `R` (research). |
-| **Dataview** | Live tables over frontmatter inside dashboards and section indexes. DataviewJS is enabled. |
+| **Dataview** | Live tables over frontmatter inside section indexes and index pages. DataviewJS is enabled. |
 | **Breadcrumbs** | Interprets `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` as graph edges. Reverse edges are implied automatically. |
-| **Kanban** | Boards at [[12-roadmap/slice-board]], `migration-board`, `research-board`. |
 | **Local REST API** | Programmatic access to the vault from Musubi's own vault-sync. |
 | **Style Settings** | Lets you tune the `musubi-status-colors` CSS snippet without editing files. |
-| **Bases** (core) | Spreadsheet-style views over frontmatter. Used for all status dashboards. |
+| **Bases** (core) | Spreadsheet-style views over frontmatter. Available; the repo ships none. |
 | **Graph, Backlinks, Outgoing Links, Properties, Canvas** (core) | Enabled and configured. |
 
 ### Breadcrumbs fields
@@ -295,8 +286,8 @@ The vault uses Breadcrumbs' default hierarchy fields plus these extras:
 
 ### Dataview conventions
 
-- All live tables in dashboards use the source expression `FROM ""` and filter
-  out infra folders (`_templates`, `_bases`, `_inbox`, `_attachments`). Copy
+- All live tables use the source expression `FROM ""` and filter out infra
+  folders (`_templates`, `_attachments`). Copy
   the existing queries when adding new ones.
 - Inline queries use `=` prefix; inline JS uses `$=`.
 - Avoid DataviewJS inside committed docs unless it adds obvious value — JS

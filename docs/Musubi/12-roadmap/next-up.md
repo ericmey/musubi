@@ -106,13 +106,13 @@ LLM-side change, not new hardcoded greeting strings. The instruction-template ju
 
 **DoD:** One command (`musubi-cli lifecycle journal --since 48h` or similar) that gives you a chronological view of overnight sweeps without opening sqlite3.
 
-### W2.2 — Ops dashboard on shiori (central observability)
+### W2.2 — Ops dashboard (central observability)
 
-**Repo:** the operator's shiori-side codebase (`wiki/services/observability/dashboards/`), NOT `musubi/`. **Estimate:** 1 day. **Depends on:** Prometheus scraping (already deployed) + shiori central stack (deployed 2026-05-03) + ADR 0033 (musubi `remote_write` to shiori Mimir).
+**Repo:** the operator's observability codebase, NOT `musubi/`. **Estimate:** 1 day. **Depends on:** Prometheus scraping (already deployed) + a central metrics stack + ADR 0033 (musubi `remote_write` to central Mimir).
 
-> *Updated 2026-05-03 per [[13-decisions/0033-centralize-observability-on-shiori]]: this dashboard lives on the central shiori observability host, not on the musubi workload host. The previously-planned `deploy/grafana/` template was removed.*
+> *Updated 2026-05-03 per [[13-decisions/0033-centralize-observability-on-shiori]]: this dashboard lives on the central observability host, not on the musubi workload host. The previously-planned `deploy/grafana/` template was removed.*
 
-Grafana on shiori, pointed at the central Mimir datasource (which receives musubi's prometheus via `remote_write`). First-pass panels (same content as before):
+Grafana on the central observability host, pointed at the central Mimir datasource (which receives musubi's prometheus via `remote_write`). First-pass panels (same content as before):
 
 - Lifecycle sweep durations + last-fired-at per sweep
 - Qdrant collection point counts (per plane)
@@ -121,7 +121,7 @@ Grafana on shiori, pointed at the central Mimir datasource (which receives musub
 - Embedding + LLM latency (TEI dense / sparse / reranker / Ollama)
 - Disk + RSS on the workload host (now via node-exporter, see ADR 0033)
 
-**DoD:** A single Grafana dashboard URL on `shiori:3000` bookmarkable, filtered by `host=musubi`, gives "is musubi healthy" at a glance.
+**DoD:** A single bookmarkable Grafana dashboard URL, filtered by `host=musubi`, gives "is musubi healthy" at a glance.
 
 ### W2.3 — Rin-as-watchdog
 

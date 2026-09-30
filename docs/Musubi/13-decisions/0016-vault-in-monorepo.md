@@ -105,5 +105,5 @@ Rejected. Specs are load-bearing and agents need to write to `_slices/<slice>.md
 - [[13-decisions/0015-monorepo-supersedes-multi-repo]] — updated to note this follow-on.
 - `docs/AGENT-PROCESS.md` (retired with the slice workflow, 2026-09-30) — multi-agent concurrency model (Issues as the lock board). *Outside the vault; Obsidian wikilinks don't resolve it.*
 - Root `CLAUDE.md` (repo root) — agent entry point; points at `docs/Musubi/` for specs.
-- [[00-index/agent-guardrails]], [[00-index/agent-handoff]] — unchanged in content; paths updated to reflect the new layout.
+- [[00-index/agent-guardrails]], `00-index/agent-handoff` (retired 2026-09-30) — unchanged in content; paths updated to reflect the new layout.
 - Migration commit: see `work-log` (2026-04-18 — Vault moved into the monorepo).

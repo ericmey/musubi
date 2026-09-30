@@ -5,7 +5,7 @@ First — thank you for even considering it. This is a personal project that I'v
 ## The short version
 
 1. **Open an issue first.** Bug, feature, or question — having a tracked conversation lets us agree on scope before code gets written.
-2. **One slice per PR.** Small, reviewable diffs. See [Slices](#slices) below.
+2. **One focused change per PR.** Small, reviewable diffs that do what their issue says.
 3. **Tests first, implementation second.** Every module has a Test Contract; your PR's first commit should be the test file.
 4. **`make check` must pass.** Format, lint, type-check, and full test suite.
 5. **Conventional commits.** The release automation reads them.
@@ -14,14 +14,14 @@ Everything else expands on these.
 
 ## Before you start
 
-Please read the top of [CLAUDE.md](CLAUDE.md) (for AI agents) or this file's sibling [AGENTS.md](AGENTS.md) (same content; different filename so tools like Claude Code, Cursor, Aider, and Codex all find their canonical config). These capture the non-negotiable rules:
+Please read [AGENTS.md](AGENTS.md), the single contract for human and AI contributors alike (CLAUDE.md, GEMINI.md and the Cursor rules just point to it). The non-negotiable rules:
 
-1. **Stay inside your slice.** The slice file in [`docs/Musubi/_slices/`](docs/Musubi/_slices/) declares which paths a slice may write; violating that turns a review into a merge-conflict.
+1. **Stay in scope.** Change what your issue and PR are about; raise changes to other areas in the PR or a new issue instead of folding them in.
 2. **The canonical API is frozen per version.** Additive changes require an ADR; breaking changes bump the major.
 3. **Tests first.** Period.
 4. **Don't silently rebase the spec.** If your implementation forces a spec change, update the spec file in the same PR and tag the commit with a `spec-update:` trailer.
 
-Full text: [`docs/Musubi/00-index/agent-guardrails.md`](docs/Musubi/00-index/agent-guardrails.md).
+Full text: [AGENTS.md](AGENTS.md).
 
 ## Dev setup
 
@@ -37,39 +37,34 @@ make check             # all of the above — the gate for every PR
 
 # Integration + vault hygiene (slower, optional locally):
 make test-integration
-make agent-check       # vault frontmatter + slice DAG + spec hygiene
+make agent-check       # docs health: frontmatter, spec Test Contracts, wikilinks
 ```
 
-## Slices
+## Specs and Test Contracts
 
-Musubi is built as a sequence of reviewable "slices" — small, independently-reviewable changes that realise one unit of the architecture. Each slice lives as a markdown file in [`docs/Musubi/_slices/`](docs/Musubi/_slices/) with:
-
-- `owns_paths` — files this slice is allowed to write
-- `forbidden_paths` — files it may not touch
-- a **Test Contract** — pytest functions to be written first; code must make them pass
-
-If your contribution maps to an existing slice spec, great — claim the GitHub Issue tracking it and go. If it doesn't map to an existing slice, open an issue describing the work and the spec will be drafted (or you can draft it yourself; see `_templates/` in the vault).
+The architecture docs under [`docs/Musubi/`](docs/Musubi/) hold a spec per area. Each spec that
+describes behaviour has a **Test Contract**: named pytest functions to write first, which the code must
+then make pass. If your change implements or alters a spec, its Test Contract drives your tests, and
+any spec change goes in the same PR with a `spec-update:` trailer. If there's no spec for what you want
+to build, say so in the issue; the spec can be drafted from `docs/Musubi/_templates/`.
 
 ## Workflow
 
 ```bash
-# 1. Claim the issue
-gh issue edit <n> --add-assignee @me \
-  --add-label "status:in-progress" --remove-label "status:ready"
+# 1. Take the issue
+gh issue edit <n> --add-assignee @me
 
 # 2. Branch + draft PR immediately (visibility > speed)
-git switch -c slice/<slice-id>
+git switch -c <type>/<short-name>
 gh pr create --draft --base main \
   --title "<type>(<scope>): <subject>" \
   --body "Closes #<n>."   # exact keyword; auto-closes the issue on merge
 
 # 3. First commit = the test file
 # 4. Implement, commit, push
-# 5. `make check` must pass locally before flipping the PR ready-for-review
-# 6. Another agent / human reviews — we don't self-approve
-
-# 7. After merge, the slice status flips to done; release-please picks it up
-#    for the next version bump.
+# 5. `make check` and `make agent-check` pass locally before marking the PR ready
+# 6. Someone else reviews and merges; we don't self-approve
+# 7. After merge, release-please picks it up for the next version bump
 ```
 
 ## Commit style

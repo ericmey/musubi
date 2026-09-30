@@ -19,7 +19,6 @@ Where Musubi is headed after v1. Timelines are loose — this is a thinking road
 - [[12-roadmap/phased-plan]] — v1 → v2 → v3 direction with bullets per phase.
 - [[12-roadmap/ownership-matrix]] — who owns which module + what "ownership" means in a one-person shop.
 - [[12-roadmap/status]] — current state of v1 phases, what's in flight, what's next.
-- [[12-roadmap/slice-board]] — Kanban board for coding-agent slices.
 
 ## Live snapshot
 
@@ -31,7 +30,7 @@ TABLE WITHOUT ID
   length(filter(rows, (r) => r.status = "research-needed")) AS "🔬",
   length(filter(rows, (r) => r.status = "stub")) AS "🧷"
 FROM ""
-WHERE section AND !contains(file.folder, "_templates") AND !contains(file.folder, "_bases") AND !contains(file.folder, "_inbox") AND !contains(file.folder, "_attachments")
+WHERE section AND !contains(file.folder, "_templates") AND !contains(file.folder, "_attachments")
 GROUP BY section
 SORT section ASC
 ```

@@ -78,9 +78,9 @@ Musubi's design is informed by the state of the art in AI agent memory systems a
 - Noted as a post-v1 possibility if structured relational queries become a bottleneck.
 - See [[13-decisions/0008-no-relational-store]].
 
-## Reference reading for slice owners
+## Reference reading for contributors
 
-Every slice has a "Prior Art" section in its spec that links to the specific external system idea being borrowed from. A new slice owner should read:
+Specs have a "Prior Art" section linking to the external system idea being borrowed from. Someone new to an area should read:
 
 1. Their spec.
 2. The ADRs it references.

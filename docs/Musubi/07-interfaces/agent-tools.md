@@ -245,12 +245,12 @@ Every adapter runs the canonical agent-tools contract suite (extends [[07-interf
 
 ## Implementation status
 
-| Adapter | Tracking slice | Status |
+| Adapter | Tracking | Status |
 |---|---|---|
-| MCP | `[[_slices/slice-mcp-canonical-tools]]` | proposed |
-| OpenClaw plugin | `[[_slices/slice-openclaw-canonical-tools]]` | proposed (extends openclaw-musubi PR #24) |
-| LiveKit | `[[_slices/slice-livekit-canonical-tools]]` | proposed |
-| Backend `mode=recent` | ``slice-retrieve-recent`` | proposed |
+| MCP | no issue yet (was `slice-mcp-canonical-tools`) | proposed |
+| OpenClaw plugin | no issue yet (was `slice-openclaw-canonical-tools`) | proposed (extends openclaw-musubi PR #24) |
+| LiveKit | no issue yet (was `slice-livekit-canonical-tools`) | proposed |
+| Backend `mode=recent` | no issue yet (was `slice-retrieve-recent`) | proposed |
 
 ## Related
 

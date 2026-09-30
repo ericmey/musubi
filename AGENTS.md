@@ -1,12 +1,18 @@
-# AGENTS.md — contract for every coding agent on this repo
+# AGENTS.md — the contract for every coding agent on this repo
 
-This is the shared entry point for every non-Claude agent tool (Codex, Cursor, Continue, Aider, Cline, Crush, and anything else that reads `AGENTS.md` at the repo root). Claude Code agents also read [CLAUDE.md](CLAUDE.md); the two files express the same contract, so don't diff them — if you find a contradiction, CLAUDE.md is the source for Claude-specific guidance and this file is the source for everyone else, but the **rules below apply to every agent on the project regardless of tool.**
-
-Read this file top to bottom **before any edit**. The rules are not suggestions. Every coding agent on this repo — human-prompted or autonomous — operates under this contract.
+This is the single entry point for every coding agent (Claude Code, Codex, Cursor, Gemini CLI, Grok,
+Aider, Continue, Cline, Crush, anything else) and for human contributors. `CLAUDE.md`, `GEMINI.md`
+and `.cursor/rules/musubi.mdc` are short pointers to this file, so there is exactly one copy of the
+rules to keep true. Read it top to bottom **before any edit**.
 
 ## What Musubi is
 
-Musubi (結び) is a three-plane shared-memory server for a small AI agent fleet. Standalone Python service, canonical HTTP/gRPC API, adapters (MCP, LiveKit, OpenClaw) that depend on the SDK. All code, SDK, adapters, deployment, contract tests, and the architecture vault live in this one repo (see [ADR 0015](docs/Musubi/13-decisions/0015-monorepo-supersedes-multi-repo.md) and [ADR 0016](docs/Musubi/13-decisions/0016-vault-in-monorepo.md)).
+Musubi (結び) is a three-plane shared-memory server for a small AI agent fleet: a standalone Python
+service with a canonical HTTP API. Integrations (MCP, OpenClaw, Claude Code, Codex, Hermes, LiveKit, …)
+are adapters that talk to that API; most live in their own `sourceblender/musubi-*` repos. The core
+service, its SDK, deployment, contract tests and the architecture docs live here (see
+[ADR 0015](docs/Musubi/13-decisions/0015-monorepo-supersedes-multi-repo.md) and
+[ADR 0016](docs/Musubi/13-decisions/0016-vault-in-monorepo.md)).
 
 ## Repo map
 
@@ -14,199 +20,158 @@ Musubi (結び) is a three-plane shared-memory server for a small AI agent fleet
 src/musubi/                          implementation (Python 3.12, pydantic v2)
   types/ store/ planes/ retrieve/ lifecycle/ api/ sdk/ adapters/
 tests/                               mirrors src/musubi/ path-for-path
-docs/
-  AGENT-PROCESS.md                   multi-agent concurrency — required read
-  architecture/                      the Obsidian vault (specs, ADRs, slices)
-    _slices/slice-<id>.md            one coding task per file
-    _inbox/locks/ cross-slice/ questions/ research/
-    00-index/agent-guardrails.md     authoritative expansion of this file
-    13-decisions/                    ADRs
-    _tools/                          vault health checks (check.py, …)
-.claude/ .agents/ .cursor/ GEMINI.md  per-tool agent configuration
-.github/                             PR + Issue templates, CI workflows
-.agent-context.local.md              operator-only (gitignored): hosts, creds pointers
+docs/Musubi/                         architecture docs (an Obsidian vault): specs, ADRs
+  00-index/                          conventions, guardrails, Definition of Done, glossary
+  NN-<area>/                         specs per area, each with a Test Contract
+  13-decisions/                      ADRs
+  _tools/check.py                    docs health check (CI runs it)
+deploy/                              Ansible, Docker, runbooks, smoke checks
+.github/                             PR + issue templates, CI workflows
+.agent-context.local.md              operator-only (gitignored): hosts, credentials pointers
 ```
+
+## How work flows
+
+Plain GitHub issues and pull requests. (Until 2026-09-30 the repo used "slices", per-task notes under
+`docs/Musubi/_slices/`. That workflow is retired; its history is in git.)
+
+1. **Start from an issue.** `gh issue list --state open`. If you were assigned one, use it. For a
+   change with no issue, open one first unless it's a small docs or chore fix (see step 7).
+2. **Say you're on it.** Assign yourself (`gh issue edit <n> --add-assignee @me`) and re-read the
+   issue: if someone else is assigned, pick something else.
+3. **Branch** off `main`: `git switch -c <type>/<short-name>` (e.g. `fix/blended-deadline`), and push
+   with `-u`.
+4. **Open a draft PR early** with `Closes #<n>` as the first line of the body, so work in progress is
+   visible and nobody starts the same thing.
+5. **Write the tests first** when you're changing behaviour, from the Test Contract of the spec you're
+   implementing (next section).
+6. **Implement** the minimum to make them pass, within the rules below.
+7. **Verify and hand off:** run the checks in "Before handoff", update the PR body so it describes
+   what actually shipped, and mark it ready (`gh pr ready <m>`). A PR with no tracking issue says so on
+   its first line: `No tracking Issue: <one-sentence reason>`.
 
 ## The non-negotiables
 
-1. **Stay inside your slice.** Your slice file at `docs/Musubi/_slices/<slice-id>.md` names `owns_paths` + `forbidden_paths`. Read anywhere; write only to `owns_paths`. Cross-slice work opens a ticket at `docs/Musubi/_inbox/cross-slice/<slice>-<target>.md` + a `cross-slice` GitHub Issue, and your slice flips to `status: blocked`.
-2. **The canonical API is frozen per version.** Only `slice-api-v*` agents modify `src/musubi/api/`, `openapi.yaml`, `proto/`. Additive changes require an ADR; breaking changes bump the version.
-3. **Tests first.** Every spec's `## Test Contract` section is a list of bullets. Your *first commit* on the branch is the test file realising those bullets. Implementation commits follow. PR isn't mergeable until tests pass + coverage ≥ 85 % on owned files (≥ 90 % on `src/musubi/planes/**` and `src/musubi/retrieve/**`).
-4. **Do not silently rebase the spec.** If implementation forces a spec change, update the spec file **in the same PR** with a `spec-update: <doc-path>` trailer on the commit.
+1. **Stay in scope.** Change what your issue and PR are about. If you need a change in another area
+   (a shared type, another module's behaviour), say so in the PR or open an issue rather than folding
+   it in quietly.
+2. **The canonical API is frozen per version.** Changes to `src/musubi/api/`, `openapi.yaml` or
+   `proto/` need an ADR if additive and a version bump if breaking.
+3. **Tests first, for behaviour changes.** Every spec has a `## Test Contract` section. When your PR
+   implements or changes behaviour, its first commit is the test file realising the relevant bullets,
+   and it isn't mergeable until those tests pass and the coverage gates hold (≥ 85 % on changed files,
+   ≥ 90 % under `src/musubi/planes/**` and `src/musubi/retrieve/**`). Docs-only and chore PRs don't
+   need a test commit.
+4. **Don't silently rewrite the spec.** If implementation forces a spec change, update the spec **in
+   the same PR** with a `spec-update: <doc-path>` commit trailer.
 
 ## Test Contract Closure Rule
 
-At handoff, **every bullet in the spec's Test Contract is in exactly one of three states:**
+At handoff, every bullet in the spec's Test Contract is in exactly one of three states:
 
-1. **Passing test** whose name transcribes the bullet text verbatim (with `_` for spaces). Example: a spec bullet `test_create_sets_provisional_state` appears in the test file as `def test_create_sets_provisional_state(...)` and passes. Spec bullet = test-function-name convention makes the audit mechanical (grep).
-2. **Skipped test with reason.** `@pytest.mark.skip(reason="deferred to slice-<id>: <one-line-why>")` or `@pytest.mark.xfail(reason="...")`. The reason must name the follow-up slice **and** justify the deferral.
-3. **Declared out-of-scope in the slice's work log.** An entry under `## Work log` in `_slices/<slice-id>.md` naming the bullet, reason, and follow-up home. A GitHub Issue for the follow-up must exist.
+1. **Passing test** whose name transcribes the bullet (`test_create_sets_provisional_state` →
+   `def test_create_sets_provisional_state(...)`), so the audit is a grep.
+2. **Skipped with a reason:** `@pytest.mark.skip(reason="deferred to #<issue>: <why>")` (or `xfail`).
+   The reason names the follow-up issue **and** justifies the deferral.
+3. **Declared out of scope** in the PR description, naming the bullet, the reason and the follow-up
+   issue.
 
-**Silent omission is not one of the three states.** A spec Test Contract bullet with no matching test and no work-log justification is an **automatic request-changes on review.** The `musubi-reviewer` sub-agent (or a human reviewer) surfaces silent omissions as a Must-fix.
+**Silent omission is not a state.** A bullet with no matching test and no stated deferral is an
+automatic request-changes. The PR template has a table for this.
 
-This rule exists because on 2026-04-18 a slice first-cut silently deferred `patch()` + `delete()` + `access_count` to downstream slices — some correctly scoped, some not. Other agents reading the spec could not tell which bullets were consciously punted vs. overlooked. This rule closes that loophole.
+## Ownership of a method
 
-## Method-ownership rule
+If a method's code lives in a module you're changing, you own it; don't defer it to "whoever exposes
+it". Example: `EpisodicPlane.patch()` lives in `src/musubi/planes/episodic/`, so the planes change
+implements it, even though the API exposes it as `PATCH /v1/episodic-memories/{id}`.
 
-**If the method's code would live inside your `owns_paths`, you own the method.**
+## Before handoff (the checks)
 
-You may NOT defer a method to a slice that merely *exposes* it through a different surface. Example: `EpisodicPlane.patch()` is owned by `slice-plane-episodic` (its code lives in `src/musubi/planes/episodic/`). The API slice (`slice-api-v0`) exposes it via `PATCH /v1/episodic-memories/{id}` but **does not own the implementation.** Pushing `patch()` onto `slice-api-v0` mis-scopes the work.
+Run each and read its output:
 
-Mechanical test when in doubt: "Would the other slice's `owns_paths` list contain the file the method lives in?" Yes → defer. No → you own it.
+1. **`make check`**: ruff format + ruff lint (whole repo, like CI) + mypy strict + pytest + coverage.
+   Must exit 0.
+2. **`make agent-check`**: docs health (frontmatter, spec Test Contracts, wikilinks). `✗` lines are
+   errors and block; `⚠` lines are warnings. If it exits non-zero, look for `✗` first.
+3. **`gh pr checks <pr>`**: remote CI. Local green and remote red means drift: stop and diagnose;
+   never `--admin` past it.
+4. **PR body:** first line `Closes #<n>.` (GitHub only links on `Closes`/`Fixes`/`Resolves`), or
+   `No tracking Issue: <reason>`. The body describes what shipped, not the original plan.
 
-## Dual-update rule (vault frontmatter ↔ GitHub Issue)
+Also:
 
-**Every slice-state change updates both the vault file AND the Issue, in the same PR.**
+- **Symmetric coverage.** If a docstring promises X and Y, both need tests. "Defensive branch" only
+  excuses validation and error paths, never an advertised feature.
+- **Deferred dependencies fail loud.** If you stub a real dependency behind an ADR, the production path
+  must `raise NotImplementedError` or log at `ERROR`/`CRITICAL` saying it's stubbed. An `info` log is
+  not a safety gate.
 
-GitHub Issues are the authoritative lock (atomic assignment across agent machines — see [docs/AGENT-PROCESS.md](docs/AGENT-PROCESS.md)). The slice file's frontmatter is the authoritative intent record (audited, reviewed in PRs, read in Obsidian). They must not be allowed to drift.
+## Review and merge
 
-### Claim (ready → in-progress)
-
-```bash
-gh issue edit <n> --add-assignee @me \
-  --add-label "status:in-progress" --remove-label "status:ready"
-# Same PR — edit docs/Musubi/_slices/<slice-id>.md:
-#   status: ready → in-progress
-#   owner: unassigned → <your-agent-id>   # e.g. codex-gpt5, gemini-3-1, cursor-claude
-```
-
-### Handoff (in-progress → in-review)
-
-```bash
-gh issue edit <n> --add-label "status:in-review" --remove-label "status:in-progress"
-# Same PR — frontmatter status: in-progress → in-review
-# Also: mark PR ready for review: gh pr ready <m>
-```
-
-### Done (merge)
-
-PR body contains `Closes #<n>`; merge auto-closes the Issue. Flip slice frontmatter `status: in-review → done` in the same PR (or a tiny follow-up if the review happens after merge).
-
-### Block
-
-```bash
-gh issue edit <n> --add-label "status:blocked"
-gh issue comment <n> --body "Blocked on <reason + cross-slice ticket link>"
-# Frontmatter status: <previous> → blocked, append work-log entry.
-```
-
-### Enforcement
-
-- `make issue-check` (or `make agent-check`, which includes it) cross-references frontmatter against Issue labels and reports drift. PR reviewers treat drift as a must-fix.
-- Renames / splits / retires of slices use the `slice-reconcile` skill (`.agents/skills/slice-reconcile/SKILL.md` for Codex and similar; `.claude/skills/slice-reconcile/` for Claude). Manual one-sided edits are merge-blockers.
-
-## The workflow (seven steps, apply verbatim)
-
-1. **Pick a slice.** `gh issue list --label "slice,status:ready"` — Issues with that pair are claimable today (all `depends-on` slices done or first-cut-merged enough to depend on). Don't invent a different process.
-2. **Claim atomically** (Dual-update rule above, §Claim). Re-read the Issue immediately after — if you see multiple assignees, step down and pick a different slice.
-3. **Branch:** `git switch -c slice/<slice-id>` off `main`. Push immediately with `-u`.
-4. **Open a Draft PR** with `Closes #<n>` in the body. Do this before writing any code — it makes work-in-progress visible so other agents don't start the same slice.
-5. **Write the test file.** First commit: `test(<scope>): initial test contract for <slice-id>`. Every Test Contract bullet appears as a function (closure rule §1); items deferred to later slices appear as `@pytest.mark.skip(reason="deferred to slice-…")` with a named follow-up. Tests should fail — that's expected at this stage.
-6. **Implement.** Respect `forbidden_paths`. Every mutation at a module boundary returns `Result[T, E]` — not raised exceptions. No `except Exception: pass`. No silent `time.sleep()`. No `os.environ` reads outside `src/musubi/config.py`. Use `batch_update_points` on Qdrant, never loop `set_payload`.
-7. **Verify + hand off:**
-   ```bash
-   make check           # ruff format + lint + mypy --strict + pytest + coverage ≥ 85%
-   make agent-check     # vault frontmatter + slice DAG + spec hygiene + issue drift
-   ```
-   Then: flip slice frontmatter + Issue label (Dual-update rule §Handoff), append a work-log entry to your slice note with diff summary + Test Contract coverage matrix, run `gh pr ready <m>`.
-
-## Self-review before opening PR
-
-Paste this into your PR description (the template has it):
-
-```
-| Test Contract bullet | State | Evidence |
-|---|---|---|
-| test_foo_does_bar | ✓ passing | tests/module/test_foo.py:42 |
-| test_baz_edge_case | ⏭ skipped (slice-xyz: <reason>) | tests/module/test_foo.py:110 |
-| test_out_of_scope | ⊘ declared out-of-scope | _slices/<id>.md#Work log |
-```
-
-One row per spec Test Contract bullet. Silent omissions get request-changes.
-
-### Before handoff — the five checks
-
-Before flipping slice `in-progress → in-review` and marking a PR ready-for-review, run and carefully read the output of each:
-
-1. **`make check`** — ruff format + lint (whole repo, matches CI) + mypy strict + pytest + coverage. Must exit 0.
-2. **`make tc-coverage SLICE=<slice-id>`** — Closure Rule audit. Must exit 0.
-3. **`make agent-check`** — vault-hygiene audit. **Distinguish `✗` errors from `⚠` warnings.** Exit non-zero? Grep for `✗` first — don't wave off a pre-existing warning.
-4. **`gh pr checks <pr-number>`** — remote CI state. Local-green + remote-red means tooling drift; stop and diagnose, do not `--admin` past it.
-5. **PR body linkage:**
-   - Slice PRs: first line of the body is `Closes #<issue-number>.` (exact keyword, case-insensitive: `Closes` / `Fixes` / `Resolves` — prefer `Closes`). Without it GitHub doesn't auto-link and the Issue stays open after merge.
-   - Chore / infra / docs PRs with no tracking Issue: include a line `No tracking Issue: <one-sentence reason>` so the absence is deliberate.
-
-### Additional handoff-readiness rules
-
-- **Symmetric coverage.** A class / function / module that promises X and Y in its docstring needs tests for both. Defensive-branch exceptions apply only to validation + error paths, never to advertised features.
-- **ADR-punted dependencies must fail loud.** If you defer a dependency behind an ADR, the production path must `raise NotImplementedError` or log at `ERROR`/`CRITICAL` with an explicit stub message. `info` logs are not safety gates.
-- **PR body reflects shipped code.** If the design evolved during implementation, update the PR description before marking ready-for-review. Don't make the reviewer reconcile stale intent against actual behaviour.
+- A **different** agent or a human reviews and merges. No self-approval.
+- Merge through a PR only: no direct commits or force-pushes to `main`.
+- Open the PR with the identity that did the work; GitHub attributes a squash merge to the PR's author.
 
 ## Hard prohibitions (automatic revert)
 
-- Silent `time.sleep()` in production code (async waits + timeouts only).
+- Silent `time.sleep()` in production code (async waits with timeouts only).
 - `os.environ` reads outside `src/musubi/config.py`.
-- Hardcoded hosts, ports, collection names, thresholds. (Hostnames + IPs especially — see `.agent-context.local.md` placeholder scheme.)
+- Hardcoded hosts, ports, collection names or thresholds (hostnames and IPs especially: see the
+  placeholder scheme in `.agent-context.local.md`).
 - New top-level dependencies without an ADR in `docs/Musubi/13-decisions/`.
 - `except Exception: pass`.
+- Mutating shared global state without a lock.
 - `git push --force` on shared branches; `--no-verify` on commits.
-- **Silently deferring a Test Contract bullet** — see Closure Rule.
-- **Punting a method to a slice that doesn't own its code path** — see Method-ownership rule.
-- **Flipping slice frontmatter without flipping the Issue label** (or vice versa) — see Dual-update rule.
-- Committing anything in `.agent-context.local.md`, `.agent-brief.*.local.md`, `.env.local`, `.secrets/`, or matching `*.pem` / `*.key` / `id_*`.
+- Silently deferring a Test Contract bullet (see the Closure Rule).
+- Committing anything in `.agent-context.local.md`, `.agent-brief.*.local.md`, `.env.local`,
+  `.secrets/`, or files matching `*.pem` / `*.key` / `id_*`.
 
-## Style (enforced by linters + CI)
+## Style (enforced by linters and CI)
 
-- **Python 3.12.** strict mypy. ruff format + check. pydantic v2 models for every payload; dicts only at the Qdrant boundary.
-- **Errors:** `Result[T, E]` at module boundaries. Typed error dataclasses. Unhandled errors become 5xx with correlation IDs at the API layer.
-- **Async surface.** Internal sync OK if no I/O.
-- **Structured JSON logs**, one field per concept. Never f-string a log message. Correlation IDs propagate.
-- **No `print()`. Ever.**
-- **Import discipline:** `sdk/*` imports `types/*` only. `adapters/*` imports `sdk + types` only. `api/*` composes `planes/*` + `retrieve/*` + `lifecycle/*`. Violations fail `make check` (import-linter check — future addition; enforced by review today).
-- **Conventional Commits.** `feat(scope): …`, `fix(scope): …`, `test(scope): …`, `docs(scope): …`, `chore(scope): …`, `refactor(scope): …`. Same-PR spec changes get a `spec-update: <doc-path>` trailer.
-- **Test function names transcribe spec Test Contract bullet text verbatim.**
+- **Python 3.12,** strict mypy, ruff format + check. pydantic v2 models for every payload; dicts only
+  at the Qdrant boundary.
+- **Errors:** `Result[T, E]` at module boundaries with typed error dataclasses. Unhandled errors become
+  5xx with correlation IDs at the API layer.
+- **Async public surface;** internal sync is fine with no I/O.
+- **Structured JSON logs,** one field per concept, never an f-string message; correlation IDs
+  propagate. **No `print()`.**
+- **Import discipline:** `sdk/*` imports `types/*` only; `adapters/*` imports `sdk` + `types` only;
+  `api/*` composes `planes/*` + `retrieve/*` + `lifecycle/*` (enforced by review today).
+- **Qdrant:** batch with `batch_update_points`; never loop `set_payload`.
+- **Conventional Commits:** `feat(scope): …`, `fix(scope): …`, `test(scope): …`, `docs(scope): …`,
+  `chore(scope): …`, `refactor(scope): …`.
+- **Comments explain why, not what.** Full guide: [conventions](docs/Musubi/00-index/conventions.md).
+
+## Commands
+
+```bash
+make install           # uv sync --extra dev
+make check             # ruff format --check + ruff check + mypy --strict + pytest + coverage
+make agent-check       # docs health (frontmatter, spec Test Contracts, wikilinks)
+make test-integration  # integration tests against a docker stack
+```
 
 ## Agent identification
 
-When you append to a slice's `## Work log` or claim an Issue, use an agent id that starts with your tool family:
-
-- `codex-<model>` (e.g. `codex-gpt5`)
-- `gemini-<version>` (e.g. `gemini-3-1`)
-- `cursor-<backing-model>` (e.g. `cursor-claude`)
-- `grok-<version>`
-- `cowork-<operator-id>`
-- `claude-<interface>-<model>` (e.g. `claude-code-opus47`)
-
-This lets humans + other agents see at a glance which tool shipped which work.
+In PR descriptions and commit trailers, identify the tool and model family, e.g. `codex-gpt5`,
+`gemini-3-1`, `cursor-claude`, `claude-code-opus`, so reviewers can see which tool did which work.
 
 ## When you're stuck
 
-1. Don't guess. Don't "just make it work."
-2. Drop a file at `docs/Musubi/_inbox/questions/<slice-id>-<slug>.md`: goal, expectation, observation, options.
-3. Flip your slice to `blocked` on both sides (Dual-update rule §Block).
-4. Comment the Issue with a link to the question file.
-5. Pick another slice — don't hold a lock while stuck.
+Don't guess and don't "just make it work". Comment on the issue or draft PR with the goal, what you
+expected, what you observed and the options you see, then ask. Don't hold an issue assignment while
+you're blocked on someone else: unassign and say why.
 
-## Definition of Done (from `docs/Musubi/00-index/definition-of-done.md`)
+## Definition of Done
 
-- [ ] Every Test Contract bullet in closure state 1, 2, or 3 (see above).
-- [ ] Coverage ≥ 85 % on owned files (≥ 90 % on planes/** + retrieve/**).
-- [ ] `make check` green (ruff format --check + ruff check + mypy strict + pytest + coverage `fail_under=85`).
-- [ ] `make agent-check` green (vault health + issue drift).
-- [ ] Spec files updated if prose changed (`spec-update:` trailer on the commit).
-- [ ] Frontmatter + Issue both flipped to `in-review` (then `done` at merge).
-- [ ] A *different* agent or a human reviews + merges. No self-approval.
-- [ ] Work-log entry on the slice note; cross-ref to `docs/Musubi/00-index/work-log.md` if the slice realised a spec milestone.
+- [ ] Every Test Contract bullet is in closure state 1, 2 or 3.
+- [ ] Coverage gates met (≥ 85 % on changed files as a floor; per-module gates in
+  [definition-of-done.md](docs/Musubi/00-index/definition-of-done.md)).
+- [ ] `make check` and `make agent-check` green; `gh pr checks` green.
+- [ ] Spec updated in the same PR if behaviour changed (`spec-update:` trailer).
+- [ ] PR body starts with `Closes #<n>.` (or `No tracking Issue: <reason>`) and describes what shipped.
+- [ ] Reviewed and merged by someone other than the author.
 
-## Why this file is long
-
-Because when you are not Claude Code, you do not have a tuned sub-agent system prompt carrying the context for you. This file *is* your system prompt. Read it every time. The Dual-update rule, the Closure Rule, and the Method-ownership rule are the ones most likely to trip a first-time agent — the other rules are mostly the usual Python hygiene.
-
-## For reference only (do not edit as an agent)
-
-- `CLAUDE.md` — Claude-specific entry point; same contract.
-- `docs/Musubi/00-index/agent-guardrails.md` — authoritative expansion of every rule here, plus vault rules (Obsidian, curated plane writes). Read if you're working on vault-sync / curated plane.
-- `docs/AGENT-PROCESS.md` — multi-agent concurrency model: branch naming, review etiquette, concurrency gotchas.
-- `docs/Musubi/00-index/conventions.md` — the full style guide, frontmatter schema, tag taxonomy.
-
-If any of those contradict this file, ask before acting — contradictions are bugs, not features.
+Expanded rules: [docs/Musubi/00-index/agent-guardrails.md](docs/Musubi/00-index/agent-guardrails.md)
+and [definition-of-done.md](docs/Musubi/00-index/definition-of-done.md). If anything contradicts this
+file, ask before acting: contradictions are bugs.
