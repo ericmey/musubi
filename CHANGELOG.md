@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.5](https://github.com/sourceblender/musubi/compare/v1.27.4...v1.27.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **deps:** raise PyJWT and urllib3 security floors ([#854](https://github.com/sourceblender/musubi/issues/854)) ([9ea714b](https://github.com/sourceblender/musubi/commit/9ea714bfd2540023d685d5b0ac10163df3f7ec74))
+
 ## [1.27.4](https://github.com/sourceblender/musubi/compare/v1.27.3...v1.27.4) (2026-09-30)
 
 
