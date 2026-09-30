@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -26,7 +27,7 @@ NEW_IMAGE = "ghcr.io/sourceblender/musubi-core@sha256:" + "b" * 64
 
 def _steps() -> list[dict[str, object]]:
     wf = yaml.safe_load(WORKFLOW.read_text())
-    return wf["jobs"]["bump"]["steps"]
+    return cast(list[dict[str, object]], wf["jobs"]["bump"]["steps"])
 
 
 def _patch_step() -> dict[str, object]:
