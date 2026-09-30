@@ -24,7 +24,9 @@ UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
 # Public verify instructions trust any workflow in the repo; narrowing that is a
 # separate decision, so here only the owner set and the anchor are asserted.
-PUBLIC_DOCS = (ROOT / "README.md", ROOT / "SECURITY.md")
+# The user-facing verify command lives in the user guide; README links to it.
+GUIDE_INSTALL = ROOT / "docs" / "guide" / "install.md"
+PUBLIC_DOCS = (GUIDE_INSTALL, ROOT / "SECURITY.md")
 PUBLIC_IDENTITY = r"^https://github\.com/(ericmey|sourceblender)/musubi/.*"
 
 CANONICAL_IDENTITY = (
@@ -52,6 +54,15 @@ def test_every_verifier_uses_the_one_canonical_identity() -> None:
         found = _identities(path.read_text())
         assert found, f"{path.relative_to(ROOT)}: no --certificate-identity-regexp found"
         assert set(found) == {CANONICAL_IDENTITY}, (path.relative_to(ROOT), found)
+
+
+def test_readme_reaches_the_public_verify_instructions() -> None:
+    """Moving the verify command out of README must not orphan it."""
+    readme = (ROOT / "README.md").read_text()
+    guide_index = (ROOT / "docs" / "guide" / "README.md").read_text()
+    assert "(docs/guide/README.md)" in readme
+    assert "(install.md)" in guide_index
+    assert GUIDE_INSTALL.exists()
 
 
 def test_public_verify_docs_accept_both_owners_anchored() -> None:
