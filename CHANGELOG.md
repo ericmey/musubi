@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.2](https://github.com/sourceblender/musubi/compare/v1.27.1...v1.27.2) (2026-09-30)
+
+
+### Documentation
+
+* remove house-specific assumptions from public docs ([#840](https://github.com/sourceblender/musubi/issues/840)) ([6301ed2](https://github.com/sourceblender/musubi/commit/6301ed253b7e7ff13f9f659c02ca1e14ef71261e))
+
 ## [1.27.1](https://github.com/sourceblender/musubi/compare/v1.27.0...v1.27.1) (2026-09-30)
 
 
