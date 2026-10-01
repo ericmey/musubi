@@ -425,6 +425,22 @@ def test_check_consumers_fails_when_operator_command_fails(tmp_path: Path) -> No
     assert "[FAIL] consumer broken app" in result.stdout
 
 
+def test_check_consumers_runs_later_rows_when_command_reads_stdin(tmp_path: Path) -> None:
+    checks = tmp_path / "consumers.tsv"
+    checks.write_text("stdin reader\tcat\nbroken app\texit 7\n")
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "MUSUBI_CONSUMER_CHECKS_FILE": str(checks)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "[PASS] consumer stdin reader" in result.stdout
+    assert "[FAIL] consumer broken app" in result.stdout
+
+
 def test_verify_sh_aggregates_all_checks() -> None:
     with _mock_musubi() as base_url:
         result = _run_script("verify.sh", base_url)
