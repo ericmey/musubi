@@ -13,17 +13,26 @@ that publishes a JWKS.) The server rejects a token unless all of these hold:
 |---|---|
 | `iss` | equals the server's `OAUTH_AUTHORITY`, without a trailing `/` |
 | `aud` | `"musubi"` |
-| `presence` | a concrete `tenant/name` identity, such as `acme/assistant`: exactly two parts, no `*` |
+| `presence` | a concrete `tenant/name` identity, such as `alex/voice`: exactly two parts, no `*` |
 | `sub` | equals `presence` |
 | `scope` | space-separated scopes; every namespace scope names the same tenant as `presence` |
 | `exp` | if present, in the future. The server doesn't require it, but a token without `exp` never expires, so always set one |
 
 Scopes grant access per namespace. A namespace is `tenant/name/plane`, for
-example `acme/assistant/episodic`:
+example `alex/voice/episodic`:
 
-- `acme/assistant/episodic:rw` reads and writes that namespace.
-- `acme/assistant/episodic:r` only reads it; `:w` only writes.
+- `alex/voice/episodic:rw` reads and writes that namespace.
+- `alex/voice/episodic:r` only reads it; `:w` only writes.
+- `*` matches exactly one segment, and a scope must have as many segments as
+  the namespace: `alex/voice/*:rw` covers every plane of `alex/voice`, while
+  the 2-segment `alex/voice:r` is needed for cross-plane retrieve and the
+  thoughts stream.
 - `operator` is for administrative calls only; don't give it to agents.
+
+Musubi has no command or endpoint that issues tokens; you mint them yourself,
+as below. An operator token is minted the same way: add `operator` to its
+`scope`, keep a concrete `presence` (with `sub` equal to it), and give it a
+short `exp`.
 
 Minting one with PyJWT (run this where the signing key is available, and
 hand the resulting token to the agent through its secret store):
@@ -35,14 +44,14 @@ from datetime import UTC, datetime, timedelta
 import jwt
 
 now = datetime.now(UTC)
-presence = "acme/assistant"
+presence = "alex/voice"
 token = jwt.encode(
     {
         "iss": os.environ["OAUTH_AUTHORITY"].rstrip("/"),
         "aud": "musubi",
         "sub": presence,
         "presence": presence,
-        "scope": f"{presence}/episodic:rw",
+        "scope": f"{presence}:r {presence}/*:rw",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(days=30)).timestamp()),
     },
@@ -52,7 +61,8 @@ token = jwt.encode(
 ```
 
 The full scope grammar, including cross-namespace reads, is in
-[the auth spec](../Musubi/10-security/auth.md).
+[the auth spec](../Musubi/10-security/auth.md); the namespace model is in
+[Namespaces](../Musubi/03-system-design/namespaces.md).
 
 ## Plugins
 
