@@ -17,32 +17,34 @@
 2. **Verify the digest** with `cosign verify`, as in
    [Install](install.md#pin-and-verify-the-image), and read the release notes
    in [CHANGELOG.md](../../CHANGELOG.md).
-3. **Run the credential preflight** the PR describes. It starts the candidate
-   image against your live tokens and must pass before you upgrade.
-4. **Upgrade:** pull the new pin, then `docker compose pull` and
+3. **Upgrade:** pull the reviewed pin, then `docker compose pull` and
    `docker compose up -d --wait` (with the same `-f` files you started with).
-5. **Check your agents** before calling the upgrade done: a real capture and
-   recall from each integration you run, not only a health check.
-6. **Roll back** by returning `docker-compose.yml` to the previous pin and
-   running `docker compose up -d --wait` again.
+4. **Run a canary** before calling the upgrade done: with an authorized agent
+   token, capture one memory and retrieve it. Do this for each integration you
+   run; a health check alone is not enough.
+5. **Roll back if the canary fails:** return `docker-compose.yml` to the
+   previous pin and run `docker compose up -d --wait` again.
 
 ## Backups
 
-<!-- TODO(compose-first): document the backup job for the Compose stack's
-named volumes once deploy/backup supports them. -->
+Musubi keeps its state in the stack's named Docker volumes:
+`qdrant-storage`, `qdrant-snapshots`, `vault`, `artifact-blobs`, `lifecycle`
+and `logs`. Back them up **cold**, as one set:
 
-Back up three things: Qdrant snapshots (Qdrant's snapshot API), the lifecycle
-database and the artifact blobs, all from the stack's named volumes.
+1. **Stop the stack:** `docker compose stop`.
+2. **Archive every volume** with your usual backup tool, at the same point in
+   time.
+3. **Start the stack again:** `docker compose up -d --wait`.
 
-**That job does not cover the vault.** The curated plane is Markdown in the
-vault directory; keep it in git and push it to a private remote on a
-schedule (the backup README describes this). Also copy the backup directory
-off the host. A restore needs all three: Qdrant snapshots, the lifecycle
-database and the vault.
+To restore, stop the stack, restore **all** of the volumes from the same backup
+set (never a mix of sets), start it, then check `/v1/ops/health` and run a
+canary capture and retrieve. There is no packaged backup helper yet.
 
-Test a restore before you need one. **The repo's `deploy/backup/restore.yml` playbook does not work today**; see the warning at the top of the page below:
-[backup and restore](../Musubi/09-operations/backup-restore.md) and the
-[manual recovery runbook](../../deploy/runbooks/manual-recovery.md).
+The `vault` volume holds the curated plane as Markdown. Besides the volume
+backup, it is worth keeping it in git and pushing to a private remote on a
+schedule, so curated knowledge has its own history. Keep backups off the host.
+
+Test a restore, following the steps above, before you need one.
 
 ## Alerts
 
