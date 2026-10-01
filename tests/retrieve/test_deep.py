@@ -108,7 +108,7 @@ def reranker() -> FakeRerankerClient:
 
 @pytest.fixture
 def base_ns() -> str:
-    return "eric/claude-code"
+    return "admin/claude-code"
 
 
 async def test_deep_path_invokes_rerank(

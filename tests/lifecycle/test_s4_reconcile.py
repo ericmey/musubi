@@ -33,7 +33,7 @@ from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
 from musubi.types.episodic import EpisodicMemory
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 
 
 class _Seed:

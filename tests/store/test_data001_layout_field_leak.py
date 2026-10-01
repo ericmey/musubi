@@ -23,7 +23,7 @@ from tests.support.identity_seed import (
     seed_v2_identity_via_migration,
 )
 
-_NAMESPACE = "eric/data001-layout-leak/episodic"
+_NAMESPACE = "admin/data001-layout-leak/episodic"
 _ANCHOR_LAYOUT_FIELDS = {
     "point_kind",
     "live_point",

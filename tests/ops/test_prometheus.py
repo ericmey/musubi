@@ -90,7 +90,7 @@ def test_scrape_targets_musubi_core_metrics_endpoint() -> None:
 
 def test_external_labels_identify_host() -> None:
     """Every metric must carry the OTel resource attributes used by the
-    rest of the fleet (openclaw, livekit, shiori) so cross-emitter queries
+    rest of the fleet (openclaw, livekit, jordan) so cross-emitter queries
     work without a label-rename layer at query time. See
     wiki/services/observability/integration-baseline.md (F3.1)."""
     cfg = _load_prom_config()

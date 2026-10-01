@@ -36,7 +36,7 @@ pytestmark = (
     pytest.mark.integration
 )  # real-Qdrant concurrency; deselected locally without the stack
 
-_NS = "eric/data001p2/episodic"
+_NS = "admin/data001p2/episodic"
 
 
 @pytest.fixture
@@ -1235,7 +1235,7 @@ def test_collection_aware_dispatch_routes_both_planes_and_rejects_unknown(
 
     ep_coll = collection_for_plane("episodic")
     cur_coll = collection_for_plane("curated")
-    cur_ns = "eric/data001p2/curated"
+    cur_ns = "admin/data001p2/curated"
 
     def _wipe_both() -> None:
         for coll, ns in ((ep_coll, _NS), (cur_coll, cur_ns)):
@@ -1315,7 +1315,7 @@ def test_collection_aware_dispatch_routes_both_planes_and_rejects_unknown(
             coord.enqueue_custom_intent(
                 kind=INTENT_KIND,
                 object_id="disp-unk",
-                namespace="eric/x/episodic",
+                namespace="admin/x/episodic",
                 collection="musubi_nonexistent",
                 patch_json=cur_desc,
                 operation_key="disp-unknown-op",
@@ -1357,7 +1357,7 @@ def test_cold_start_positive_registration_before_first_reconcile_commits(
     from musubi.store.immutable_vectors import INTENT_KIND, resolve_committed_content
 
     cur_coll = collection_for_plane("curated")
-    cur_ns = "eric/data001p2/curated"
+    cur_ns = "admin/data001p2/curated"
 
     def _wipe_curated() -> None:
         qdrant.delete(

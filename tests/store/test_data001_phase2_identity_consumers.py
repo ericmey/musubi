@@ -27,7 +27,7 @@ from tests.support.identity_seed import seed_v2_identity_via_migration
 
 pytestmark = pytest.mark.integration
 
-_NS = "eric/data001p2ic/episodic"
+_NS = "admin/data001p2ic/episodic"
 _COLL = collection_for_plane("episodic")
 
 
@@ -458,7 +458,7 @@ def test_delete_wrong_namespace_refuses_with_zero_deletion(
     _upsert_v1(qdrant, "del-ns1")
     for oid in ("del-ns2", "del-ns1"):
         with pytest.raises(LookupError):
-            asyncio.run(_delete(qdrant, oid, namespace="eric/OTHER/episodic"))
+            asyncio.run(_delete(qdrant, oid, namespace="admin/OTHER/episodic"))
         assert _points_for(qdrant, oid), f"a wrong-namespace delete must delete nothing ({oid})"
 
 

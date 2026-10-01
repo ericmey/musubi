@@ -36,9 +36,9 @@ async def test_reconciler_archives_missing_ghost_row(
 
     # Missing from disk
     row = MagicMock()
-    row.vault_path = "eric/ghosts/missing.md"
+    row.vault_path = "admin/ghosts/missing.md"
     row.state = "matured"
-    row.namespace = "eric/ghosts/curated"
+    row.namespace = "admin/ghosts/curated"
     row.object_id = "test_id"
     row.version = 1
 
@@ -47,11 +47,11 @@ async def test_reconciler_archives_missing_ghost_row(
     await reconciler.reconcile()
 
     mock_curated_plane.transition.assert_called_once_with(
-        namespace="eric/ghosts/curated",
+        namespace="admin/ghosts/curated",
         object_id="test_id",
         to_state="archived",
         actor="system/vault-reconciler",
-        reason="Ghost row reconciliation (deleted from disk): eric/ghosts/missing.md",
+        reason="Ghost row reconciliation (deleted from disk): admin/ghosts/missing.md",
         coordinator=mock_coordinator,
     )
 
@@ -63,22 +63,22 @@ async def test_reconciler_ignores_present_or_archived_rows(
     reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
 
     # 1. Present on disk
-    f1 = vault_root / "eric" / "ghosts" / "present.md"
+    f1 = vault_root / "admin" / "ghosts" / "present.md"
     f1.parent.mkdir(parents=True, exist_ok=True)
-    f1.write_text("---\ntitle: t\nobject_id: id1\nnamespace: eric/ghosts/curated\n---\nbody")
+    f1.write_text("---\ntitle: t\nobject_id: id1\nnamespace: admin/ghosts/curated\n---\nbody")
 
     row_present = MagicMock()
-    row_present.vault_path = "eric/ghosts/present.md"
+    row_present.vault_path = "admin/ghosts/present.md"
     row_present.state = "matured"
-    row_present.namespace = "eric/ghosts/curated"
+    row_present.namespace = "admin/ghosts/curated"
     row_present.object_id = "id1"
     row_present.version = 1
 
     # 2. Archived (not on disk)
     row_archived = MagicMock()
-    row_archived.vault_path = "eric/ghosts/missing_archived.md"
+    row_archived.vault_path = "admin/ghosts/missing_archived.md"
     row_archived.state = "archived"
-    row_archived.namespace = "eric/ghosts/curated"
+    row_archived.namespace = "admin/ghosts/curated"
     row_archived.object_id = "id2"
     row_archived.version = 1
 
@@ -108,7 +108,7 @@ async def test_reconciler_does_not_archive_present_rows_under_ignored_directorie
     row = MagicMock()
     row.vault_path = rel_path
     row.state = "matured"
-    row.namespace = "eric/ignored/curated"
+    row.namespace = "admin/ignored/curated"
     row.object_id = "id-ignored"
     mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
     reconciler._reconcile_file = AsyncMock(return_value="upserted")  # type: ignore
@@ -126,14 +126,14 @@ async def test_reconciler_normalizes_legacy_windows_path_before_ghost_comparison
     mock_coordinator: MagicMock,
 ) -> None:
     reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
-    path = vault_root / "eric" / "ghosts" / "present.md"
+    path = vault_root / "admin" / "ghosts" / "present.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("present")
 
     row = MagicMock()
-    row.vault_path = r"eric\ghosts\present.md"
+    row.vault_path = r"admin\ghosts\present.md"
     row.state = "matured"
-    row.namespace = "eric/ghosts/curated"
+    row.namespace = "admin/ghosts/curated"
     row.object_id = "id-windows-path"
     mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
     reconciler._reconcile_file = AsyncMock(return_value="unchanged")  # type: ignore
@@ -153,9 +153,9 @@ async def test_reconciler_failure_visibility(
     reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
 
     row = MagicMock()
-    row.vault_path = "eric/ghosts/fail.md"
+    row.vault_path = "admin/ghosts/fail.md"
     row.state = "matured"
-    row.namespace = "eric/ghosts/curated"
+    row.namespace = "admin/ghosts/curated"
     row.object_id = "id"
     row.version = 1
     mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
@@ -167,7 +167,7 @@ async def test_reconciler_failure_visibility(
 
     await reconciler.reconcile()
 
-    assert "Failed to archive ghost row eric/ghosts/fail.md: injected_failure" in caplog.text
+    assert "Failed to archive ghost row admin/ghosts/fail.md: injected_failure" in caplog.text
 
 
 @pytest.mark.anyio
@@ -210,9 +210,9 @@ async def test_reconciler_handles_pending_transition(
     reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
 
     row = MagicMock()
-    row.vault_path = "eric/ghosts/pending.md"
+    row.vault_path = "admin/ghosts/pending.md"
     row.state = "matured"
-    row.namespace = "eric/ghosts/curated"
+    row.namespace = "admin/ghosts/curated"
     row.object_id = "id"
     row.version = 1
     mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
@@ -226,7 +226,7 @@ async def test_reconciler_handles_pending_transition(
     with caplog.at_level(logging.INFO):
         await reconciler.reconcile()
 
-    assert "Ghost row archive pending for eric/ghosts/pending.md" in caplog.text
+    assert "Ghost row archive pending for admin/ghosts/pending.md" in caplog.text
 
 
 @pytest.mark.anyio

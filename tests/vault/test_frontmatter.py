@@ -20,7 +20,7 @@ def _valid_fm_dict(**kwargs: Any) -> dict[str, Any]:
     now = datetime.now(UTC)
     base = {
         "object_id": generate_ksuid(),
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "title": "Valid Title",
         "created": now,
         "updated": now,
@@ -48,7 +48,7 @@ def test_fully_populated_file_parses() -> None:
     ksuid = generate_ksuid()
     text = f"""---
 object_id: {ksuid}
-namespace: eric/shared/curated
+namespace: admin/shared/curated
 schema_version: 1
 title: "CUDA 13 setup notes"
 topics:
@@ -188,7 +188,7 @@ def test_example_musubi_promoted_file_equivalent() -> None:
     ksuid = generate_ksuid()
     text = f"""---
 object_id: {ksuid}
-namespace: eric/shared/curated
+namespace: admin/shared/curated
 title: "CUDA 13 installation pattern"
 topics:
   - infrastructure/gpu

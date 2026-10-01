@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from musubi.settings import Settings
 from tests.api.conftest import mint_token
 
-NS = "eric/claude-code/artifact"
+NS = "admin/claude-code/artifact"
 
 
 def _upload(client: TestClient, token: str, payload: bytes) -> object:

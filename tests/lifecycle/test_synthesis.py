@@ -91,7 +91,7 @@ def qdrant() -> Iterator[QdrantClient]:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code"
+    return "admin/claude-code"
 
 
 @pytest.fixture
@@ -329,36 +329,36 @@ async def test_cluster_by_dense_similarity_within_tag_group(
 def test_candidates_upsert_and_get_within_ttl(cursor: SynthesisCursor) -> None:
     """A memory marked as a candidate is visible to subsequent calls
     within the TTL window."""
-    cursor.upsert_candidate("aoi", "mem-1", now_epoch=100.0)
-    cursor.upsert_candidate("aoi", "mem-2", now_epoch=100.0)
-    cursor.upsert_candidate("yua", "mem-99", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "mem-1", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "mem-2", now_epoch=100.0)
+    cursor.upsert_candidate("alex", "mem-99", now_epoch=100.0)
 
-    aoi_candidates = cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=200.0)
+    aoi_candidates = cursor.get_candidates("sam", ttl_sec=3600.0, now_epoch=200.0)
     assert sorted(aoi_candidates) == ["mem-1", "mem-2"]
-    yua_candidates = cursor.get_candidates("yua", ttl_sec=3600.0, now_epoch=200.0)
+    yua_candidates = cursor.get_candidates("alex", ttl_sec=3600.0, now_epoch=200.0)
     assert yua_candidates == ["mem-99"]
 
 
 def test_candidates_filtered_by_ttl_window(cursor: SynthesisCursor) -> None:
     """Candidates whose first_seen_epoch is older than `now - ttl`
     are not returned, even if `prune_aged_candidates` hasn't run."""
-    cursor.upsert_candidate("aoi", "old-mem", now_epoch=100.0)
-    cursor.upsert_candidate("aoi", "fresh-mem", now_epoch=900.0)
+    cursor.upsert_candidate("sam", "old-mem", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "fresh-mem", now_epoch=900.0)
 
     # ttl=500: old-mem (first_seen=100) is past cutoff (1000-500=500)
-    visible = cursor.get_candidates("aoi", ttl_sec=500.0, now_epoch=1000.0)
+    visible = cursor.get_candidates("sam", ttl_sec=500.0, now_epoch=1000.0)
     assert visible == ["fresh-mem"]
 
 
 def test_candidates_remove_on_successful_cluster(cursor: SynthesisCursor) -> None:
     """When a memory clusters, it's removed from the candidate pool."""
-    cursor.upsert_candidate("aoi", "mem-a", now_epoch=100.0)
-    cursor.upsert_candidate("aoi", "mem-b", now_epoch=100.0)
-    cursor.upsert_candidate("aoi", "mem-c", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "mem-a", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "mem-b", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "mem-c", now_epoch=100.0)
 
-    cursor.remove_candidates("aoi", ["mem-a", "mem-c"])
+    cursor.remove_candidates("sam", ["mem-a", "mem-c"])
 
-    remaining = cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=200.0)
+    remaining = cursor.get_candidates("sam", ttl_sec=3600.0, now_epoch=200.0)
     assert remaining == ["mem-b"]
 
 
@@ -366,34 +366,34 @@ def test_candidates_pruned_after_ttl(cursor: SynthesisCursor) -> None:
     """Aging past TTL physically deletes the row, returning the count
     pruned. This is the housekeeping path that prevents the candidates
     table from growing unboundedly."""
-    cursor.upsert_candidate("aoi", "ancient-1", now_epoch=100.0)
-    cursor.upsert_candidate("aoi", "ancient-2", now_epoch=100.0)
-    cursor.upsert_candidate("aoi", "fresh", now_epoch=900.0)
+    cursor.upsert_candidate("sam", "ancient-1", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "ancient-2", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "fresh", now_epoch=900.0)
 
-    pruned = cursor.prune_aged_candidates("aoi", ttl_sec=500.0, now_epoch=1000.0)
+    pruned = cursor.prune_aged_candidates("sam", ttl_sec=500.0, now_epoch=1000.0)
     assert pruned == 2
-    remaining = cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=1000.0)
+    remaining = cursor.get_candidates("sam", ttl_sec=3600.0, now_epoch=1000.0)
     assert remaining == ["fresh"]
 
 
 def test_candidates_per_family_isolation(cursor: SynthesisCursor) -> None:
     """Operations on one family's candidates don't touch another's."""
-    cursor.upsert_candidate("aoi", "shared-id", now_epoch=100.0)
-    cursor.upsert_candidate("yua", "shared-id", now_epoch=100.0)
+    cursor.upsert_candidate("sam", "shared-id", now_epoch=100.0)
+    cursor.upsert_candidate("alex", "shared-id", now_epoch=100.0)
 
-    cursor.remove_candidates("aoi", ["shared-id"])
-    assert cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=200.0) == []
-    assert cursor.get_candidates("yua", ttl_sec=3600.0, now_epoch=200.0) == ["shared-id"]
+    cursor.remove_candidates("sam", ["shared-id"])
+    assert cursor.get_candidates("sam", ttl_sec=3600.0, now_epoch=200.0) == []
+    assert cursor.get_candidates("alex", ttl_sec=3600.0, now_epoch=200.0) == ["shared-id"]
 
 
 def test_cursor_get_set_accepts_namespace_or_family(cursor: SynthesisCursor) -> None:
-    """The cursor's `get`/`set` accept either an identity family ("aoi")
-    or a full namespace ("aoi/command-chair/episodic"); both reduce to
+    """The cursor's `get`/`set` accept either an identity family ("sam")
+    or a full namespace ("sam/command-chair/episodic"); both reduce to
     the same family-keyed entry. This keeps pre-v1.5.5 callers working
     without signature changes."""
-    cursor.set("aoi/command-chair/episodic", 42.0)
-    assert cursor.get("aoi/voice/episodic") == 42.0
-    assert cursor.get("aoi") == 42.0
+    cursor.set("sam/command-chair/episodic", 42.0)
+    assert cursor.get("sam/voice/episodic") == 42.0
+    assert cursor.get("sam") == 42.0
 
 
 async def test_cursor_skip_fix_unclustered_memories_carry_forward(
@@ -1303,11 +1303,13 @@ def test_discover_returns_identity_families_not_full_namespaces() -> None:
         [
             (
                 [
-                    _FakeRecord({"namespace": "eric/aoi/episodic", "identity_family": "eric"}),
                     _FakeRecord(
-                        {"namespace": "eric/aoi/episodic", "identity_family": "eric"}
+                        {"namespace": "admin/assistant/episodic", "identity_family": "admin"}
+                    ),
+                    _FakeRecord(
+                        {"namespace": "admin/assistant/episodic", "identity_family": "admin"}
                     ),  # dedupe
-                    _FakeRecord({"namespace": "eric/ops/episodic", "identity_family": "eric"}),
+                    _FakeRecord({"namespace": "admin/ops/episodic", "identity_family": "admin"}),
                     _FakeRecord({"namespace": "alice/voice/episodic", "identity_family": "alice"}),
                 ],
                 None,
@@ -1315,14 +1317,14 @@ def test_discover_returns_identity_families_not_full_namespaces() -> None:
         ]
     )
     result = _discover_episodic_namespaces(cast(Any, client))
-    assert result == ["alice", "eric"]
+    assert result == ["admin", "alice"]
 
 
 def test_discover_paginates_until_offset_none() -> None:
     """An identity whose records are on page 2 must not be silently
     dropped — the scroll must keep iterating until Qdrant signals
     ``offset is None``."""
-    page1 = [_FakeRecord({"namespace": "eric/aoi/episodic", "identity_family": "eric"})]
+    page1 = [_FakeRecord({"namespace": "admin/assistant/episodic", "identity_family": "admin"})]
     page2 = [_FakeRecord({"namespace": "alice/ghost/episodic", "identity_family": "alice"})]
     client = _FakeQdrantForDiscovery(
         [
@@ -1331,7 +1333,7 @@ def test_discover_paginates_until_offset_none() -> None:
         ]
     )
     result = _discover_episodic_namespaces(cast(Any, client))
-    assert result == ["alice", "eric"]
+    assert result == ["admin", "alice"]
     # Second scroll call must carry the offset returned by the first.
     assert client.calls[1]["offset"] == "cursor-1"
 
@@ -1357,14 +1359,14 @@ def test_discover_falls_back_to_namespace_prefix_when_identity_family_missing() 
                     _FakeRecord({}),  # empty payload
                     _FakeRecord({"namespace": 42}),  # non-string namespace
                     _FakeRecord(
-                        {"namespace": "eric/aoi/concept"}
+                        {"namespace": "admin/assistant/concept"}
                     ),  # no identity_family — fall back
                     _FakeRecord(
-                        {"namespace": "eric/aoi/episodic", "identity_family": "eric"}
+                        {"namespace": "admin/assistant/episodic", "identity_family": "admin"}
                     ),  # canonical
                 ],
                 None,
             ),
         ]
     )
-    assert _discover_episodic_namespaces(cast(Any, client)) == ["eric"]
+    assert _discover_episodic_namespaces(cast(Any, client)) == ["admin"]

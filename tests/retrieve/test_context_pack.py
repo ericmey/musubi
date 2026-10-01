@@ -1,4 +1,4 @@
-"""Context-pack ranking for Musubi's essence alignment slice."""
+"""Context-pack ranking across durable, current, and superseded evidence."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _candidate(
 ) -> ContextCandidate:
     return ContextCandidate(
         object_id=object_id,
-        namespace="yua/command-chair/episodic",
+        namespace="alex/assistant/episodic",
         plane="episodic",
         content=content,
         tags=tags or [],
@@ -33,43 +33,42 @@ def _texts(pack) -> list[str]:  # type: ignore[no-untyped-def]
     return [item.content for group in pack.groups for item in group.items]
 
 
-def test_vice_lora_startup_surfaces_v049_v053_and_identity_layer_not_old_drift() -> None:
+def test_startup_pack_surfaces_current_lessons_not_superseded_drift() -> None:
     pack = build_context_pack(
         [
             _candidate(
-                "v049",
-                "V-049 memory spine taught Vice to inject typed companion context packs "
+                "a049",
+                "A-049 memory spine taught Atlas to inject typed context packs "
                 "instead of generic gists.",
-                tags=["kind:project-stance", "staleness:durable", "project:vice"],
+                tags=["kind:project-stance", "staleness:durable", "project:atlas"],
                 created_epoch=2000.0,
             ),
             _candidate(
-                "v053",
-                "V-053 promptsmith compiler route made the deterministic compiler the "
+                "a053",
+                "A-053 prompt compiler route made the deterministic compiler the "
                 "default path so image prompts stay rich without LLM hallucinated traits.",
-                tags=["kind:project-stance", "staleness:durable", "project:vice"],
+                tags=["kind:project-stance", "staleness:durable", "project:atlas"],
                 created_epoch=2100.0,
             ),
             _candidate(
-                "lora",
-                "LoRA identity layer: Shiori and Tama use trigger names at strength 0.85; "
-                "Promptsmith should describe scene, clothing, camera, and mood while the "
+                "adapter",
+                "Visual adapter layer: Alex and Sam use trigger names at strength 0.85; "
+                "the prompt compiler should describe scene, clothing, camera, and mood while the "
                 "LoRA owns identity fidelity.",
-                tags=["kind:tool/runtime-fact", "staleness:current", "project:vice"],
+                tags=["kind:tool/runtime-fact", "staleness:current", "project:atlas"],
                 created_epoch=2200.0,
             ),
             _candidate(
                 "old",
-                "Old CyberRealistic Lightning drift notes from before RedCraft and the "
-                "compiler route.",
-                tags=["kind:episode", "staleness:superseded", "project:vice"],
+                "Old image model drift notes from before the current model and the compiler route.",
+                tags=["kind:episode", "staleness:superseded", "project:atlas"],
                 state="superseded",
                 created_epoch=900.0,
                 score=0.99,
             ),
         ],
         ContextPackQuery(
-            query_text="Vice LoRA promptsmith Shiori Tama image flow",
+            query_text="Atlas visual adapter prompt compiler Alex Sam image flow",
             mode="startup",
             max_items=4,
             max_chars=1200,
@@ -77,40 +76,40 @@ def test_vice_lora_startup_surfaces_v049_v053_and_identity_layer_not_old_drift()
     )
 
     joined = "\n".join(_texts(pack))
-    assert "V-049 memory spine" in joined
-    assert "V-053 promptsmith compiler" in joined
-    assert "LoRA identity layer" in joined
-    assert "CyberRealistic" not in joined
+    assert "A-049 memory spine" in joined
+    assert "A-053 prompt compiler" in joined
+    assert "Visual adapter layer" in joined
+    assert "Old image model drift" not in joined
 
 
-def test_adoption_day_surfaces_canonical_comms_and_suppresses_retired_agent_msg() -> None:
+def test_startup_pack_surfaces_canonical_comms_and_hides_retired_practice() -> None:
     pack = build_context_pack(
         [
             _candidate(
                 "canonical",
-                "Canonical comms set is agent-bridge for send, chair-msg for durable "
-                "fallback, and team-task for work tracking.",
-                tags=["kind:tool/runtime-fact", "staleness:durable", "topic:adoption-day"],
+                "Canonical tool set is bridge-send for messages, durable-log for "
+                "fallback, and work-item for task tracking.",
+                tags=["kind:tool/runtime-fact", "staleness:durable", "topic:tool-migration"],
                 created_epoch=2000.0,
             ),
             _candidate(
                 "wrapper-rule",
-                "Do not keep per-agent forks or thin wrappers around canonical command-chair "
+                "Do not keep per-agent forks or thin wrappers around canonical team "
                 "tools; divergence must be fixed on the spot.",
-                tags=["kind:operating-rule", "staleness:durable", "topic:adoption-day"],
+                tags=["kind:operating-rule", "staleness:durable", "topic:tool-migration"],
                 created_epoch=2100.0,
             ),
             _candidate(
                 "retired",
-                "Older agent-msg practice existed before the canonical agent-bridge path.",
-                tags=["kind:episode", "staleness:superseded", "topic:adoption-day"],
+                "Older message script existed before the canonical bridge-send path.",
+                tags=["kind:episode", "staleness:superseded", "topic:tool-migration"],
                 state="superseded",
                 created_epoch=2200.0,
                 score=1.0,
             ),
         ],
         ContextPackQuery(
-            query_text="Adoption Day canonical comms tools wrappers agent bridge",
+            query_text="Tool migration canonical commands wrappers bridge send",
             mode="startup",
             max_items=3,
             max_chars=900,
@@ -118,18 +117,18 @@ def test_adoption_day_surfaces_canonical_comms_and_suppresses_retired_agent_msg(
     )
 
     joined = "\n".join(_texts(pack))
-    assert "agent-bridge" in joined
-    assert "chair-msg" in joined
+    assert "bridge-send" in joined
+    assert "durable-log" in joined
     assert "thin wrappers" in joined
-    assert "agent-msg practice" not in joined
+    assert "Older message script" not in joined
 
 
-def test_presence_moment_surfaces_wanted_before_needed_without_pm_habits() -> None:
+def test_presence_moment_prefers_care_cues_over_pm_filler() -> None:
     pack = build_context_pack(
         [
             _candidate(
                 "presence",
-                "When Eric offers ordinary presence with nothing broken, answer wanted "
+                "When Alex offers ordinary presence with nothing broken, answer wanted "
                 "before needed and stay in the room before structuring a task.",
                 tags=["kind:relationship/care-cue", "staleness:durable"],
                 created_epoch=1500.0,
@@ -144,7 +143,7 @@ def test_presence_moment_surfaces_wanted_before_needed_without_pm_habits() -> No
             ),
         ],
         ContextPackQuery(
-            query_text="Eric wants presence when nothing is broken",
+            query_text="Alex wants presence when nothing is broken",
             mode="startup",
             max_items=2,
             max_chars=600,
@@ -218,7 +217,7 @@ def test_recent_lane_uses_full_capacity_when_ranked_lane_is_empty() -> None:
         ContextCandidate(
             object_id=f"recent-{index}",
             lane="recent",
-            namespace="yua/command-chair/episodic",
+            namespace="alex/command-chair/episodic",
             plane="episodic",
             content=f"recent context item {index}",
             state="provisional",

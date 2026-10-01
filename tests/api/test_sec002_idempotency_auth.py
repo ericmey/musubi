@@ -31,7 +31,7 @@ IDEM = "Idempotency-Key"
 
 
 def _capture_body(
-    ns: str = "eric/claude-code/episodic", content: str = "sec002 probe"
+    ns: str = "admin/claude-code/episodic", content: str = "sec002 probe"
 ) -> dict[str, Any]:
     return {"namespace": ns, "content": content, "tags": ["kind:episode"], "importance": 3}
 
@@ -69,7 +69,7 @@ def test_cross_tenant_must_not_replay(
     client: TestClient, api_settings: Settings, valid_token: str
 ) -> None:
     key, body = "sec002-crosstenant", _capture_body()
-    _prime(client, valid_token, key, body)  # tenant A (eric/claude-code) writes
+    _prime(client, valid_token, key, body)  # tenant A (admin/claude-code) writes
     # tenant B: a VALID token for a DIFFERENT presence with no access to A's namespace
     tenant_b = mint_token(
         api_settings, scopes=["mallory/evil/episodic:rw"], presence="mallory/evil"

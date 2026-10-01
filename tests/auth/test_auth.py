@@ -68,9 +68,9 @@ def rsa_keypair() -> Iterator[tuple[AllowedPrivateKeys, dict[str, object]]]:
 def _payload(
     *,
     issuer: str = "https://auth.example.test",
-    subject: str = "eric/claude-code",
+    subject: str = "admin/claude-code",
     scopes: list[str] | None = None,
-    presence: str = "eric/claude-code",
+    presence: str = "admin/claude-code",
     expires_delta: timedelta = timedelta(hours=1),
 ) -> dict[str, object]:
     now = datetime.now(UTC)
@@ -81,7 +81,7 @@ def _payload(
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
         "jti": "token-123",
-        "scope": scopes if scopes is not None else ["eric/claude-code/episodic:rw"],
+        "scope": scopes if scopes is not None else ["admin/claude-code/episodic:rw"],
         "presence": presence,
     }
 
@@ -107,7 +107,7 @@ def test_missing_bearer_returns_401(auth_settings: Settings) -> None:
 
     result = authenticate_request(
         request,
-        AuthRequirement(namespace="eric/claude-code/episodic", access="r"),
+        AuthRequirement(namespace="admin/claude-code/episodic", access="r"),
         settings=auth_settings,
     )
 
@@ -156,32 +156,32 @@ def test_scope_match_grants_access(
 
     scope_result = resolve_namespace_scope(
         token_result.value,
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         access="w",
     )
 
     assert scope_result.is_ok()
     assert isinstance(scope_result, Ok)
-    assert scope_result.value.scope_used == "eric/claude-code/episodic:rw"
+    assert scope_result.value.scope_used == "admin/claude-code/episodic:rw"
 
 
 def test_recursive_scope_grants_read_without_write() -> None:
     context = AuthContext(
-        subject="aoi/voice",
+        subject="sam/voice",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("**:r",),
-        presence="aoi/voice",
+        presence="sam/voice",
         token_id="token-123",
     )
 
-    read = resolve_namespace_scope(context, namespace="yua/command-chair/episodic", access="r")
-    write = resolve_namespace_scope(context, namespace="yua/command-chair/episodic", access="w")
+    read = resolve_namespace_scope(context, namespace="alex/command-chair/episodic", access="r")
+    write = resolve_namespace_scope(context, namespace="alex/command-chair/episodic", access="w")
 
     assert read.is_ok()
     assert write.is_err()
     assert isinstance(write, Err)
-    assert "yua/command-chair/episodic" in write.error.detail
+    assert "alex/command-chair/episodic" in write.error.detail
 
 
 def test_recursive_rw_scope_does_not_grant_cross_namespace_write() -> None:
@@ -190,31 +190,31 @@ def test_recursive_rw_scope_does_not_grant_cross_namespace_write() -> None:
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("**:rw",),
-        presence="openclaw-nyla",
+        presence="openclaw-casey",
         token_id="token-123",
     )
 
-    read = resolve_namespace_scope(context, namespace="aoi/voice/episodic", access="r")
-    write = resolve_namespace_scope(context, namespace="aoi/voice/episodic", access="w")
+    read = resolve_namespace_scope(context, namespace="sam/voice/episodic", access="r")
+    write = resolve_namespace_scope(context, namespace="sam/voice/episodic", access="w")
 
     assert read.is_ok()
     assert write.is_err()
     assert isinstance(write, Err)
-    assert "aoi/voice/episodic" in write.error.detail
+    assert "sam/voice/episodic" in write.error.detail
 
 
 def test_segment_wildcard_rw_scope_still_grants_matching_write() -> None:
     context = AuthContext(
-        subject="aoi/voice",
+        subject="sam/voice",
         issuer="https://auth.example.test",
         audience="musubi",
-        scopes=("aoi/voice/*:rw",),
-        presence="aoi/voice",
+        scopes=("sam/voice/*:rw",),
+        presence="sam/voice",
         token_id="token-123",
     )
 
-    own_write = resolve_namespace_scope(context, namespace="aoi/voice/episodic", access="w")
-    cross_write = resolve_namespace_scope(context, namespace="yua/voice/episodic", access="w")
+    own_write = resolve_namespace_scope(context, namespace="sam/voice/episodic", access="w")
+    cross_write = resolve_namespace_scope(context, namespace="alex/voice/episodic", access="w")
 
     assert own_write.is_ok()
     assert cross_write.is_err()
@@ -229,31 +229,31 @@ def test_scope_mismatch_returns_403_with_detail(auth_settings: Settings) -> None
 
     result = authenticate_request(
         request,
-        AuthRequirement(namespace="eric/livekit-voice/episodic", access="w"),
+        AuthRequirement(namespace="admin/livekit-voice/episodic", access="w"),
         settings=auth_settings,
     )
 
     assert result.is_err()
     assert isinstance(result, Err)
     assert result.error.status_code == 403
-    assert "eric/livekit-voice/episodic" in result.error.detail
+    assert "admin/livekit-voice/episodic" in result.error.detail
 
 
 def test_operator_scope_required_for_admin_endpoints() -> None:
     without_operator = AuthContext(
-        subject="eric/claude-code",
+        subject="admin/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
-        scopes=("eric/claude-code/episodic:rw",),
-        presence="eric/claude-code",
+        scopes=("admin/claude-code/episodic:rw",),
+        presence="admin/claude-code",
         token_id="token-123",
     )
     with_operator = AuthContext(
-        subject="eric",
+        subject="admin",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("operator",),
-        presence="eric/operator",
+        presence="admin/operator",
         token_id="operator-token-123",
     )
 
@@ -269,29 +269,29 @@ def test_operator_scope_required_for_admin_endpoints() -> None:
 
 def test_blended_query_expands_and_checks_plane_scopes() -> None:
     context = AuthContext(
-        subject="eric/claude-code",
+        subject="admin/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
-        scopes=("eric/claude-code/episodic:r", "eric/_shared/curated:r"),
-        presence="eric/claude-code",
+        scopes=("admin/claude-code/episodic:r", "admin/_shared/curated:r"),
+        presence="admin/claude-code",
         token_id="token-123",
     )
 
     allowed = resolve_blended_query_scope(
         context,
-        namespace="eric/_shared/blended",
-        underlying_namespaces=("eric/claude-code/episodic", "eric/_shared/curated"),
+        namespace="admin/_shared/blended",
+        underlying_namespaces=("admin/claude-code/episodic", "admin/_shared/curated"),
     )
     denied = resolve_blended_query_scope(
         context,
-        namespace="eric/_shared/blended",
-        underlying_namespaces=("eric/claude-code/episodic", "eric/_shared/artifact"),
+        namespace="admin/_shared/blended",
+        underlying_namespaces=("admin/claude-code/episodic", "admin/_shared/artifact"),
     )
 
     assert allowed.is_ok()
     assert denied.is_err()
     assert isinstance(denied, Err)
-    assert "eric/_shared/artifact" in denied.error.detail
+    assert "admin/_shared/artifact" in denied.error.detail
 
 
 @pytest.mark.skip(
@@ -343,16 +343,16 @@ def test_signing_key_rotation_dual_verify_period(
 def test_every_auth_decision_emits_audit_line(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level("INFO", logger="musubi.auth.scopes")
     context = AuthContext(
-        subject="eric/claude-code",
+        subject="admin/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
-        scopes=("eric/claude-code/episodic:r",),
-        presence="eric/claude-code",
+        scopes=("admin/claude-code/episodic:r",),
+        presence="admin/claude-code",
         token_id="token-123",
     )
 
-    resolve_namespace_scope(context, namespace="eric/claude-code/episodic", access="r")
-    resolve_namespace_scope(context, namespace="eric/livekit-voice/episodic", access="r")
+    resolve_namespace_scope(context, namespace="admin/claude-code/episodic", access="r")
+    resolve_namespace_scope(context, namespace="admin/livekit-voice/episodic", access="r")
 
     messages = [record.getMessage() for record in caplog.records]
     assert "auth.allow" in messages
@@ -406,7 +406,7 @@ def test_validate_token_rejects_bad_signature_and_claim_shapes(
         _hs_token(auth_settings, invalid_jti_payload), settings=auth_settings
     )
     scope_string_payload = _payload(scopes=None)
-    scope_string_payload["scope"] = "eric/*/episodic:r eric/_shared/curated:r"
+    scope_string_payload["scope"] = "admin/*/episodic:r admin/_shared/curated:r"
     scope_string = validate_token(
         _hs_token(auth_settings, scope_string_payload), settings=auth_settings
     )
@@ -419,7 +419,7 @@ def test_validate_token_rejects_bad_signature_and_claim_shapes(
     assert isinstance(invalid_jti, Err)
     assert "JWT ID" in invalid_jti.error.detail
     assert isinstance(scope_string, Ok)
-    assert scope_string.value.scopes == ("eric/*/episodic:r", "eric/_shared/curated:r")
+    assert scope_string.value.scopes == ("admin/*/episodic:r", "admin/_shared/curated:r")
 
 
 def test_rs256_validation_handles_jwks_failures(
@@ -497,7 +497,7 @@ def test_middleware_attaches_context_and_maps_operator_requirements(
     user_result = authenticate_request(user_request, settings=auth_settings)
     namespace_result = authenticate_request(
         user_request,
-        AuthRequirement(namespace="eric/claude-code/episodic", access="r"),
+        AuthRequirement(namespace="admin/claude-code/episodic", access="r"),
         settings=auth_settings,
     )
     bad_scheme = authenticate_request(bad_scheme_request, settings=auth_settings)
@@ -527,52 +527,52 @@ def test_middleware_attaches_context_and_maps_operator_requirements(
 
 def test_special_glob_and_invalid_namespace_scopes() -> None:
     context = AuthContext(
-        subject="eric/claude-code",
+        subject="admin/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=(
             "**:r",
-            "eric/*/episodic:w",
+            "admin/*/episodic:w",
             "malformed",
         ),
-        presence="eric/claude-code",
+        presence="admin/claude-code",
         token_id="token-123",
     )
     malformed_context = AuthContext(
-        subject="eric/claude-code",
+        subject="admin/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("malformed",),
-        presence="eric/claude-code",
+        presence="admin/claude-code",
         token_id="token-123",
     )
 
     operator_read = resolve_namespace_scope(context, namespace="any/namespace/here", access="r")
     wildcard_write = resolve_namespace_scope(
         context,
-        namespace="eric/livekit-voice/episodic",
+        namespace="admin/livekit-voice/episodic",
         access="w",
     )
     malformed_only = resolve_namespace_scope(
         malformed_context,
-        namespace="eric/claude-code/episodic/extra",
+        namespace="admin/claude-code/episodic/extra",
         access="r",
     )
 
     assert isinstance(operator_read, Ok)
     assert operator_read.value.scope_used == "**:r"
     assert isinstance(wildcard_write, Ok)
-    assert wildcard_write.value.scope_used == "eric/*/episodic:w"
+    assert wildcard_write.value.scope_used == "admin/*/episodic:w"
     assert isinstance(malformed_only, Err)
 
 
 def test_token_payload_parser_rejects_missing_required_claims() -> None:
     base = {
         "iss": "https://auth.example.test",
-        "sub": "eric/claude-code",
+        "sub": "admin/claude-code",
         "aud": "musubi",
-        "scope": ["eric/claude-code/episodic:r"],
-        "presence": "eric/claude-code",
+        "scope": ["admin/claude-code/episodic:r"],
+        "presence": "admin/claude-code",
         "jti": 123,
     }
 

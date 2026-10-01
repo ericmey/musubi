@@ -94,7 +94,7 @@ def _write_md_with_frontmatter(
     fm_text = json.dumps(
         {
             "object_id": "ck0000000000000000000000000",
-            "namespace": "aoi/command-chair/curated",
+            "namespace": "sam/command-chair/curated",
             "title": "test vault-002 file",
             "state": "matured",
             "importance": 5,
@@ -133,7 +133,7 @@ def _assert_typed_memory(
     expected_vault_path: str,
     expected_body_hash: str,
     expected_object_id: str = "ck0000000000000000000000000",
-    expected_namespace: str = "aoi/command-chair/curated",
+    expected_namespace: str = "sam/command-chair/curated",
 ) -> None:
     """Assert the typed CuratedKnowledge object carries the
     post-fix contract. The handler does `rel_path = path.relative_to(
@@ -208,7 +208,7 @@ async def test_boot_scan_vault_002_relative_path_noop_red(
     Today: 0 creates; postcondition not met. After fix:
     1 create with the typed memory; passes.
     """
-    rel = "aoi/command-chair/curated/test-vault-002.md"
+    rel = "sam/command-chair/curated/test-vault-002.md"
     path = _write_md_with_frontmatter(tmp_path, rel, body="red body content")
     real_hash = _read_and_hash_body(path)
 
@@ -249,7 +249,7 @@ async def test_boot_scan_vault_002_control_real_handler_writes_new_hash(
     Today: passes. After fix: passes. Separates "handler
     works" from "boot_scan dispatches the wrong path".
     """
-    rel = "aoi/command-chair/curated/test-vault-002-control1.md"
+    rel = "sam/command-chair/curated/test-vault-002-control1.md"
     abs_path = _write_md_with_frontmatter(tmp_path, rel, body="control 1 body")
     real_hash = _read_and_hash_body(abs_path)
 
@@ -277,7 +277,7 @@ async def test_boot_scan_vault_002_control_no_drift_no_write(
     tmp_path: Path,
 ) -> None:
     """CONTROL 2: no-drift performs no write (passes today AND after fix)."""
-    rel = "aoi/command-chair/curated/test-vault-002-control2.md"
+    rel = "sam/command-chair/curated/test-vault-002-control2.md"
     path = _write_md_with_frontmatter(tmp_path, rel, body="control 2 body")
     real_hash = _read_and_hash_body(path)
 
@@ -320,7 +320,7 @@ async def test_boot_scan_vault_002_control_outside_root_skipped(
     outside file is actually skipped while the in-root
     file is processed.
     """
-    rel = "aoi/command-chair/curated/test-vault-002-control3.md"
+    rel = "sam/command-chair/curated/test-vault-002-control3.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 3 body")
 
     outside_dir = tmp_path.parent / "outside"
@@ -379,7 +379,7 @@ async def test_boot_scan_vault_002_control_background_exception_observable(
     fails -> xfail. After fix: create() raises; the loop logs
     the error; the log is present -> pass.
     """
-    rel = "aoi/command-chair/curated/test-vault-002-control4.md"
+    rel = "sam/command-chair/curated/test-vault-002-control4.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 4 body")
 
     client = MagicMock()
@@ -454,7 +454,7 @@ async def test_boot_scan_vault_002_redproof_relative_path(
     correct-acceptance work as expected). After fix: passes
     (the postcondition is unchanged).
     """
-    rel = "aoi/command-chair/curated/test-vault-002-redproof1.md"
+    rel = "sam/command-chair/curated/test-vault-002-redproof1.md"
     abs_path = _write_md_with_frontmatter(tmp_path, rel, body="redproof 1 body")
     real_hash = _read_and_hash_body(abs_path)
 
@@ -524,7 +524,7 @@ async def test_boot_scan_vault_002_redproof_log_only(
     Today: passes (no source dependency; this is a pure
     typed-memory discrimination). After fix: passes.
     """
-    rel = "aoi/command-chair/curated/test-vault-002-redproof2.md"
+    rel = "sam/command-chair/curated/test-vault-002-redproof2.md"
     path = _write_md_with_frontmatter(tmp_path, rel, body="redproof 2 body")
     real_hash = _read_and_hash_body(path)
     content_body = "redproof 2 body"
@@ -532,7 +532,7 @@ async def test_boot_scan_vault_002_redproof_log_only(
     # CORRECT typed memory (what a correct candidate would pass)
     correct_memory = CuratedKnowledge(
         object_id="ck0000000000000000000000000",
-        namespace="aoi/command-chair/curated",
+        namespace="sam/command-chair/curated",
         vault_path=rel,
         body_hash=real_hash,
         title="test vault-002 file",

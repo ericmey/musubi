@@ -104,7 +104,7 @@ def test_omitted_include_lineage_forwards_true(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        json={"namespace": "nyla/test/episodic", "query_text": "x", "mode": "fast", "limit": 5},
+        json={"namespace": "casey/test/episodic", "query_text": "x", "mode": "fast", "limit": 5},
     )
     assert response.status_code == 200, response.text
     if not _CAPTURED:
@@ -126,7 +126,7 @@ def test_explicit_include_lineage_false_forwards_false(
     response = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "nyla/test/episodic",
+            "namespace": "casey/test/episodic",
             "query_text": "x",
             "mode": "fast",
             "limit": 5,
@@ -149,7 +149,7 @@ def test_explicit_include_lineage_true_forwards_true(
     response = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "nyla/test/episodic",
+            "namespace": "casey/test/episodic",
             "query_text": "x",
             "mode": "fast",
             "limit": 5,
@@ -172,7 +172,7 @@ def test_concrete_namespace_preserves_include_lineage(
     response = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "nyla/test/episodic",
+            "namespace": "casey/test/episodic",
             "query_text": "x",
             "mode": "fast",
             "limit": 5,
@@ -192,7 +192,7 @@ def test_fanout_namespace_preserves_include_lineage(
     response = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "nyla/test",
+            "namespace": "casey/test",
             "query_text": "x",
             "mode": "fast",
             "limit": 5,
@@ -231,7 +231,7 @@ def test_non_boolean_include_lineage_rejected_at_wire(
     response = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "nyla/test/episodic",
+            "namespace": "casey/test/episodic",
             "query_text": "x",
             "mode": "fast",
             "limit": 5,

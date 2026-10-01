@@ -35,7 +35,7 @@ CAPTURE = "/v1/episodic"
 CURATED = "/v1/curated"
 IDEM = "Idempotency-Key"
 REPLAY = "X-Idempotent-Replay"
-NS = "eric/claude-code/episodic"
+NS = "admin/claude-code/episodic"
 
 
 def _body(content: str = "pipeline probe") -> dict[str, Any]:
@@ -232,8 +232,8 @@ def test_no_replay_across_routes(client: TestClient, api_settings: Settings) -> 
     is handled fresh / 422s; either way it is never episodic's replay.)"""
     token = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:rw", "eric/claude-code/curated:rw"],
-        presence="eric/claude-code",
+        scopes=["admin/claude-code/episodic:rw", "admin/claude-code/curated:rw"],
+        presence="admin/claude-code",
     )
     ep = client.post(CAPTURE, json=_body(), headers=_auth(token, "cross-route"))
     assert ep.status_code == 202 and ep.headers.get(REPLAY) != "true"
@@ -244,8 +244,8 @@ def test_no_replay_across_routes(client: TestClient, api_settings: Settings) -> 
 def test_no_replay_across_principals(client: TestClient, api_settings: Settings) -> None:
     """Same key + same body + same namespace, but a DIFFERENT principal (presence) must be handled
     fresh, never replayed the first principal's write — identity binds (issuer, subject, presence)."""
-    tok_a = mint_token(api_settings, scopes=[f"{NS}:rw"], presence="eric/claude-code")
-    tok_b = mint_token(api_settings, scopes=[f"{NS}:rw"], presence="eric/other-agent")
+    tok_a = mint_token(api_settings, scopes=[f"{NS}:rw"], presence="admin/claude-code")
+    tok_b = mint_token(api_settings, scopes=[f"{NS}:rw"], presence="admin/other-agent")
     a = client.post(CAPTURE, json=_body(), headers=_auth(tok_a, "cross-principal"))
     assert a.status_code == 202 and a.headers.get(REPLAY) != "true"
     b = client.post(CAPTURE, json=_body(), headers=_auth(tok_b, "cross-principal"))
@@ -262,18 +262,18 @@ def test_no_replay_across_namespaces(client: TestClient, api_settings: Settings)
     the second write is fresh, not a replay of the first namespace's response."""
     token = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:rw", "eric/other/episodic:rw"],
-        presence="eric/claude-code",
+        scopes=["admin/claude-code/episodic:rw", "admin/other/episodic:rw"],
+        presence="admin/claude-code",
     )
     a = client.post(
         CAPTURE,
-        json={"namespace": "eric/claude-code/episodic", "content": "x", "importance": 3},
+        json={"namespace": "admin/claude-code/episodic", "content": "x", "importance": 3},
         headers=_auth(token, "cross-ns"),
     )
     assert a.status_code == 202 and a.headers.get(REPLAY) != "true"
     b = client.post(
         CAPTURE,
-        json={"namespace": "eric/other/episodic", "content": "x", "importance": 3},
+        json={"namespace": "admin/other/episodic", "content": "x", "importance": 3},
         headers=_auth(token, "cross-ns"),
     )
     assert b.headers.get(REPLAY) != "true", "a different namespace must not replay another's write"

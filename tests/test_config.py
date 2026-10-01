@@ -487,12 +487,12 @@ def test_lifecycle_llm_openai_override_roundtrip(
 ) -> None:
     monkeypatch.setenv("LIFECYCLE_LLM_API", "openai")
     monkeypatch.setenv("LIFECYCLE_LLM_BASE_URL", "http://litellm:4000/v1")
-    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", "house/backup")
+    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", "example/large")
     monkeypatch.setenv("LIFECYCLE_LLM_API_KEY", "sk-test")
     s = get_settings()
     assert s.lifecycle_llm_api == "openai"
     assert str(s.lifecycle_llm_base_url).rstrip("/") == "http://litellm:4000/v1"
-    assert s.lifecycle_llm_model == "house/backup"
+    assert s.lifecycle_llm_model == "example/large"
     assert s.lifecycle_llm_api_key is not None
     assert s.lifecycle_llm_api_key.get_secret_value() == "sk-test"
     assert "sk-test" not in repr(s)
@@ -510,7 +510,7 @@ def test_lifecycle_llm_openai_requires_explicit_base_url(
     minimal_env: Path, _reset_cache: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LIFECYCLE_LLM_API", "openai")
-    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", "house/backup")
+    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", "example/large")
     with pytest.raises(Exception, match="lifecycle_llm_base_url"):
         get_settings()
 

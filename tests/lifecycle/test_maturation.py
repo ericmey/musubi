@@ -94,7 +94,7 @@ def plane(qdrant: QdrantClient) -> EpisodicPlane:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 @pytest.fixture
@@ -1258,7 +1258,7 @@ async def test_concept_maturation_sweep_promotes_eligible(
     plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
     eligible = await plane.create(
         SynthesizedConcept(
-            namespace="eric/claude-code/concept",
+            namespace="admin/claude-code/concept",
             title="GPU host pattern",
             content="Pattern across CUDA bumps.",
             synthesis_rationale="Three episodic memories about CUDA upgrades cluster.",
@@ -1267,7 +1267,7 @@ async def test_concept_maturation_sweep_promotes_eligible(
     )
     not_yet = await plane.create(
         SynthesizedConcept(
-            namespace="eric/claude-code/concept",
+            namespace="admin/claude-code/concept",
             title="Networking pattern",
             content="Recent observation; not yet reinforced.",
             synthesis_rationale="Only one source so far.",
@@ -1275,7 +1275,7 @@ async def test_concept_maturation_sweep_promotes_eligible(
         )
     )
     for _ in range(3):
-        await plane.reinforce(namespace="eric/claude-code/concept", object_id=eligible.object_id)
+        await plane.reinforce(namespace="admin/claude-code/concept", object_id=eligible.object_id)
     backdate = datetime.now(UTC) - timedelta(days=2)
     for cid in (eligible.object_id, not_yet.object_id):
         qdrant.set_payload(
@@ -1297,10 +1297,10 @@ async def test_concept_maturation_sweep_promotes_eligible(
     )
     assert report.transitioned == 1
     refreshed_eligible = await plane.get(
-        namespace="eric/claude-code/concept", object_id=eligible.object_id
+        namespace="admin/claude-code/concept", object_id=eligible.object_id
     )
     refreshed_not_yet = await plane.get(
-        namespace="eric/claude-code/concept", object_id=not_yet.object_id
+        namespace="admin/claude-code/concept", object_id=not_yet.object_id
     )
     assert refreshed_eligible is not None and refreshed_eligible.state == "matured"
     assert refreshed_not_yet is not None and refreshed_not_yet.state == "synthesized"
@@ -1319,7 +1319,7 @@ async def test_concept_maturation_refuses_contradiction_added_after_eligibility_
     from musubi.types.common import generate_ksuid
     from musubi.types.concept import SynthesizedConcept
 
-    namespace = "eric/claude-code/concept"
+    namespace = "admin/claude-code/concept"
     plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
     saved = await plane.create(
         SynthesizedConcept(
@@ -1400,7 +1400,7 @@ async def test_concept_demotion_sweep_demotes_inactive(
     plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
     saved = await plane.create(
         SynthesizedConcept(
-            namespace="eric/claude-code/concept",
+            namespace="admin/claude-code/concept",
             title="Inactive pattern",
             content="Hasn't been reinforced in a while.",
             synthesis_rationale="Initial cluster of three.",
@@ -1408,7 +1408,7 @@ async def test_concept_demotion_sweep_demotes_inactive(
         )
     )
     await plane.transition(
-        namespace="eric/claude-code/concept",
+        namespace="admin/claude-code/concept",
         object_id=saved.object_id,
         to_state="matured",
         actor="seed",
@@ -1437,7 +1437,7 @@ async def test_concept_demotion_sweep_demotes_inactive(
         config=_config(demotion_inactivity_sec=30 * 86400),
     )
     assert report.transitioned == 1
-    refreshed = await plane.get(namespace="eric/claude-code/concept", object_id=saved.object_id)
+    refreshed = await plane.get(namespace="admin/claude-code/concept", object_id=saved.object_id)
     assert refreshed is not None and refreshed.state == "demoted"
 
 
@@ -1454,7 +1454,7 @@ async def test_concept_demotion_refuses_candidate_touched_after_selection(
     from musubi.types.common import generate_ksuid
     from musubi.types.concept import SynthesizedConcept
 
-    namespace = "eric/claude-code/concept"
+    namespace = "admin/claude-code/concept"
     plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
     saved = await plane.create(
         SynthesizedConcept(

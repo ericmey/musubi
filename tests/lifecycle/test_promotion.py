@@ -127,7 +127,7 @@ def _concept(**kwargs: Any) -> SynthesizedConcept:
     now = utc_now()
     d = {
         "object_id": generate_ksuid(),
-        "namespace": "eric/shared/concept",
+        "namespace": "admin/shared/concept",
         "title": "Title",
         "synthesis_rationale": "Rationale",
         "content": "Content",
@@ -276,7 +276,7 @@ def test_vault_writer_rejects_path_escape(tmp_path: Path) -> None:
     writer = VaultWriter(vault_root=vault_root, write_log=WriteLog(db_path=tmp_path / "wl.db"))
     fm = CuratedFrontmatter(  # type: ignore[call-arg]
         object_id=generate_ksuid(),
-        namespace="eric/shared/curated",
+        namespace="admin/shared/curated",
         title="T",
         musubi_managed=True,
         created=utc_now(),

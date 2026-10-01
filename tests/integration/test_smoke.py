@@ -55,7 +55,7 @@ async def test_capture_then_retrieve_roundtrip(api_client: Any, live_stack: Stac
     the full capture→promote→retrieve path without coupling to
     out-of-band worker timing. A short retry loop absorbs Qdrant
     local-mode indexing latency after promotion."""
-    namespace = "eric/integration-test/episodic"
+    namespace = "admin/integration-test/episodic"
     content = f"smoke-capture-{uuid.uuid4().hex[:8]}"
 
     captured = await api_client.episodic.capture(namespace=namespace, content=content, importance=5)
@@ -102,7 +102,7 @@ async def test_capture_then_retrieve_roundtrip(api_client: Any, live_stack: Stac
 async def test_capture_dedup_against_existing(api_client: Any) -> None:
     """Capture the same content twice; the second hit should fold into
     the first via the dedup pipeline (reinforcement_count == 2)."""
-    namespace = "eric/integration-test/episodic"
+    namespace = "admin/integration-test/episodic"
     content = f"dedup-fixture-{uuid.uuid4().hex[:8]}"
 
     first = await api_client.episodic.capture(namespace=namespace, content=content, importance=5)
@@ -125,7 +125,7 @@ async def test_capture_dedup_against_existing(api_client: Any) -> None:
 
 
 async def test_thought_send_check_read_history(api_client: Any) -> None:
-    namespace = "eric/integration-test/thought"
+    namespace = "admin/integration-test/thought"
 
     ack = await api_client.thoughts.send(
         namespace=namespace,
@@ -160,7 +160,7 @@ async def test_thought_stream_delivers_live(api_client: Any, live_stack: StackHa
     establish the broker subscription, post a thought via the SDK, then
     pull the next event from the stream. Assert object_id matches the
     posted thought's ack."""
-    namespace = "eric/integration-test/thought"
+    namespace = "admin/integration-test/thought"
     presence = "integration-test/sse-subscriber"
 
     received: dict[str, Any] = {}
@@ -228,7 +228,7 @@ async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
     is exercised here via raw httpx + the operator token."""
     import hashlib
 
-    namespace = "eric/integration-test/curated"
+    namespace = "admin/integration-test/curated"
     title = f"smoke-test-curated-{uuid.uuid4().hex[:8]}"
     content = (
         "Curated test entry — created by the integration harness for "
@@ -303,7 +303,7 @@ async def test_concept_synthesis_flow_ollama_offline(
         resp = await client.post(
             "/ops/debug/trigger-synthesis",
             json={
-                "namespace": "eric/integration-test",
+                "namespace": "admin/integration-test",
                 "simulate_ollama_offline": True,
             },
         )
@@ -315,11 +315,11 @@ async def test_concept_synthesis_flow_ollama_offline(
     # Per v1.5.5+'s per-family synthesis (musubi#335), the report's
     # `namespace` field carries the IDENTITY FAMILY the loop actually
     # clustered ("eric") — NOT an echo of the input namespace
-    # ("eric/integration-test"). The new `identity_family` field added
+    # ("admin/integration-test"). The new `identity_family` field added
     # in musubi#352 makes this semantic explicit; assert against both
     # to lock in the contract.
-    assert report["namespace"] == "eric"
-    assert report["identity_family"] == "eric"
+    assert report["namespace"] == "admin"
+    assert report["identity_family"] == "admin"
     assert report["concepts_created"] == 0
     assert report["concepts_reinforced"] == 0
     # memories_selected / clusters_formed are shape-dependent on prior
@@ -339,7 +339,7 @@ async def test_artifact_upload_multipart_then_retrieve_blob(
     live_stack: StackHandle,
 ) -> None:
     """Multipart upload → GET blob → bytes match."""
-    namespace = "eric/integration-test/artifact"
+    namespace = "admin/integration-test/artifact"
     # ArtifactPlane chunks the upload via the named chunker; tiny
     # payloads can produce zero non-empty chunks, which TEI rejects
     # with 413 "inputs cannot be empty". Use a payload with multiple
@@ -404,7 +404,7 @@ async def test_retrieve_deep_under_5s_on_10k_corpus(
     """Bullet 13 — deep-mode retrieve against the pre-loaded 10k
     corpus completes under the spec's 5s p95 budget. Strict-mode only;
     the harness pre-loads via the seed script when MUSUBI_TEST_PRELOAD_CORPUS=1."""
-    namespace = "eric/_shared/episodic"
+    namespace = "admin/_shared/episodic"
 
     start = time.monotonic()
     await api_client.retrieve(
@@ -423,7 +423,7 @@ async def test_retrieve_deep_under_5s_on_10k_corpus(
 )
 async def test_retrieve_fast_under_200ms_on_10k_corpus(api_client: Any) -> None:
     """Bullet 14 — fast-mode retrieve under 200ms p95."""
-    namespace = "eric/_shared/episodic"
+    namespace = "admin/_shared/episodic"
 
     start = time.monotonic()
     await api_client.retrieve(

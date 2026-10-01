@@ -42,7 +42,7 @@ def test_retrieve_context_and_stream_share_reranker_cause_codes(
         "/v1/retrieve",
         headers=headers,
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "cause contract",
             "mode": "deep",
             "planes": ["episodic"],
@@ -55,7 +55,7 @@ def test_retrieve_context_and_stream_share_reranker_cause_codes(
         "/v1/context",
         headers=headers,
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "query_text": "cause contract",
             "planes": ["episodic"],
             "max_items": 3,
@@ -69,7 +69,7 @@ def test_retrieve_context_and_stream_share_reranker_cause_codes(
         "/v1/retrieve/stream",
         headers=headers,
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "cause contract",
             "mode": "deep",
             "limit": 3,

@@ -17,7 +17,7 @@ import pytest
 @pytest.fixture
 def sample_namespace() -> str:
     """A well-formed ``{tenant}/{presence}/{plane}`` namespace for tests."""
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 class _FakeWordTokenizer:

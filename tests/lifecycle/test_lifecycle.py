@@ -89,7 +89,7 @@ def plane(qdrant: QdrantClient) -> EpisodicPlane:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 @pytest.fixture
@@ -915,7 +915,7 @@ def test_transition_result_and_error_shapes_are_frozen() -> None:
         event=LifecycleEvent(
             object_id="0" * 27,
             object_type="episodic",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             from_state="provisional",
             to_state="matured",
             actor="t",
@@ -950,7 +950,7 @@ def test_transition_is_thread_safe_against_own_sink(
         return LifecycleEvent(
             object_id="0" * 26 + str(i % 10),
             object_type="episodic",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             from_state="provisional",
             to_state="matured",
             actor=f"thread-{i}",
@@ -997,7 +997,7 @@ def test_sink_record_after_close_returns_typed_err(tmp_path: Path) -> None:
     ev = LifecycleEvent(
         object_id="0" * 27,
         object_type="episodic",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         from_state="provisional",
         to_state="matured",
         actor="t",
@@ -1021,7 +1021,7 @@ def test_sink_read_all_after_close_opens_fresh_connection(tmp_path: Path) -> Non
     ev = LifecycleEvent(
         object_id="0" * 27,
         object_type="episodic",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         from_state="provisional",
         to_state="matured",
         actor="t",
@@ -1042,7 +1042,7 @@ def test_sink_deserialises_naive_datetime() -> None:
     ev = LifecycleEvent(
         object_id="0" * 27,
         object_type="episodic",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         from_state="provisional",
         to_state="matured",
         actor="t",
@@ -1065,7 +1065,7 @@ def test_context_manager_closes_sink(tmp_path: Path) -> None:
         ev = LifecycleEvent(
             object_id="0" * 27,
             object_type="episodic",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             from_state="provisional",
             to_state="matured",
             actor="t",

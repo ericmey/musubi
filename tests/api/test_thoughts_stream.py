@@ -74,7 +74,7 @@ def clean_broker() -> Any:
 
 def _thought(**kwargs: Any) -> Thought:
     defaults = {
-        "namespace": "eric/claude-code/thought",
+        "namespace": "admin/claude-code/thought",
         "from_presence": "me",
         "to_presence": "you",
         "content": "hello",
@@ -157,7 +157,7 @@ async def test_stream_emits_ping_every_30s() -> None:
     Here we drive the generator and assert the first yielded frame (in
     test mode, after ~10ms of idle queue) is a ping.
     """
-    sub = broker.subscribe("eric/claude-code/thought", {"all"})
+    sub = broker.subscribe("admin/claude-code/thought", {"all"})
     frame = await asyncio.wait_for(
         _drive_one_frame(sub, testing=True, event_filter="ping"),
         timeout=_STREAM_READ_TIMEOUT,
@@ -173,7 +173,7 @@ async def test_stream_returns_403_without_read_scope(app: FastAPI, out_of_scope_
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/v1/thoughts/stream",
-            params={"namespace": "eric/claude-code/thought"},
+            params={"namespace": "admin/claude-code/thought"},
             headers={"Authorization": f"Bearer {out_of_scope_token}"},
         )
         assert response.status_code == 403
@@ -191,7 +191,7 @@ async def test_stream_returns_503_when_connection_cap_exceeded(
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/v1/thoughts/stream",
-            params={"namespace": "eric/claude-code/thought"},
+            params={"namespace": "admin/claude-code/thought"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
         assert response.status_code == 503
@@ -204,36 +204,36 @@ async def test_stream_returns_503_when_connection_cap_exceeded(
 
 
 def test_stream_filters_by_namespace() -> None:
-    sub = broker.subscribe("eric/claude-code/thought", {"all"})
+    sub = broker.subscribe("admin/claude-code/thought", {"all"})
     broker.publish(_thought(namespace="other/namespace/thought", to_presence="all"))
     assert sub.queue.empty(), "cross-namespace thought leaked to subscriber"
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="all"))
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="all"))
     assert sub.queue.qsize() == 1
 
 
 def test_stream_filters_by_include_parameter() -> None:
     # Subscriber explicitly opts into ONLY "openclaw" — no "all" broadcast.
-    sub = broker.subscribe("eric/claude-code/thought", {"openclaw"})
+    sub = broker.subscribe("admin/claude-code/thought", {"openclaw"})
     # to="livekit" — not in includes → filtered out.
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="livekit"))
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="livekit"))
     assert sub.queue.empty()
     # to="openclaw" — matches → delivered.
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="openclaw"))
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="openclaw"))
     assert sub.queue.qsize() == 1
     # to="all" — also filtered because the subscriber narrowed include to
     # just "openclaw" (opted out of broadcasts). If the subscriber wanted
     # broadcasts they would have subscribed with {"openclaw", "all"}.
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="all"))
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="all"))
     assert sub.queue.qsize() == 1
 
 
 def test_stream_defaults_include_to_token_presence_plus_all() -> None:
     # The endpoint default is {token-presence, "all"}; simulate by subscribing
     # with that set and verifying delivery semantics.
-    sub = broker.subscribe("eric/claude-code/thought", {"me", "all"})
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="me"))
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="all"))
-    broker.publish(_thought(namespace="eric/claude-code/thought", to_presence="someone-else"))
+    sub = broker.subscribe("admin/claude-code/thought", {"me", "all"})
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="me"))
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="all"))
+    broker.publish(_thought(namespace="admin/claude-code/thought", to_presence="someone-else"))
     assert sub.queue.qsize() == 2
 
 
@@ -283,13 +283,13 @@ def test_three_subscribers_one_slow_fast_ones_unaffected(
 
 @pytest.mark.asyncio
 async def test_send_thought_publishes_to_broker(app: FastAPI, valid_token: str) -> None:
-    sub = broker.subscribe("eric/claude-code/thought", {"you"})
+    sub = broker.subscribe("admin/claude-code/thought", {"you"})
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post(
             "/v1/thoughts/send",
             json={
-                "namespace": "eric/claude-code/thought",
+                "namespace": "admin/claude-code/thought",
                 "from_presence": "me",
                 "to_presence": "you",
                 "content": "hi",
@@ -309,7 +309,7 @@ async def test_send_with_no_subscribers_is_noop_not_error(app: FastAPI, valid_to
         res = await client.post(
             "/v1/thoughts/send",
             json={
-                "namespace": "eric/claude-code/thought",
+                "namespace": "admin/claude-code/thought",
                 "from_presence": "me",
                 "to_presence": "you",
                 "content": "hi",
@@ -333,7 +333,7 @@ async def test_replay_with_missing_last_event_id_starts_from_live() -> None:
     # driving the generator directly (HTTP round-trip + header semantics
     # verified in the integration harness under PR #114 against live
     # services).
-    sub = broker.subscribe("eric/claude-code/thought", {"all"})
+    sub = broker.subscribe("admin/claude-code/thought", {"all"})
     frame = await asyncio.wait_for(
         _drive_one_frame(sub, testing=True, event_filter="ping"),
         timeout=_STREAM_READ_TIMEOUT,
@@ -350,7 +350,7 @@ async def test_replay_from_last_event_id_emits_events_before_live_tail() -> None
     object_id order (ASGITransport can't be used here; the existing
     stream tests all drive the generator directly for the same
     reason — see `_drive_one_frame`)."""
-    sub = broker.subscribe("eric/claude-code/thought", {"claude-code", "all"})
+    sub = broker.subscribe("admin/claude-code/thought", {"claude-code", "all"})
     replay = sorted(
         [
             _thought(content="alpha"),
@@ -388,7 +388,7 @@ async def test_replay_transitions_to_live_tail_after_emitting_replay() -> None:
     live-tail from the broker queue. Verified by seeding a replay
     frame, publishing a live thought, and confirming both arrive as
     ``thought`` frames in replay-first order."""
-    namespace = "eric/claude-code/thought"
+    namespace = "admin/claude-code/thought"
     sub = broker.subscribe(namespace, {"claude-code", "all"})
     historic = _thought(content="historic")
 
@@ -467,7 +467,7 @@ async def test_stream_endpoint_sets_truncated_header_when_plane_reports_truncati
 
     response = await stream_thoughts(
         request=_Req(),  # type: ignore[arg-type]
-        namespace="eric/claude-code/thought",
+        namespace="admin/claude-code/thought",
         include=None,
         last_event_id="0" * 27,
         settings=settings,
@@ -518,7 +518,7 @@ async def test_stream_endpoint_unsubscribes_broker_if_replay_raises(
 
     response = await stream_thoughts(
         request=_Req(),  # type: ignore[arg-type]
-        namespace="eric/claude-code/thought",
+        namespace="admin/claude-code/thought",
         include=None,
         last_event_id="0" * 27,
         settings=settings,
@@ -569,7 +569,7 @@ async def test_stream_endpoint_no_truncation_header_when_replay_fits(
 
     response = await stream_thoughts(
         request=_Req(),  # type: ignore[arg-type]
-        namespace="eric/claude-code/thought",
+        namespace="admin/claude-code/thought",
         include=None,
         last_event_id="0" * 27,
         settings=settings,
@@ -627,7 +627,7 @@ async def test_client_disconnect_cleans_up_subscription() -> None:
     ``finally`` block must call ``broker.unsubscribe(sub)``.
     """
     assert len(broker._subscribers) == 0
-    sub = broker.subscribe("eric/claude-code/thought", {"all"})
+    sub = broker.subscribe("admin/claude-code/thought", {"all"})
     assert len(broker._subscribers) == 1
 
     request = _FakeRequest(testing=True)

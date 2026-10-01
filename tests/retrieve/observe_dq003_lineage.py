@@ -38,7 +38,7 @@ ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
 OP_ENV = Path(
     os.environ.get("MUSUBI_OPERATOR_ENV", str(Path.home() / ".musubi/musubi-mcp-aoi-operator.env"))
 )
-NS = "aoi/command-chair/episodic"
+NS = "sam/command-chair/episodic"
 
 musubi = Musubi(ENV)
 store = Store()
@@ -123,7 +123,7 @@ print()
 # allowed from provisional: ['archived','matured']"). Mature A first, THEN supersede it.
 print("Transition: A provisional -> matured -> superseded; B supersedes A")
 m_status, _ = transition(
-    a_oid, "matured", actor="aoi/operator", reason="DQ-003: mature A before supersession"
+    a_oid, "matured", actor="sam/operator", reason="DQ-003: mature A before supersession"
 )
 line("A -> matured (required first hop)", m_status)
 time.sleep(1)
@@ -131,7 +131,7 @@ time.sleep(1)
 status, body = transition(
     a_oid,
     "superseded",
-    actor="aoi/operator",
+    actor="sam/operator",
     reason="DQ-003 lineage observation",
     superseded_by=b_oid,
 )
@@ -139,7 +139,7 @@ status, body = transition(
 status_b, body_b = transition(
     b_oid,
     "matured",
-    actor="aoi/operator",
+    actor="sam/operator",
     reason="DQ-003 lineage observation: B supersedes A",
     supersedes=[a_oid],
 )
@@ -213,10 +213,10 @@ print()
 
 # ── cleanup: return A and B to a benign state via the authorized path ────────
 print("Cleanup (authorized transition, not deletion):")
-c1, _ = transition(a_oid, "archived", actor="aoi/operator", reason="DQ-003 probe cleanup")
-transition(b_oid, "matured", actor="aoi/operator", reason="cleanup hop")
+c1, _ = transition(a_oid, "archived", actor="sam/operator", reason="DQ-003 probe cleanup")
+transition(b_oid, "matured", actor="sam/operator", reason="cleanup hop")
 time.sleep(0.5)
-c2, _ = transition(b_oid, "archived", actor="aoi/operator", reason="DQ-003 probe cleanup")
+c2, _ = transition(b_oid, "archived", actor="sam/operator", reason="DQ-003 probe cleanup")
 line("    A -> archived", c1)
 line("    B -> archived", c2)
 

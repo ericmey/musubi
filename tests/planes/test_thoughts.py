@@ -64,7 +64,7 @@ def _final(result: object) -> TransitionResult:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/thought"
+    return "admin/claude-code/thought"
 
 
 def _make(
@@ -209,7 +209,7 @@ async def test_thought_in_reply_to_chain_queries_correctly(plane: ThoughtsPlane,
 
 
 async def test_thought_namespace_isolation(plane: ThoughtsPlane, ns: str) -> None:
-    other_ns = "eric/other/thought"
+    other_ns = "admin/other/thought"
     t1 = await plane.send(_make("in ns", ns, "a", "b"))
     t2 = await plane.send(_make("in other", other_ns, "a", "b"))
 
@@ -429,8 +429,8 @@ async def test_replay_since_respects_include_filter(plane: ThoughtsPlane, ns: st
 
 async def test_replay_since_respects_namespace(plane: ThoughtsPlane) -> None:
     """Replay never leaks thoughts across namespaces."""
-    own_ns = "eric/claude-code/thought"
-    other_ns = "eric/livekit-voice/thought"
+    own_ns = "admin/claude-code/thought"
+    other_ns = "admin/livekit-voice/thought"
     own = await plane.send(_make("own", own_ns, "a", "b"))
     await plane.send(_make("other", other_ns, "a", "b"))
     anchor = "0" * 27

@@ -41,7 +41,7 @@ from musubi.api.responses import (
 def _reference_ranked() -> RankedResultRow:
     return RankedResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=0.875,
         content="snippet",
@@ -63,7 +63,7 @@ def _reference_ranked() -> RankedResultRow:
 def _reference_recent() -> RecentResultRow:
     return RecentResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=1783957804.0,
         content="snippet",
@@ -95,7 +95,7 @@ def test_ranked_score_components_rejects_3key_dict_mutation() -> None:
     with pytest.raises(ValidationError):
         RankedResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=0.875,
             content="snippet",
@@ -132,7 +132,7 @@ def test_recent_score_components_rejects_3key_fabrication_mutation() -> None:
     with pytest.raises(ValidationError):
         RecentResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=1783957804.0,
             content="snippet",
@@ -180,7 +180,7 @@ def test_ranked_importance_rejects_out_of_range_value_mutation() -> None:
     with pytest.raises(ValidationError):
         RankedResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=0.875,
             content="snippet",
@@ -211,7 +211,7 @@ def test_ranked_score_kind_rejects_wrong_literal_mutation() -> None:
     with pytest.raises(ValidationError):
         RankedResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=0.875,
             content="snippet",
@@ -243,7 +243,7 @@ def test_state_rejects_invalid_enum_mutation() -> None:
     with pytest.raises(ValidationError):
         RankedResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=0.875,
             content="snippet",

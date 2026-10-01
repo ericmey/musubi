@@ -17,8 +17,8 @@ def test_channel_default(thought_namespace: str) -> None:
     t = Thought(
         namespace=thought_namespace,
         content="hi",
-        from_presence="yua",
-        to_presence="eric",
+        from_presence="alex",
+        to_presence="admin",
     )
     assert t.channel == "default"
 
@@ -28,8 +28,8 @@ def test_importance_bounded(thought_namespace: str) -> None:
         Thought(
             namespace=thought_namespace,
             content="hi",
-            from_presence="yua",
-            to_presence="eric",
+            from_presence="alex",
+            to_presence="admin",
             importance=0,
         )
 
@@ -38,7 +38,7 @@ def test_to_presence_all_supported(thought_namespace: str) -> None:
     t = Thought(
         namespace=thought_namespace,
         content="broadcast",
-        from_presence="yua",
+        from_presence="alex",
         to_presence="all",
     )
     assert t.to_presence == "all"

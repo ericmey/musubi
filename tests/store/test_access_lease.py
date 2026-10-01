@@ -250,7 +250,7 @@ async def test_single_loop_deliveries_stay_correct() -> None:
     client = QdrantClient(":memory:")
     bootstrap(client)
     try:
-        ns = "eric/dev/episodic"
+        ns = "admin/dev/episodic"
         row = await EpisodicPlane(client=client, embedder=FakeEmbedder()).create(
             EpisodicMemory(namespace=ns, content="single loop", state="matured")
         )

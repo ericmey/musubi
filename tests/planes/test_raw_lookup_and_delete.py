@@ -31,7 +31,7 @@ from musubi.store import bootstrap
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.types.episodic import EpisodicMemory
 
-NS = "eric/claude-code/episodic"
+NS = "admin/claude-code/episodic"
 COLLECTION = "musubi_episodic"
 
 
@@ -307,9 +307,9 @@ async def test_sdk_delete_removes_a_row_whose_namespace_is_CORRUPT(
         {"ns": "x"},  # non-string
         "",  # string, empty
         "garbage",  # string, no structure
-        "eric/claude-code",  # string, missing the plane component
-        "eric/claude-code/not-a-plane",  # string, invalid plane
-        "Eric/Claude-Code/episodic",  # string, invalid casing
+        "admin/claude-code",  # string, missing the plane component
+        "admin/claude-code/not-a-plane",  # string, invalid plane
+        "Admin/Claude-Code/episodic",  # string, invalid casing
     ):
         oid = await _seed(episodic, f"malformed-ns-{bad_ns!r}")
         qdrant.set_payload(

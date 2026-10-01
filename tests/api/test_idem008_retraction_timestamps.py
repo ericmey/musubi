@@ -21,7 +21,7 @@ from musubi.types.common import epoch_of, generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 from tests.support.identity_seed import seed_v2_identity_via_migration
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 _RETRACTED_AT = datetime(2099, 8, 17, 21, 30, tzinfo=UTC)
 _LATER = _RETRACTED_AT + timedelta(hours=1)
 

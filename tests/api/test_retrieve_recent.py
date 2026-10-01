@@ -75,18 +75,18 @@ def test_retrieve_recent_no_query_text_returns_200(
     """Pre-slice, the API required query_text and this would 422."""
     from tests.api.conftest import mint_token
 
-    _seed(episodic, "aoi/command-chair/episodic", "early write")
-    _seed(episodic, "aoi/command-chair/episodic", "later write")
+    _seed(episodic, "sam/command-chair/episodic", "early write")
+    _seed(episodic, "sam/command-chair/episodic", "later write")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["aoi/*/*:r"],
-        presence="aoi/command-chair",
+        scopes=["sam/*/*:r"],
+        presence="sam/command-chair",
     )
     r = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "aoi/command-chair/episodic",
+            "namespace": "sam/command-chair/episodic",
             "mode": "recent",
             "limit": 10,
             # No `query_text` — the whole point of this test.
@@ -110,19 +110,19 @@ def test_retrieve_recent_results_are_newest_first(
     """
     from tests.api.conftest import mint_token
 
-    _seed(episodic, "aoi/command-chair/episodic", "first")
-    _seed(episodic, "aoi/command-chair/episodic", "second")
-    _seed(episodic, "aoi/command-chair/episodic", "third")
+    _seed(episodic, "sam/command-chair/episodic", "first")
+    _seed(episodic, "sam/command-chair/episodic", "second")
+    _seed(episodic, "sam/command-chair/episodic", "third")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["aoi/*/*:r"],
-        presence="aoi/command-chair",
+        scopes=["sam/*/*:r"],
+        presence="sam/command-chair",
     )
     r = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "aoi/command-chair/episodic",
+            "namespace": "sam/command-chair/episodic",
             "mode": "recent",
             "limit": 10,
         },
@@ -153,19 +153,19 @@ def test_retrieve_recent_with_query_text_is_accept_and_ignore(
 
     from tests.api.conftest import mint_token
 
-    _seed(episodic, "aoi/command-chair/episodic", "alpha")
-    _seed(episodic, "aoi/command-chair/episodic", "beta")
+    _seed(episodic, "sam/command-chair/episodic", "alpha")
+    _seed(episodic, "sam/command-chair/episodic", "beta")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["aoi/*/*:r"],
-        presence="aoi/command-chair",
+        scopes=["sam/*/*:r"],
+        presence="sam/command-chair",
     )
     with caplog.at_level(logging.WARNING, logger="musubi.retrieve.orchestration"):
         r = client.post(
             "/v1/retrieve",
             json={
-                "namespace": "aoi/command-chair/episodic",
+                "namespace": "sam/command-chair/episodic",
                 "mode": "recent",
                 "query_text": "ignored field",
                 "limit": 10,
@@ -199,16 +199,16 @@ def test_retrieve_ranked_modes_accept_since_and_tags_without_effect(
     """
     from tests.api.conftest import mint_token
 
-    _seed(episodic, "aoi/command-chair/episodic", "anything")
+    _seed(episodic, "sam/command-chair/episodic", "anything")
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["aoi/*/*:r"],
-        presence="aoi/command-chair",
+        scopes=["sam/*/*:r"],
+        presence="sam/command-chair",
     )
     r = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "aoi/command-chair/episodic",
+            "namespace": "sam/command-chair/episodic",
             "mode": mode,
             "query_text": "anything",
             "since": 1.0,
@@ -237,23 +237,23 @@ def test_retrieve_recent_with_since_filter_excludes_old_rows(
 
     from tests.api.conftest import mint_token
 
-    _seed(episodic, "aoi/command-chair/episodic", "before-cutoff")
+    _seed(episodic, "sam/command-chair/episodic", "before-cutoff")
     # Small wait so created_epoch differs across rows. The clock resolution
     # on the test runner is sub-second; 50ms is comfortably > one tick.
     time.sleep(0.05)
     cutoff = time.time()
     time.sleep(0.05)
-    _seed(episodic, "aoi/command-chair/episodic", "after-cutoff")
+    _seed(episodic, "sam/command-chair/episodic", "after-cutoff")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["aoi/*/*:r"],
-        presence="aoi/command-chair",
+        scopes=["sam/*/*:r"],
+        presence="sam/command-chair",
     )
     r = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "aoi/command-chair/episodic",
+            "namespace": "sam/command-chair/episodic",
             "mode": "recent",
             "since": cutoff,
             "limit": 10,
@@ -287,16 +287,16 @@ def test_retrieve_ranked_modes_without_query_text_still_422(
     """
     from tests.api.conftest import mint_token
 
-    _seed(episodic, "aoi/command-chair/episodic", "anything")
+    _seed(episodic, "sam/command-chair/episodic", "anything")
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["aoi/*/*:r"],
-        presence="aoi/command-chair",
+        scopes=["sam/*/*:r"],
+        presence="sam/command-chair",
     )
     r = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "aoi/command-chair/episodic",
+            "namespace": "sam/command-chair/episodic",
             "mode": mode,
             "limit": 10,
         },

@@ -88,7 +88,7 @@ def _mock_orchestration(*, recent: bool) -> OrchestrationMock:
     )
     result = RetrievalResult(
         object_id="dq001-row",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         title="DQ-001",
         snippet="z" * 200,
@@ -120,7 +120,7 @@ def test_retrieve_wire_emits_truncation_metadata(
         _mock_orchestration(recent=mode == "recent"),
     )
     body: dict[str, object] = {
-        "namespace": "eric/claude-code/episodic",
+        "namespace": "admin/claude-code/episodic",
         "mode": mode,
         "limit": 5,
     }
@@ -177,7 +177,7 @@ def test_unicode_cluster_at_ranked_boundary_is_never_silent(cluster: str) -> Non
 def test_wire_models_keep_backward_compatible_defaults() -> None:
     ranked = RankedResultRow(
         object_id="ranked",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=0.5,
         content="complete",
@@ -197,7 +197,7 @@ def test_wire_models_keep_backward_compatible_defaults() -> None:
     )
     recent = RecentResultRow(
         object_id="recent",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=1.0,
         content="complete",
@@ -218,7 +218,7 @@ def test_wire_models_keep_backward_compatible_defaults() -> None:
 def test_context_pack_reports_its_actual_display_cap(length: int, expected: bool) -> None:
     candidate = ContextCandidate(
         object_id="context",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         content="c" * length,
         state="matured",
@@ -244,7 +244,7 @@ def test_context_pack_length_uses_normalized_display_text() -> None:
     assert len(normalized) < 120
     candidate = ContextCandidate(
         object_id="whitespace",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         content=raw_content,
         state="matured",

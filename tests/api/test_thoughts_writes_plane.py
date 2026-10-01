@@ -36,7 +36,7 @@ def test_thought_send_uses_configured_plane_and_embedder(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["eric/ns/thought:w"])
+    token = mint_token(api_settings, scopes=["admin/ns/thought:w"])
 
     qdrant = app_factory.dependency_overrides[get_qdrant_client]()
     embedder = DummyEmbedder()
@@ -51,9 +51,9 @@ def test_thought_send_uses_configured_plane_and_embedder(
         "/v1/thoughts/send",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "eric/ns/thought",
-            "from_presence": "eric/me",
-            "to_presence": "eric/other",
+            "namespace": "admin/ns/thought",
+            "from_presence": "admin/me",
+            "to_presence": "admin/other",
             "content": "hello world",
             "channel": "default",
             "importance": 5,
@@ -93,9 +93,9 @@ def test_thought_send_uses_configured_plane_and_embedder(
         "/v1/thoughts/send",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "eric/ns/thought",
-            "from_presence": "eric/me",
-            "to_presence": "eric/other",
+            "namespace": "admin/ns/thought",
+            "from_presence": "admin/me",
+            "to_presence": "admin/other",
             "content": "different length content",
             "channel": "default",
             "importance": 5,
@@ -137,7 +137,7 @@ def test_thought_read_uses_configured_plane(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["eric/ns/thought:w"])
+    token = mint_token(api_settings, scopes=["admin/ns/thought:w"])
 
     qdrant = app_factory.dependency_overrides[get_qdrant_client]()
     spy_plane = ThoughtsPlane(client=qdrant, embedder=DummyEmbedder())
@@ -157,9 +157,9 @@ def test_thought_read_uses_configured_plane(
         "/v1/thoughts/read",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "eric/ns/thought",
+            "namespace": "admin/ns/thought",
             "ids": ["invalid-id", "valid-id"],
-            "reader": "eric/other",
+            "reader": "admin/other",
         },
     )
     assert r.status_code == 200
@@ -186,7 +186,7 @@ def test_missing_dependency_fails_loud(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["eric/ns/thought:w"])
+    token = mint_token(api_settings, scopes=["admin/ns/thought:w"])
 
     def raise_dependency() -> None:
         raise RuntimeError("loud failure injected")
@@ -204,9 +204,9 @@ def test_missing_dependency_fails_loud(
             "/v1/thoughts/send",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "namespace": "eric/ns/thought",
-                "from_presence": "eric/me",
-                "to_presence": "eric/other",
+                "namespace": "admin/ns/thought",
+                "from_presence": "admin/me",
+                "to_presence": "admin/other",
                 "content": "hello world",
                 "channel": "default",
                 "importance": 5,

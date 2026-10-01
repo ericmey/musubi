@@ -51,7 +51,7 @@ from musubi.store.names import collection_for_plane
 from musubi.store.specs import POINT_KIND_FIELD
 
 _COLL = collection_for_plane("episodic")
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 
 
 @pytest.fixture

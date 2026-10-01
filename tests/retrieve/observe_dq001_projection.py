@@ -37,8 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import FRESH_STATES, Fixture, Musubi, Store
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
-NS = "aoi/command-chair/lifecycle"  # lifecycle plane: probes, not real memories
-NS_RECALL = "aoi/command-chair/episodic"  # ranked recall needs a retrievable plane
+NS = "sam/command-chair/lifecycle"  # lifecycle plane: probes, not real memories
+NS_RECALL = "sam/command-chair/episodic"  # ranked recall needs a retrievable plane
 
 musubi = Musubi(ENV)
 store = Store()

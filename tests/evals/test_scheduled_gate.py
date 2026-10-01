@@ -94,7 +94,7 @@ def test_teardown_refuses_non_run_namespace() -> None:
     or a bug could delete real data."""
     client = _RecordingClient()
     with pytest.raises(ScheduledGateFailure, match="owner-scope"):
-        _teardown(client, "musubi_episodic", "aoi/command-chair/episodic")
+        _teardown(client, "musubi_episodic", "sam/command-chair/episodic")
     assert client.deleted == []  # the real-namespace delete never fired
 
 
@@ -189,7 +189,7 @@ def test_deep_quality_measurement_raises_the_interactive_rerank_budget(
     ids = asyncio.run(
         retrieve_scheduled_query(
             _Backends(),
-            namespace="eric/eval/episodic",
+            namespace="admin/eval/episodic",
             collection="musubi_episodic",
             query_text="trade latency for recall",
             mode="deep",

@@ -61,7 +61,7 @@ async def test_real_storage_escrow_orders_verified_blob_before_head_and_reuses(
         plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
         original = b"ART-004 real storage exact bytes\n"
         source_object_id = generate_ksuid()
-        source_namespace = "eric/integration-test/episodic"
+        source_namespace = "admin/integration-test/episodic"
         address = derive_escrow_address(
             source_namespace=source_namespace,
             source_object_id=source_object_id,

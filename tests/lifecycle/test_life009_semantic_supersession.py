@@ -169,7 +169,7 @@ def qdrant() -> Iterator[QdrantClient]:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 @pytest.fixture

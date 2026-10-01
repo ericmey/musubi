@@ -490,7 +490,7 @@ def _assert_baseline_delta_gate(
     except ValueError:
         pass
 
-    # 3. Missing/non-numeric/non-finite FAIL
+    # 3. Missing/non-numadmin/non-finite FAIL
     try:
         delta_check_func(baseline, {"mrr": 0.85, "latency_p95_ms": 100.0})
         raise RuntimeError("Failed to catch missing ndcg@10")

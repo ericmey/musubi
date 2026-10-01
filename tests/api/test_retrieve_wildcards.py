@@ -98,30 +98,30 @@ def test_wildcard_in_tenant_segment_3seg_accepted() -> None:
 
 
 def test_wildcard_in_presence_segment_3seg_accepted() -> None:
-    targets, err = _resolve_targets("nyla/*/episodic", None)
+    targets, err = _resolve_targets("casey/*/episodic", None)
     assert err is None
-    assert targets == [("nyla/*/episodic", "episodic")]
+    assert targets == [("casey/*/episodic", "episodic")]
 
 
 def test_wildcard_in_plane_segment_3seg_with_planes_list_accepted() -> None:
-    targets, err = _resolve_targets("nyla/voice/*", ["episodic", "curated"])
+    targets, err = _resolve_targets("casey/voice/*", ["episodic", "curated"])
     assert err is None
     assert targets == [
-        ("nyla/voice/episodic", "episodic"),
-        ("nyla/voice/curated", "curated"),
+        ("casey/voice/episodic", "episodic"),
+        ("casey/voice/curated", "curated"),
     ]
 
 
 def test_wildcard_in_plane_segment_3seg_without_planes_list_400s() -> None:
-    targets, err = _resolve_targets("nyla/voice/*", None)
+    targets, err = _resolve_targets("casey/voice/*", None)
     assert err is not None and "planes" in err.lower()
     assert targets == []
 
 
 def test_double_segment_wildcard_3seg_accepted() -> None:
-    targets, err = _resolve_targets("nyla/*/*", ["episodic"])
+    targets, err = _resolve_targets("casey/*/*", ["episodic"])
     assert err is None
-    assert targets == [("nyla/*/episodic", "episodic")]
+    assert targets == [("casey/*/episodic", "episodic")]
 
 
 def test_all_wildcard_3seg_accepted() -> None:
@@ -131,20 +131,20 @@ def test_all_wildcard_3seg_accepted() -> None:
 
 
 def test_wildcard_in_2seg_accepted() -> None:
-    """2-seg `nyla/*` defaults to planes=["episodic"] like its concrete cousin."""
-    targets, err = _resolve_targets("nyla/*", None)
+    """2-seg `casey/*` defaults to planes=["episodic"] like its concrete cousin."""
+    targets, err = _resolve_targets("casey/*", None)
     assert err is None
-    assert targets == [("nyla/*/episodic", "episodic")]
+    assert targets == [("casey/*/episodic", "episodic")]
 
 
 def test_double_star_rejected() -> None:
-    targets, err = _resolve_targets("nyla/**/episodic", None)
+    targets, err = _resolve_targets("casey/**/episodic", None)
     assert err is not None
     assert targets == []
 
 
 def test_empty_segment_with_wildcard_rejected() -> None:
-    targets, err = _resolve_targets("nyla//episodic", None)
+    targets, err = _resolve_targets("casey//episodic", None)
     assert err is not None and "empty" in err.lower()
     assert targets == []
 
@@ -163,13 +163,13 @@ def test_pattern_with_4_segments_rejected() -> None:
 def test_expansion_returns_concrete_namespaces_for_wildcard_pattern(
     qdrant: QdrantClient, episodic: EpisodicPlane
 ) -> None:
-    _seed_episodic(episodic, "nyla/voice/episodic", "voice memory")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "openclaw memory")
+    _seed_episodic(episodic, "casey/voice/episodic", "voice memory")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "openclaw memory")
 
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("casey/*/episodic", "episodic")])
 
     namespaces = sorted(ns for ns, _ in expanded)
-    assert namespaces == ["nyla/openclaw/episodic", "nyla/voice/episodic"]
+    assert namespaces == ["casey/openclaw/episodic", "casey/voice/episodic"]
     assert all(plane == "episodic" for _, plane in expanded)
 
 
@@ -178,10 +178,10 @@ def test_expansion_filters_by_segment_count(qdrant: QdrantClient, episodic: Epis
     namespaces are always 3-seg today (regex), so this asserts the pattern's
     own segment count is honoured: a hypothetical 2-seg pattern wouldn't
     match a 3-seg row even if the prefix matched."""
-    _seed_episodic(episodic, "nyla/voice/episodic", "x")
-    # Pattern is 2-seg so even though "nyla/voice" is a prefix of the
+    _seed_episodic(episodic, "casey/voice/episodic", "x")
+    # Pattern is 2-seg so even though "casey/voice" is a prefix of the
     # stored 3-seg namespace, it should not match.
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("casey/*", "episodic")])
     # 2-seg pattern fed in here would be a programming error in the router
     # (router resolves 2-seg to 3-seg before calling expansion). The
     # expansion routine still respects segment count: empty result.
@@ -193,11 +193,11 @@ def test_expansion_segment_match_is_literal_not_substring(
     qdrant: QdrantClient, episodic: EpisodicPlane
 ) -> None:
     """`*` is a whole-segment wildcard, not a regex char. Pattern
-    `n*/voice/episodic` must NOT match `nyla/voice/episodic` — the first
+    `n*/voice/episodic` must NOT match `casey/voice/episodic` — the first
     segment has a literal `n` followed by `*`, which is a syntactically
     invalid pattern at the segment level (segments are either fully
     literal or exactly `*`)."""
-    _seed_episodic(episodic, "nyla/voice/episodic", "x")
+    _seed_episodic(episodic, "casey/voice/episodic", "x")
     # Mixed-segment patterns: in our model `n*` is not "starts with n",
     # it's "literal segment n*" — which doesn't match `nyla`. Empty result.
     expanded = _expand_wildcard_targets(qdrant, [("n*/voice/episodic", "episodic")])
@@ -206,18 +206,18 @@ def test_expansion_segment_match_is_literal_not_substring(
 
 
 def test_expansion_dedups_namespaces(qdrant: QdrantClient, episodic: EpisodicPlane) -> None:
-    _seed_episodic(episodic, "nyla/voice/episodic", "first")
-    _seed_episodic(episodic, "nyla/voice/episodic", "second")
-    _seed_episodic(episodic, "nyla/voice/episodic", "third")
+    _seed_episodic(episodic, "casey/voice/episodic", "first")
+    _seed_episodic(episodic, "casey/voice/episodic", "second")
+    _seed_episodic(episodic, "casey/voice/episodic", "third")
 
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("casey/*/episodic", "episodic")])
 
     namespaces = [ns for ns, _ in expanded]
-    assert namespaces == ["nyla/voice/episodic"]
+    assert namespaces == ["casey/voice/episodic"]
 
 
 def test_expansion_returns_empty_list_when_no_match(qdrant: QdrantClient) -> None:
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("casey/*/episodic", "episodic")])
     assert expanded == []
 
 
@@ -225,9 +225,9 @@ def test_no_wildcard_passes_through_unchanged(
     qdrant: QdrantClient, episodic: EpisodicPlane
 ) -> None:
     """A concrete (no-`*`) target is not scrolled — the helper short-circuits."""
-    _seed_episodic(episodic, "nyla/voice/episodic", "x")
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/voice/episodic", "episodic")])
-    assert expanded == [("nyla/voice/episodic", "episodic")]
+    _seed_episodic(episodic, "casey/voice/episodic", "x")
+    expanded = _expand_wildcard_targets(qdrant, [("casey/voice/episodic", "episodic")])
+    assert expanded == [("casey/voice/episodic", "episodic")]
 
 
 def test_expansion_runs_per_plane_in_targets_list(
@@ -236,16 +236,16 @@ def test_expansion_runs_per_plane_in_targets_list(
     """A targets list that names episodic AND curated wildcards should
     enumerate each plane's collection independently. Curated has no rows
     here, so curated leg returns empty; episodic returns its match."""
-    _seed_episodic(episodic, "nyla/voice/episodic", "x")
+    _seed_episodic(episodic, "casey/voice/episodic", "x")
     expanded = _expand_wildcard_targets(
         qdrant,
         [
-            ("nyla/*/episodic", "episodic"),
-            ("nyla/*/curated", "curated"),
+            ("casey/*/episodic", "episodic"),
+            ("casey/*/curated", "curated"),
         ],
     )
     # Only the episodic match survives; curated is empty.
-    assert expanded == [("nyla/voice/episodic", "episodic")]
+    assert expanded == [("casey/voice/episodic", "episodic")]
 
 
 # ---------------------------------------------------------------------------
@@ -260,19 +260,19 @@ def test_retrieve_with_wildcard_returns_results_from_multiple_channels(
     presence wildcard, get hits from both."""
     from tests.api.conftest import mint_token
 
-    _seed_episodic(episodic, "nyla/voice/episodic", "Eric mentioned the dentist on the call")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "Dentist appointment Tuesday afternoon")
+    _seed_episodic(episodic, "casey/voice/episodic", "Admin mentioned the dentist on the call")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "Dentist appointment Tuesday afternoon")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/*/*:r"],
-        presence="nyla/voice",
+        scopes=["casey/*/*:r"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "dentist",
             "mode": "fast",
             "limit": 10,
@@ -281,8 +281,8 @@ def test_retrieve_with_wildcard_returns_results_from_multiple_channels(
     assert r.status_code == 200, r.text
     body = r.json()
     namespaces = {row["namespace"] for row in body["results"]}
-    assert "nyla/voice/episodic" in namespaces, namespaces
-    assert "nyla/openclaw/episodic" in namespaces, namespaces
+    assert "casey/voice/episodic" in namespaces, namespaces
+    assert "casey/openclaw/episodic" in namespaces, namespaces
 
 
 def test_retrieve_with_wildcard_no_matches_returns_empty_results_not_404(
@@ -292,14 +292,14 @@ def test_retrieve_with_wildcard_no_matches_returns_empty_results_not_404(
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/*/*:r"],
-        presence="nyla/voice",
+        scopes=["casey/*/*:r"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "anything",
             "mode": "fast",
             "limit": 5,
@@ -317,19 +317,19 @@ def test_retrieve_with_wildcard_response_rows_carry_origin_namespace(
     row keeps its provenance."""
     from tests.api.conftest import mint_token
 
-    _seed_episodic(episodic, "nyla/voice/episodic", "voice content")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "openclaw content")
+    _seed_episodic(episodic, "casey/voice/episodic", "voice content")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "openclaw content")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/*/*:r"],
-        presence="nyla/voice",
+        scopes=["casey/*/*:r"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "content",
             "mode": "fast",
             "limit": 10,
@@ -350,24 +350,24 @@ def test_retrieve_with_wildcard_response_rows_carry_origin_namespace(
 def test_retrieve_wildcard_403_when_token_lacks_read_on_one_expansion_target(
     client: TestClient, episodic: EpisodicPlane, api_settings: object
 ) -> None:
-    """A token scoped only to nyla/voice cannot wildcard across nyla's
-    channels — `nyla/openclaw/episodic` is in the expansion and the
+    """A token scoped only to casey/voice cannot wildcard across casey's
+    channels — `casey/openclaw/episodic` is in the expansion and the
     strict per-target scope check (ADR 0028) trips."""
     from tests.api.conftest import mint_token
 
-    _seed_episodic(episodic, "nyla/voice/episodic", "voice")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "openclaw")
+    _seed_episodic(episodic, "casey/voice/episodic", "voice")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "openclaw")
 
     voice_only = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/voice/episodic:r"],
-        presence="nyla/voice",
+        scopes=["casey/voice/episodic:r"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {voice_only}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "anything",
             "mode": "fast",
             "limit": 5,
@@ -381,19 +381,19 @@ def test_retrieve_wildcard_200_when_token_has_wildcard_read_scope(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    _seed_episodic(episodic, "nyla/voice/episodic", "voice")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "openclaw")
+    _seed_episodic(episodic, "casey/voice/episodic", "voice")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "openclaw")
 
     wildcard = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/*/*:r"],
-        presence="nyla/voice",
+        scopes=["casey/*/*:r"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {wildcard}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "voice",
             "mode": "fast",
             "limit": 5,
@@ -409,19 +409,19 @@ def test_retrieve_wildcard_first_403_aborts_no_partial_results(
     results are silent failure mode and we explicitly reject them."""
     from tests.api.conftest import mint_token
 
-    _seed_episodic(episodic, "nyla/voice/episodic", "voice")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "openclaw")
+    _seed_episodic(episodic, "casey/voice/episodic", "voice")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "openclaw")
 
     partial = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/voice/episodic:r"],
-        presence="nyla/voice",
+        scopes=["casey/voice/episodic:r"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {partial}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "voice",
             "mode": "fast",
             "limit": 5,
@@ -447,7 +447,7 @@ def test_episodic_capture_with_wildcard_namespace_400s(
         "/v1/episodic",
         headers=auth,
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "content": "should not land",
         },
     )
@@ -467,15 +467,15 @@ def test_thoughts_send_with_wildcard_namespace_rejected(
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/*/*:rw"],
-        presence="nyla/voice",
+        scopes=["casey/*/*:rw"],
+        presence="casey/voice",
     )
     r = client.post(
         "/v1/thoughts/send",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "nyla/*/thought",
-            "from_presence": "nyla/voice",
+            "namespace": "casey/*/thought",
+            "from_presence": "casey/voice",
             "to_presence": "all",
             "content": "should not land",
         },
@@ -507,7 +507,7 @@ def test_sdk_async_retrieve_passes_planes_through() -> None:
             transport=transport,
         ) as c:
             await c.retrieve(
-                namespace="nyla/*/episodic",
+                namespace="casey/*/episodic",
                 query_text="x",
                 planes=["episodic"],
             )
@@ -536,7 +536,7 @@ def test_sdk_sync_retrieve_passes_planes_through() -> None:
         transport=transport,
     ) as c:
         c.retrieve(
-            namespace="nyla/*/episodic",
+            namespace="casey/*/episodic",
             query_text="x",
             planes=["episodic"],
         )
@@ -554,9 +554,9 @@ def test_sdk_sync_retrieve_passes_planes_through() -> None:
 @pytest.mark.parametrize(
     "concrete_ns",
     [
-        "nyla/voice/episodic",
-        "nyla/openclaw/curated",
-        "aoi/voice/concept",
+        "casey/voice/episodic",
+        "casey/openclaw/curated",
+        "sam/voice/concept",
         "system/lifecycle-worker/lifecycle",
     ],
 )
@@ -580,10 +580,10 @@ def test_retrieve_state_filter_default_omitted_preserves_v1_0_behaviour(
     from tests.api.conftest import mint_token
 
     async def _seed() -> None:
-        m = EpisodicMemory(namespace="nyla/voice/episodic", content="matured-row content")
+        m = EpisodicMemory(namespace="casey/voice/episodic", content="matured-row content")
         saved = await episodic.create(m)
         await episodic.transition(
-            namespace="nyla/voice/episodic",
+            namespace="casey/voice/episodic",
             object_id=saved.object_id,
             to_state="matured",
             actor="seed",
@@ -593,12 +593,12 @@ def test_retrieve_state_filter_default_omitted_preserves_v1_0_behaviour(
 
     asyncio.run(_seed())
 
-    token = mint_token(api_settings, scopes=["nyla/*/*:r"], presence="nyla/voice")  # type: ignore[arg-type]
+    token = mint_token(api_settings, scopes=["casey/*/*:r"], presence="casey/voice")  # type: ignore[arg-type]
     # No state_filter in body — should still 200 and return the matured row.
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {token}"},
-        json={"namespace": "nyla/*/episodic", "query_text": "matured", "mode": "fast", "limit": 5},
+        json={"namespace": "casey/*/episodic", "query_text": "matured", "mode": "fast", "limit": 5},
     )
     assert r.status_code == 200, r.text
     rows = r.json()["results"]
@@ -622,16 +622,16 @@ def test_retrieve_with_state_filter_provisional_surfaces_fresh_rows(
     from tests.api.conftest import mint_token
 
     async def _seed_provisional() -> None:
-        await episodic.create(EpisodicMemory(namespace="nyla/voice/episodic", content="fresh"))
+        await episodic.create(EpisodicMemory(namespace="casey/voice/episodic", content="fresh"))
 
     asyncio.run(_seed_provisional())
 
-    token = mint_token(api_settings, scopes=["nyla/*/*:r"], presence="nyla/voice")  # type: ignore[arg-type]
+    token = mint_token(api_settings, scopes=["casey/*/*:r"], presence="casey/voice")  # type: ignore[arg-type]
     r = client.post(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "fresh",
             "mode": "fast",
             "limit": 5,
@@ -651,15 +651,15 @@ def test_every_result_namespace_satisfies_the_pattern(
     matches anything; a literal segment must equal the row's segment."""
     from tests.api.conftest import mint_token
 
-    _seed_episodic(episodic, "nyla/voice/episodic", "alpha")
-    _seed_episodic(episodic, "nyla/openclaw/episodic", "beta")
+    _seed_episodic(episodic, "casey/voice/episodic", "alpha")
+    _seed_episodic(episodic, "casey/openclaw/episodic", "beta")
 
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
-        scopes=["nyla/*/*:r"],
-        presence="nyla/voice",
+        scopes=["casey/*/*:r"],
+        presence="casey/voice",
     )
-    pattern = "nyla/*/episodic"
+    pattern = "casey/*/episodic"
     pattern_segs = pattern.split("/")
     r = client.post(
         "/v1/retrieve",

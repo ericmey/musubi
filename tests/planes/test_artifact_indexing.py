@@ -51,7 +51,7 @@ def plane(qdrant: QdrantClient) -> ArtifactPlane:
     return ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
 
 
-def _artifact(namespace: str = "eric/dev/artifact") -> SourceArtifact:
+def _artifact(namespace: str = "admin/dev/artifact") -> SourceArtifact:
     now = utc_now()
     return SourceArtifact(
         object_id=generate_ksuid(),
@@ -493,7 +493,7 @@ async def test_query_with_degradation_warns_generation_churn_when_budget_saturat
     chunks (even after the one bounded retry) and ``limit`` is under-filled, return the bounded partial
     plus an explicit ``generation_churn`` warning — never silent false completeness. All returned
     chunks are committed."""
-    ns = "eric/dev/artifact"
+    ns = "admin/dev/artifact"
     await _stage_noncommitted(qdrant, ns, generate_ksuid(), 120, "churn target")
     results, warns = await plane.query_with_degradation(
         namespace=ns, query="churn target", limit=10

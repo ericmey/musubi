@@ -18,10 +18,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 _NAMESPACES: tuple[str, ...] = (
-    "eric/claude-code/episodic",
-    "eric/livekit-voice/episodic",
-    "eric/openclaw/episodic",
-    "eric/_shared/episodic",
+    "admin/claude-code/episodic",
+    "admin/livekit-voice/episodic",
+    "admin/openclaw/episodic",
+    "admin/_shared/episodic",
 )
 
 _TOPICS: tuple[str, ...] = (

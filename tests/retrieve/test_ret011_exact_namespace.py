@@ -42,8 +42,8 @@ pytestmark = pytest.mark.asyncio
 # Two presences of ONE identity family ("eric"). Same family → the OLD identity_family filter
 # treated them as interchangeable. Same content below → identical FakeEmbedder vectors, so the
 # namespace filter is the ONLY thing that can keep them apart.
-_PRES_A = "eric/presalpha/episodic"
-_PRES_B = "eric/presbravo/episodic"
+_PRES_A = "admin/presalpha/episodic"
+_PRES_B = "admin/presbravo/episodic"
 _CONTENT = "identical shared marker content that both presences store verbatim"
 
 

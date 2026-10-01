@@ -21,7 +21,7 @@ from musubi.observability.metrics_middleware import install_metrics_middleware
 from musubi.observability.registry import Registry, render_text_format
 from musubi.settings import Settings
 
-NAMESPACE = "eric/claude-code/episodic"
+NAMESPACE = "admin/claude-code/episodic"
 OPERATION = "capture_episodic.bucket=capture"
 KEY = "codex-session-turn-1"
 RAW_CAPTURE = json.dumps(
@@ -31,8 +31,8 @@ RAW_CAPTURE = json.dumps(
 DIGEST = canonical_digest(RAW_CAPTURE, "application/json")
 IDENTITY = (
     "https://auth.example.test",
-    "eric-claude-code",
-    "eric/claude-code",
+    "admin-claude-code",
+    "admin/claude-code",
     "POST",
     OPERATION,
     NAMESPACE,

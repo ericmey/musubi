@@ -126,7 +126,7 @@ def test_error_shape_consistent_across_endpoints(
     r = client.get(
         "/v1/episodic/0000000000000000000000000000",
         headers=auth,
-        params={"namespace": "eric/claude-code/episodic"},
+        params={"namespace": "admin/claude-code/episodic"},
     )
     assert r.status_code == 404
     body = r.json()
@@ -162,7 +162,7 @@ def test_out_of_scope_returns_403(
     namespace returns 403 FORBIDDEN, not 200 / 404."""
     headers = {"Authorization": f"Bearer {out_of_scope_token}"}
     r = client.get(
-        "/v1/episodic/aaaaaaaaaaaaaaaaaaaaaaaaaaa?namespace=eric/claude-code/episodic",
+        "/v1/episodic/aaaaaaaaaaaaaaaaaaaaaaaaaaa?namespace=admin/claude-code/episodic",
         headers=headers,
     )
     assert r.status_code == 403
@@ -293,7 +293,7 @@ def test_cursor_roundtrip_exhausts_list(
     """Bullet 16 — paginating with ``limit=2`` over 5 seeded rows
     eventually returns ``next_cursor: null`` and the union of pages
     equals the full set."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> list[str]:
         ids: list[str] = []
@@ -331,7 +331,7 @@ def test_cursor_opaque_to_client(
     """Bullet 17 — the cursor is opaque: it is a non-empty string that
     does not expose internal pagination state directly (no "offset=N" or
     raw KSUID at the start). Clients treat it as a token."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> None:
         for i in range(3):
@@ -460,7 +460,7 @@ def test_get_artifact_404_when_missing(client: TestClient, auth: dict[str, str])
     r = client.get(
         "/v1/artifacts/0000000000000000000000000000",
         headers=auth,
-        params={"namespace": "eric/claude-code/artifact"},
+        params={"namespace": "admin/claude-code/artifact"},
     )
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "NOT_FOUND"
@@ -470,7 +470,7 @@ def test_get_artifact_chunks_404_when_missing(client: TestClient, auth: dict[str
     r = client.get(
         "/v1/artifacts/0000000000000000000000000000/chunks",
         headers=auth,
-        params={"namespace": "eric/claude-code/artifact"},
+        params={"namespace": "admin/claude-code/artifact"},
     )
     assert r.status_code == 404
 
@@ -479,7 +479,7 @@ def test_get_artifact_blob_404_when_missing(client: TestClient, auth: dict[str, 
     r = client.get(
         "/v1/artifacts/0000000000000000000000000000/blob",
         headers=auth,
-        params={"namespace": "eric/claude-code/artifact"},
+        params={"namespace": "admin/claude-code/artifact"},
     )
     assert r.status_code == 404
 
@@ -488,7 +488,7 @@ def test_list_artifacts_returns_empty_page(client: TestClient, auth: dict[str, s
     r = client.get(
         "/v1/artifacts",
         headers=auth,
-        params={"namespace": "eric/claude-code/artifact"},
+        params={"namespace": "admin/claude-code/artifact"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -500,7 +500,7 @@ def test_get_concept_404_when_missing(client: TestClient, auth: dict[str, str]) 
     r = client.get(
         "/v1/concepts/0000000000000000000000000000",
         headers=auth,
-        params={"namespace": "eric/claude-code/concept"},
+        params={"namespace": "admin/claude-code/concept"},
     )
     assert r.status_code == 404
 
@@ -509,7 +509,7 @@ def test_list_concepts_returns_empty_page(client: TestClient, auth: dict[str, st
     r = client.get(
         "/v1/concepts",
         headers=auth,
-        params={"namespace": "eric/claude-code/concept"},
+        params={"namespace": "admin/claude-code/concept"},
     )
     assert r.status_code == 200
     assert r.json()["items"] == []
@@ -519,7 +519,7 @@ def test_list_curated_returns_empty_page(client: TestClient, auth: dict[str, str
     r = client.get(
         "/v1/curated",
         headers=auth,
-        params={"namespace": "eric/claude-code/curated"},
+        params={"namespace": "admin/claude-code/curated"},
     )
     assert r.status_code == 200
     assert r.json()["items"] == []
@@ -532,7 +532,7 @@ def test_lifecycle_events_with_namespace_returns_items_field(
     r = client.get(
         "/v1/lifecycle/events",
         headers=headers,
-        params={"namespace": "eric/claude-code/episodic"},
+        params={"namespace": "admin/claude-code/episodic"},
     )
     assert r.status_code == 200
     assert "items" in r.json()
@@ -551,7 +551,7 @@ def test_lifecycle_events_for_object_returns_items_field(
 
 
 def test_namespace_stats_returns_per_plane_counts(client: TestClient, auth: dict[str, str]) -> None:
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     r = client.get(
         f"/v1/namespaces/{ns}/stats",
         headers=auth,
@@ -575,14 +575,14 @@ def test_thought_history_endpoint_responds(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/thought"
+    namespace = "admin/claude-code/thought"
     token = mint_token(api_settings, scopes=[f"{namespace}:r"])  # type: ignore[arg-type]
     r = client.post(
         "/v1/thoughts/history",
         headers={"Authorization": f"Bearer {token}"},
         json={
             "namespace": namespace,
-            "presence": "eric/claude-code",
+            "presence": "admin/claude-code",
             "query_text": "what happened",
         },
     )
@@ -608,7 +608,7 @@ def test_invalid_cursor_returns_empty_or_400(client: TestClient, auth: dict[str,
     r = client.get(
         "/v1/episodic",
         headers=auth,
-        params={"namespace": "eric/claude-code/episodic", "cursor": "not-a-cursor"},
+        params={"namespace": "admin/claude-code/episodic", "cursor": "not-a-cursor"},
     )
     # Either treated as no cursor (200) or rejected (400). Both are acceptable.
     assert r.status_code in (200, 400)
@@ -655,7 +655,7 @@ def test_get_episodic_by_id_routes_to_plane(
     auth: dict[str, str],
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="route-target"))
@@ -679,7 +679,7 @@ def test_get_curated_by_id_routes_to_plane(
 
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
         scopes=[f"{namespace}:r"],
@@ -693,7 +693,7 @@ def test_get_curated_by_id_routes_to_plane(
                 namespace=namespace,
                 title="Test Curated",
                 content=body,
-                vault_path="curated/eric/test.md",
+                vault_path="curated/admin/test.md",
                 body_hash=_h.sha256(body.encode()).hexdigest(),
             )
         )
@@ -714,7 +714,7 @@ def test_list_namespaces_returns_scope(
     body = r.json()
     assert "items" in body
     # The token's scopes resolve to a list of namespaces.
-    assert any("eric/claude-code/" in str(item) for item in body["items"])
+    assert any("admin/claude-code/" in str(item) for item in body["items"])
 
 
 def test_lifecycle_events_endpoint_responds(
@@ -735,7 +735,7 @@ def test_contradictions_endpoint_responds(
     # SEC-004: omitting the namespace is a cross-tenant fan-out that now requires operator
     # scope. An ordinary token reads its OWN namespace's contradictions (the happy path).
     r = client.get(
-        "/v1/contradictions", params={"namespace": "eric/claude-code/concept"}, headers=auth
+        "/v1/contradictions", params={"namespace": "admin/claude-code/concept"}, headers=auth
     )
     assert r.status_code == 200
     assert "items" in r.json()
@@ -746,7 +746,7 @@ def test_retrieve_endpoint_routes_to_plane(
     auth: dict[str, str],
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -807,7 +807,7 @@ def test_retrieve_http_passes_configured_fast_deadlines(
     response = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": "eric/claude-code/episodic", "query_text": "gpu", "mode": "fast"},
+        json={"namespace": "admin/claude-code/episodic", "query_text": "gpu", "mode": "fast"},
     )
     assert response.status_code == 200
     assert observed == {"encoding": 0.75, "search": 0.35, "whole": 1.2}
@@ -842,19 +842,19 @@ def test_retrieve_fast_returns_real_scores_not_hardcoded_one(
     + recency + importance + provenance + reinforcement; scores must
     vary across hits (and at least one must differ from 1.0) or the
     orchestration wire-up has regressed to the stub."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     _seed_episodic_batch(
         episodic,
         namespace,
         [
             "Remember the dentist appointment Tuesday afternoon.",
-            "Eric prefers coffee black, no sugar.",
-            "Aoi mentioned the deploy finished cleanly.",
+            "Admin prefers coffee black, no sugar.",
+            "Sam mentioned the deploy finished cleanly.",
             "Qdrant holds the vector embeddings behind named collections.",
             "The LiveKit stack routes SIP into voice tools.",
             "TEI serves BGE-M3 dense and SPLADE sparse embeddings.",
             "Promotion moves a concept into the curated plane.",
-            "Kong fronts musubi.mey.house for external traffic.",
+            "A gateway fronts the service for external traffic.",
         ],
     )
 
@@ -903,7 +903,7 @@ def test_retrieve_deep_mode_invokes_reranker(
     spy = _SpyReranker()
     app_factory.dependency_overrides[get_reranker] = lambda: spy  # type: ignore[attr-defined]
 
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     # Rerank is only invoked when hybrid returns >5 candidates (see
     # musubi.retrieve.rerank.rerank's short-circuit). Seed enough
     # distinct rows that hybrid returns more than that bar.
@@ -936,11 +936,11 @@ def test_retrieve_result_carries_score_components_in_extra(
     agents debugging recall) need the component breakdown. The
     response extra dict must carry score_components keyed by the
     component names the scoring model exports."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     _seed_episodic_batch(
         episodic,
         namespace,
-        ["Remember the dentist appointment Tuesday.", "Eric prefers coffee black."],
+        ["Remember the dentist appointment Tuesday.", "Admin prefers coffee black."],
     )
 
     r = client.post(
@@ -1000,7 +1000,7 @@ def test_retrieve_row_surfaces_top_level_title_for_curated(
 
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
         scopes=[f"{namespace}:rw"],
@@ -1014,7 +1014,7 @@ def test_retrieve_row_surfaces_top_level_title_for_curated(
                 namespace=namespace,
                 title="LiveKit Restart Runbook",
                 content=body,
-                vault_path="curated/eric/livekit-restart.md",
+                vault_path="curated/admin/livekit-restart.md",
                 body_hash=_h.sha256(body.encode()).hexdigest(),
             )
         )
@@ -1052,7 +1052,7 @@ def test_retrieve_row_title_is_none_for_episodic(
     """Episodic memories have no stable title field, so the
     ``title`` on a retrieved episodic row is ``None``. Optional
     top-level field; clients render a fallback from content."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     _seed_episodic_batch(
         episodic,
         namespace,
@@ -1098,18 +1098,18 @@ def test_retrieve_two_segment_namespace_fans_out_per_plane(
 
     _seed_episodic_batch(
         episodic,
-        "eric/claude-code/episodic",
-        ["Remember the dentist appointment Tuesday.", "Eric prefers coffee black."],
+        "admin/claude-code/episodic",
+        ["Remember the dentist appointment Tuesday.", "Admin prefers coffee black."],
     )
 
     async def _seed_curated() -> None:
         body_text = "Curated doc about dentist scheduling."
         await curated.create(
             CuratedKnowledge(
-                namespace="eric/claude-code/curated",
+                namespace="admin/claude-code/curated",
                 title="Dentist notes",
                 content=body_text,
-                vault_path="curated/eric/dentist.md",
+                vault_path="curated/admin/dentist.md",
                 body_hash=_h.sha256(body_text.encode()).hexdigest(),
             )
         )
@@ -1120,7 +1120,7 @@ def test_retrieve_two_segment_namespace_fans_out_per_plane(
         "/v1/retrieve",
         headers=auth,
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "planes": ["episodic", "curated"],
             "query_text": "dentist",
             "mode": "fast",
@@ -1155,7 +1155,7 @@ def test_retrieve_two_segment_strict_scope_403s_when_any_plane_is_out_of_scope(
     scoped = mint_token(
         api_settings,  # type: ignore[arg-type]
         scopes=[
-            "eric/claude-code/episodic:r",
+            "admin/claude-code/episodic:r",
             # no curated/concept — should trip strict check.
         ],
     )
@@ -1163,7 +1163,7 @@ def test_retrieve_two_segment_strict_scope_403s_when_any_plane_is_out_of_scope(
         "/v1/retrieve",
         headers={"Authorization": f"Bearer {scoped}"},
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "planes": ["episodic", "curated"],
             "query_text": "anything",
             "mode": "fast",
@@ -1172,7 +1172,7 @@ def test_retrieve_two_segment_strict_scope_403s_when_any_plane_is_out_of_scope(
     )
     assert r.status_code == 403, r.text
     detail = r.json()["error"]["detail"]
-    assert "curated" in detail or "eric/claude-code/curated" in detail
+    assert "curated" in detail or "admin/claude-code/curated" in detail
 
 
 def test_retrieve_three_segment_concrete_ignores_planes_list(
@@ -1190,7 +1190,7 @@ def test_retrieve_three_segment_concrete_ignores_planes_list(
         "/v1/retrieve",
         headers=auth,
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["curated", "concept"],
             "query_text": "anything",
             "mode": "fast",
@@ -1215,7 +1215,7 @@ def test_retrieve_two_segment_unknown_plane_is_400(
         "/v1/retrieve",
         headers=auth,
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "planes": ["episodic", "misspelled"],
             "query_text": "x",
             "mode": "fast",
@@ -1233,7 +1233,7 @@ def test_thoughts_check_endpoint_responds(
     for a presence). Included on the read surface per the slice scope."""
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/thought"
+    namespace = "admin/claude-code/thought"
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
         scopes=[f"{namespace}:r"],
@@ -1241,7 +1241,7 @@ def test_thoughts_check_endpoint_responds(
     r = client.post(
         "/v1/thoughts/check",
         headers={"Authorization": f"Bearer {token}"},
-        json={"namespace": namespace, "presence": "eric/claude-code"},
+        json={"namespace": namespace, "presence": "admin/claude-code"},
     )
     assert r.status_code == 200
     assert "items" in r.json()

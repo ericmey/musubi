@@ -225,23 +225,23 @@ def _mint_operator_token(jwt_signing_key: str) -> str:
 
     now = datetime.now(UTC)
     namespaces = [
-        "eric/integration-test/episodic",
-        "eric/integration-test/curated",
-        "eric/integration-test/concept",
-        "eric/integration-test/artifact",
-        "eric/integration-test/thought",
-        "eric/_shared/episodic",
+        "admin/integration-test/episodic",
+        "admin/integration-test/curated",
+        "admin/integration-test/concept",
+        "admin/integration-test/artifact",
+        "admin/integration-test/thought",
+        "admin/_shared/episodic",
     ]
     scopes = ["operator", *(f"{ns}:rw" for ns in namespaces)]
     payload = {
         "iss": "https://auth.test.local",
-        "sub": "eric/integration-test",
+        "sub": "admin/integration-test",
         "aud": "musubi",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=2)).timestamp()),
         "jti": "integration-test-token",
         "scope": " ".join(scopes),
-        "presence": "eric/integration-test",
+        "presence": "admin/integration-test",
     }
     return jwt.encode(payload, jwt_signing_key, algorithm="HS256")
 

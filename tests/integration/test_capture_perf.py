@@ -43,7 +43,7 @@ async def test_batch_capture_100_items_under_1s(api_client: Any) -> None:
     """Bullet 22 — single-batch capture of 100 items completes
     end-to-end (one TEI batch embed + one Qdrant upsert + the API
     routing overhead) under the spec's 1s budget."""
-    namespace = "eric/integration-test/episodic"
+    namespace = "admin/integration-test/episodic"
     items = [
         f"batch-perf-{uuid.uuid4().hex[:6]}-{i}-payload-some-distinct-content" for i in range(100)
     ]
@@ -65,7 +65,7 @@ async def test_batch_capture_100_items_completes_without_strict_budget(
     the path executes correctly + the batch flushes its single POST,
     without asserting the spec's 1s wall-clock. Strict budget lives in
     the test above."""
-    namespace = "eric/integration-test/episodic"
+    namespace = "admin/integration-test/episodic"
     items = [f"batch-surface-{uuid.uuid4().hex[:6]}-{i}-payload" for i in range(100)]
 
     async with api_client.episodic.batch(namespace=namespace) as batch:

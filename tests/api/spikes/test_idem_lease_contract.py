@@ -113,7 +113,7 @@ class _LeaseCache:
             del self._leases[k]
 
 
-IDENT = ("idem-key-1", "bodyhash-abc", "POST /v1/episodic", "eric/claude-code")
+IDENT = ("idem-key-1", "bodyhash-abc", "POST /v1/episodic", "admin/claude-code")
 _D = bytes(32)  # a fixed SHA-256-length digest (mandatory on acquire)
 _R = CompletedResponse(status=202, raw_headers=(), body=b"x")
 

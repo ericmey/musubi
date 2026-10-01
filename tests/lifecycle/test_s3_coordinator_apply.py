@@ -42,7 +42,7 @@ from musubi.store.names import collection_for_plane
 from musubi.types.common import Err, Ok
 from musubi.types.episodic import EpisodicMemory
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 
 
 class _Seed:

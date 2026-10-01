@@ -72,7 +72,7 @@ def _make_artifact(chunker: str = "token-sliding-v1") -> SourceArtifact:
     now = utc_now()
     return SourceArtifact(
         object_id=generate_ksuid(),
-        namespace="eric/dev/artifact",
+        namespace="admin/dev/artifact",
         title="Test Artifact",
         filename="test.txt",
         sha256="0" * 64,
@@ -618,7 +618,7 @@ async def test_create_does_not_fail_with_tei_empty_input_rejection(qdrant: Qdran
 
     plane = ArtifactPlane(client=qdrant, embedder=RejectEmptyEmbedder())
     art = SourceArtifact(
-        namespace="eric/claude-code/artifact",
+        namespace="admin/claude-code/artifact",
         title="t",
         filename="f",
         sha256=hashlib.sha256(b"raw").hexdigest(),

@@ -23,7 +23,7 @@ def test_vault004_fidelity_round_trip() -> None:
 
     yaml_text = f"""---
 object_id: {fid}
-namespace: aoi/knowledge/curated
+namespace: sam/knowledge/curated
 schema_version: 4
 title: "The Binding Contract"
 summary: "Full fidelity proof"
@@ -68,7 +68,7 @@ Body text."""
     )
 
     assert memory.object_id == fid
-    assert memory.namespace == "aoi/knowledge/curated"
+    assert memory.namespace == "sam/knowledge/curated"
     assert memory.schema_version == 4
     assert memory.title == "The Binding Contract"
     assert memory.summary == "Full fidelity proof"
@@ -102,7 +102,7 @@ def test_vault004_visible_failure_on_unsupported_fields() -> None:
     fid = generate_ksuid()
     yaml_text = f"""---
 object_id: {fid}
-namespace: aoi/knowledge/curated
+namespace: sam/knowledge/curated
 title: "Unsupported"
 created: 2026-07-01T00:00:00Z
 updated: 2026-07-15T00:00:00Z
@@ -121,7 +121,7 @@ def test_vault004_visible_failure_on_unknown_extra_fields() -> None:
     fid = generate_ksuid()
     yaml_text = f"""---
 object_id: {fid}
-namespace: aoi/knowledge/curated
+namespace: sam/knowledge/curated
 title: "Unsupported Extra"
 created: 2026-07-01T00:00:00Z
 updated: 2026-07-15T00:00:00Z
@@ -168,7 +168,7 @@ async def test_vault004_operational_reconciler_call(tmp_path: Path) -> None:
     md_path = tmp_path / "test.md"
     yaml_text = f"""---
 object_id: {fid}
-namespace: aoi/knowledge/curated
+namespace: sam/knowledge/curated
 title: "Op Test"
 created: 2026-07-01T00:00:00Z
 updated: 2026-07-15T00:00:00Z
@@ -214,7 +214,7 @@ async def test_vault004_operational_watcher_call(tmp_path: Path) -> None:
     md_path = tmp_path / "test.md"
     yaml_text = f"""---
 object_id: {fid}
-namespace: aoi/knowledge/curated
+namespace: sam/knowledge/curated
 title: "Op Watcher"
 created: 2026-07-01T00:00:00Z
 updated: 2026-07-15T00:00:00Z

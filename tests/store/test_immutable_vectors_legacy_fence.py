@@ -26,7 +26,7 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
 _COLL = collection_for_plane("episodic")
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 _OID = "3JbLEGACYFENCEOBJECTID0000"
 
 

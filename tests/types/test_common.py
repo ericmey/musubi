@@ -23,15 +23,15 @@ class TestFamilyOf:
     @pytest.mark.parametrize(
         ("ns", "expected"),
         [
-            ("aoi/command-chair/episodic", "aoi"),
-            ("aoi/voice/episodic", "aoi"),
-            ("aoi/shared/episodic", "aoi"),
-            ("nyla/voice/episodic", "nyla"),
-            ("yua/codex/episodic", "yua"),
-            ("ericmey/yua/episodic", "ericmey"),
+            ("sam/command-chair/episodic", "sam"),
+            ("sam/voice/episodic", "sam"),
+            ("sam/shared/episodic", "sam"),
+            ("casey/voice/episodic", "casey"),
+            ("alex/codex/episodic", "alex"),
+            ("ericmey/alex/episodic", "ericmey"),
             ("a/b/concept", "a"),
             # also works on non-plane forms — the helper just splits at /
-            ("aoi/anything", "aoi"),
+            ("sam/anything", "sam"),
         ],
     )
     def test_returns_first_path_component(self, ns: str, expected: str) -> None:
@@ -50,12 +50,12 @@ class TestNamespaceValidator:
     @pytest.mark.parametrize(
         "ns",
         [
-            "eric/claude-code/episodic",
+            "admin/claude-code/episodic",
             "tenant1/presence-alpha/curated",
             "a/b/concept",
-            "eric/yua_01/thought",
-            "eric/uploads/artifact",
-            "eric/sys/lifecycle",
+            "admin/yua_01/thought",
+            "admin/uploads/artifact",
+            "admin/sys/lifecycle",
         ],
     )
     def test_valid_namespaces_accepted(self, ns: str) -> None:
@@ -64,13 +64,13 @@ class TestNamespaceValidator:
     @pytest.mark.parametrize(
         "ns",
         [
-            "Eric/claude/episodic",  # uppercase tenant
-            "eric/claude/foo",  # unknown plane
-            "eric/claude",  # missing plane
-            "/eric/claude/episodic",  # leading slash
-            "eric//episodic",  # empty presence
-            "eric/claude/episodic/extra",  # too many segments
-            "eric/claude code/episodic",  # space in presence
+            "Admin/claude/episodic",  # uppercase tenant
+            "admin/claude/foo",  # unknown plane
+            "admin/claude",  # missing plane
+            "/admin/claude/episodic",  # leading slash
+            "admin//episodic",  # empty presence
+            "admin/claude/episodic/extra",  # too many segments
+            "admin/claude code/episodic",  # space in presence
         ],
     )
     def test_malformed_namespaces_rejected(self, ns: str) -> None:

@@ -685,7 +685,7 @@ def _isolated_eval_namespace(client: QdrantClient, collection: str, *, label: st
     """A run-unique eval namespace with an empty-at-entry guard and teardown-on-exit (pass OR fail).
 
     RET-004 (Yua Option C, diagnostic run 29460335871): the BEIR gate previously seeded a FIXED
-    namespace ``eric/beir-eval/episodic`` with NO teardown, so rows accumulated across runs and made
+    namespace ``admin/beir-eval/episodic`` with NO teardown, so rows accumulated across runs and made
     the hybrid-vs-dense delta non-deterministic (the frozen corpus scored +0.0019 in the polluted
     namespace but a clean +0.0250 in isolation). This gives each run its OWN ``evalrun-`` namespace,
     asserts it starts EMPTY (leaked pollution can never carry over), and tears it down in a ``finally``

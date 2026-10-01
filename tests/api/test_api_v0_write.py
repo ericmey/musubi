@@ -77,7 +77,7 @@ def test_capture_happy_returns_object_id(
     """Spec contract-tests § Capture: POST /v1/episodic returns 202 with
     the new object_id; the row is fetchable by GET."""
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     body = {
         "namespace": namespace,
         "content": "test-content-unique-write-abc123",
@@ -105,7 +105,7 @@ def test_capture_dedup_returns_same_id(
     """contract-tests § Capture: a second POST of identical content
     returns the same object_id (plane-level dedup)."""
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     body = {
         "namespace": namespace,
         "content": "dedup-target-write-xyz",
@@ -127,7 +127,7 @@ def test_capture_adds_default_typed_episode_tags(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     r = client.post(
         "/v1/episodic",
         headers=headers,
@@ -151,7 +151,7 @@ def test_capture_preserves_explicit_typed_tags(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     tags = ["src:direct-test", "kind:project-stance", "staleness:durable"]
     r = client.post(
         "/v1/episodic",
@@ -175,7 +175,7 @@ def test_capture_adds_missing_staleness_when_kind_supplied(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     r = client.post(
         "/v1/episodic",
         headers=headers,
@@ -198,7 +198,7 @@ def test_capture_adds_missing_kind_when_staleness_supplied(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     r = client.post(
         "/v1/episodic",
         headers=headers,
@@ -221,7 +221,7 @@ def test_capture_does_not_double_add_default_typed_tags(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     r = client.post(
         "/v1/episodic",
         headers=headers,
@@ -243,7 +243,7 @@ def test_capture_rejects_unknown_typed_tags(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     r = client.post(
         "/v1/episodic",
         headers=headers,
@@ -263,7 +263,7 @@ def test_capture_rejects_out_of_scope_namespace(
 ) -> None:
     headers = {"Authorization": f"Bearer {out_of_scope_token}"}
     body = {
-        "namespace": "eric/claude-code/episodic",
+        "namespace": "admin/claude-code/episodic",
         "content": "should-not-write",
     }
     r = client.post("/v1/episodic", headers=headers, json=body)
@@ -274,7 +274,7 @@ def test_capture_rejects_out_of_scope_namespace(
 def test_capture_missing_token_returns_401(client: TestClient) -> None:
     r = client.post(
         "/v1/episodic",
-        json={"namespace": "eric/claude-code/episodic", "content": "x"},
+        json={"namespace": "admin/claude-code/episodic", "content": "x"},
     )
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "UNAUTHORIZED"
@@ -282,7 +282,7 @@ def test_capture_missing_token_returns_401(client: TestClient) -> None:
 
 def test_batch_capture_writes_each_row(client: TestClient, valid_token: str) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     body = {
         "namespace": namespace,
         "items": [{"content": f"batch-row-{i}-uniq", "importance": 5} for i in range(3)],
@@ -300,7 +300,7 @@ def test_batch_capture_adds_default_typed_episode_tags_per_item(
     valid_token: str,
 ) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     body = {
         "namespace": namespace,
         "items": [
@@ -348,7 +348,7 @@ def test_capture_created_at_override_requires_operator(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "content": "historical-row",
             "created_at": "2024-06-01T12:00:00Z",
         },
@@ -369,7 +369,7 @@ def test_capture_created_at_override_with_operator_round_trips(
     timestamps when ingesting historical data."""
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
         scopes=["operator", f"{namespace}:rw"],
@@ -410,14 +410,14 @@ def test_capture_without_created_at_is_stamped_now(
     r = client.post(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
-        json={"namespace": "eric/claude-code/episodic", "content": "no-override"},
+        json={"namespace": "admin/claude-code/episodic", "content": "no-override"},
     )
     assert r.status_code == 202
     oid = r.json()["object_id"]
     got = client.get(
         f"/v1/episodic/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
-        params={"namespace": "eric/claude-code/episodic"},
+        params={"namespace": "admin/claude-code/episodic"},
     )
     assert got.status_code == 200
     stamp = datetime.fromisoformat(got.json()["created_at"].replace("Z", "+00:00"))
@@ -435,7 +435,7 @@ def test_batch_capture_created_at_override_requires_operator(
         "/v1/episodic/batch",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "items": [
                 {"content": "row-a"},
                 {"content": "row-b", "created_at": "2024-06-01T12:00:00Z"},
@@ -455,7 +455,7 @@ def test_batch_capture_created_at_override_with_operator_applies_per_item(
     source rows don't share a single timestamp."""
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     token = mint_token(
         api_settings,  # type: ignore[arg-type]
         scopes=["operator", f"{namespace}:rw"],
@@ -499,7 +499,7 @@ def test_patch_episodic_updates_tags_and_importance(
     valid_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -528,7 +528,7 @@ def test_patch_rejects_state_field_changes(
     """PATCH is for non-state metadata only; ``state`` updates must go
     through POST /v1/lifecycle/transition. Attempting to PATCH a state
     field is a 400 BAD_REQUEST."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -557,7 +557,7 @@ def test_delete_episodic_soft_archives(
     valid_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="bye"))
@@ -580,7 +580,7 @@ def test_delete_episodic_hard_requires_operator(
     valid_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="hardbye"))
@@ -669,7 +669,7 @@ def test_corrupted_row_can_still_be_hard_deleted(
     bare ``operator_token`` fixture carries only the latter and is refused at the
     door — which is why the real failure in production was a 500, not a 403.
     """
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     oid = _brick(episodic, qdrant, namespace, "bricked-hard")
     token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])
 
@@ -691,7 +691,7 @@ def test_corrupted_row_can_still_be_soft_archived(
 ) -> None:
     """Soft-delete carried the same deserializing guard — so a bad row could not
     even be archived out of the way."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     oid = _brick(episodic, qdrant, namespace, "bricked-soft")
 
     r = client.delete(
@@ -726,7 +726,7 @@ def test_patch_rejects_unknown_fields_that_would_brick_the_row(
     refreshing `get()` raised — so the caller saw a 500 and believed the write had
     failed, while the row was already destroyed.
     """
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="patchme"))
@@ -770,7 +770,7 @@ def test_patch_accepts_a_retract_shaped_body(
     adversarial review (PR #398, 2026-07-11). Hence this test — it asserts the
     CONTRACT, from the caller's side.
     """
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -808,7 +808,7 @@ def test_lifecycle_transition_routes_to_canonical_primitive(
     operator_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -840,7 +840,7 @@ def test_lifecycle_transition_illegal_returns_400(
     operator_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="illegal-target"))
@@ -891,14 +891,14 @@ def test_post_curated_writes_through_plane(
 
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     body_text = "Curated body content."
     body = {
         "namespace": namespace,
         "title": "Test Curated POST",
         "content": body_text,
-        "vault_path": "curated/eric/test-post.md",
+        "vault_path": "curated/admin/test-post.md",
         "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
         "topics": ["test"],
     }
@@ -925,7 +925,7 @@ def test_concept_reinforce_bumps_count(
     from musubi.types.concept import SynthesizedConcept
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/concept"
+    namespace = "admin/claude-code/concept"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
 
     async def _seed() -> str:
@@ -963,7 +963,7 @@ def test_multipart_upload_for_artifacts(
     blob file + metadata fields. Returns the new artifact's object_id."""
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/artifact"
+    namespace = "admin/claude-code/artifact"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     file_bytes = b"<html>contract</html>"
     r = client.post(
@@ -993,7 +993,7 @@ def test_artifact_archive_soft_deletes(
     from musubi.types.artifact import SourceArtifact
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/artifact"
+    namespace = "admin/claude-code/artifact"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
 
     async def _seed() -> str:
@@ -1032,12 +1032,12 @@ def test_thought_send_writes_through_plane(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/thought"
+    namespace = "admin/claude-code/thought"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     body = {
         "namespace": namespace,
-        "from_presence": "eric/claude-code",
-        "to_presence": "eric/livekit",
+        "from_presence": "admin/claude-code",
+        "to_presence": "admin/livekit",
         "content": "hello from contract test",
         "channel": "default",
         "importance": 5,
@@ -1068,7 +1068,7 @@ def test_idempotency_key_roundtrip(
         "Idempotency-Key": "idem-test-write-001",
     }
     body = {
-        "namespace": "eric/claude-code/episodic",
+        "namespace": "admin/claude-code/episodic",
         "content": "idempotent-write-fixture-unique",
     }
     r1 = client.post("/v1/episodic", headers=headers, json=body)
@@ -1110,7 +1110,7 @@ def test_idempotency_key_expires_after_ttl(app_factory: object, valid_token: str
         "Authorization": f"Bearer {valid_token}",
         "Idempotency-Key": "idem-test-write-ttl",
     }
-    body = {"namespace": "eric/claude-code/episodic", "content": "idempotent-ttl-fixture-unique"}
+    body = {"namespace": "admin/claude-code/episodic", "content": "idempotent-ttl-fixture-unique"}
 
     with _TC(app_factory) as client:  # type: ignore[arg-type]
         first = client.post("/v1/episodic", headers=headers, json=body)
@@ -1153,7 +1153,7 @@ def test_rate_limit_enforces_token_bucket(
             "/v1/episodic",
             headers=headers,
             json={
-                "namespace": "eric/claude-code/episodic",
+                "namespace": "admin/claude-code/episodic",
                 "content": f"burst-{i}",
             },
         )
@@ -1179,7 +1179,7 @@ def test_rate_limit_operator_scope_10x_limit(
         "/v1/episodic",
         headers=headers,
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "content": "operator-burst-probe",
         },
     )
@@ -1207,7 +1207,7 @@ def test_ndjson_retrieve_stream_yields_per_result(
     """Bullet 15 — POST /v1/retrieve/stream streams one JSON object per
     line (newline-delimited JSON), one per result, suitable for
     early-rendering on the client side."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> None:
         for i in range(3):
@@ -1288,7 +1288,7 @@ def test_capture_validation_error_returns_422(
     r = client.post(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
-        json={"namespace": "eric/claude-code/episodic"},  # content missing
+        json={"namespace": "admin/claude-code/episodic"},  # content missing
     )
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "BAD_REQUEST"
@@ -1345,7 +1345,7 @@ def test_idempotency_key_different_body_returns_conflict(
         "Authorization": f"Bearer {valid_token}",
         "Idempotency-Key": "idem-conflict-test",
     }
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     r1 = client.post(
         "/v1/episodic",
         headers=headers,
@@ -1367,7 +1367,7 @@ def test_thoughts_read_marks_thought_read(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/thought"
+    namespace = "admin/claude-code/thought"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {token}"}
     sent = client.post(
@@ -1375,8 +1375,8 @@ def test_thoughts_read_marks_thought_read(
         headers=headers,
         json={
             "namespace": namespace,
-            "from_presence": "eric/claude-code",
-            "to_presence": "eric/livekit",
+            "from_presence": "admin/claude-code",
+            "to_presence": "admin/livekit",
             "content": "mark-me-read",
         },
     )
@@ -1387,7 +1387,7 @@ def test_thoughts_read_marks_thought_read(
         json={
             "namespace": namespace,
             "ids": [oid],
-            "reader": "eric/livekit",
+            "reader": "admin/livekit",
         },
     )
     assert r.status_code == 200
@@ -1400,7 +1400,7 @@ def test_patch_curated_returns_404_when_missing(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     r = client.patch(
         "/v1/curated/0000000000000000000000000000",
@@ -1422,7 +1422,7 @@ def test_patch_curated_updates_and_delete_archives(
 
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {token}"}
     body_text = "Patch round trip body."
@@ -1430,7 +1430,7 @@ def test_patch_curated_updates_and_delete_archives(
         "namespace": namespace,
         "title": "Patch+Delete target",
         "content": body_text,
-        "vault_path": "curated/eric/patch-delete.md",
+        "vault_path": "curated/admin/patch-delete.md",
         "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
     }
     r = client.post("/v1/curated", headers=headers, json=create_body)
@@ -1471,7 +1471,7 @@ def test_delete_curated_404_when_missing(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     r = client.delete(
         "/v1/curated/0000000000000000000000000000",
@@ -1488,7 +1488,7 @@ def test_artifact_purge_requires_operator(
     r = client.post(
         "/v1/artifacts/0000000000000000000000000000/purge",
         headers={"Authorization": f"Bearer {valid_token}"},
-        params={"namespace": "eric/claude-code/artifact"},
+        params={"namespace": "admin/claude-code/artifact"},
     )
     assert r.status_code == 403
 
@@ -1506,7 +1506,7 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
     from musubi.planes.artifact.indexer import ArtifactIndexer
     from tests.api.conftest import mint_token
 
-    namespace = "eric/ops/artifact"
+    namespace = "admin/ops/artifact"
     rw_token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
 
     # Register the indexer so reconcile_once works
@@ -1570,7 +1570,7 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
         assert chunk.payload.get("owner_token") == committed_owner
 
     # 2.5 Wrong namespace purge (discriminator)
-    wrong_ns = "eric/wrong/artifact"
+    wrong_ns = "admin/wrong/artifact"
     wrong_token = mint_token(api_settings, scopes=["operator", f"{wrong_ns}:rw"])  # type: ignore[arg-type]
     r_wrong_purge = client.post(
         f"/v1/artifacts/{obj_id}/purge",
@@ -1665,7 +1665,7 @@ def test_rate_limit_resets_per_minute_window(
     r = client.post(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
-        json={"namespace": "eric/claude-code/episodic", "content": "rate-window-probe"},
+        json={"namespace": "admin/claude-code/episodic", "content": "rate-window-probe"},
     )
     assert "x-ratelimit-remaining" in {k.lower() for k in r.headers}
     remaining = int(r.headers["x-ratelimit-remaining"])
@@ -1702,7 +1702,7 @@ def _seed_curated(client: TestClient, headers: dict[str, str], namespace: str, s
             "namespace": namespace,
             "title": f"curated {slug}",
             "content": body_text,
-            "vault_path": f"curated/eric/{slug}.md",
+            "vault_path": f"curated/admin/{slug}.md",
             "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
         },
     )
@@ -1730,7 +1730,7 @@ def test_curated_patch_rejects_unknown_fields(
 ) -> None:
     """A five-name denylist guarded the shared truth plane. Everything it had not
     imagined became permanent, unreadable, unremovable false ground."""
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
     oid = _seed_curated(client, headers, namespace, "reject-unknown")
 
@@ -1755,7 +1755,7 @@ def test_curated_corrupted_row_can_still_be_archived(
 ) -> None:
     """`delete_curated` guarded with a deserializing `get()` it never used — so a
     corrupted curated row could not even be archived out of the way."""
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
     oid = _seed_curated(client, headers, namespace, "archive-bricked")
     _brick_curated(qdrant, oid)
@@ -1797,7 +1797,7 @@ def test_patch_empty_content_is_refused_and_row_unharmed(
     The allowlist stops unknown KEYS. It does nothing about invalid VALUES of known keys.
     Caught by Yua, rev2 review.
     """
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
@@ -1835,7 +1835,7 @@ def test_hard_delete_removes_an_identity_damaged_row_via_http(
     from musubi.planes.episodic.plane import episodic_point_id
     from musubi.store.raw_lookup import retrieve_by_point_id
 
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -1885,7 +1885,7 @@ def test_patch_explicit_null_unknown_field_is_rejected_not_silently_dropped(
     `exclude_unset=True` preserves the caller's actual key set, so unknown keys are rejected
     whatever their value.
     """
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
@@ -1916,7 +1916,7 @@ def test_patch_explicit_null_on_a_known_field_is_judged_by_the_canonical_model(
     """`{"content": null}` was treated as omission. It is not an omission — it is a request
     to set content to null, which the persisted model forbids. It must be judged, not
     silently discarded, and the row must survive either way."""
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
@@ -1946,7 +1946,7 @@ def test_curated_patch_explicit_null_unknown_field_is_rejected(
     Testing the class, not the example — that is the mistake that produced the previous
     three commits.
     """
-    namespace = "eric/claude-code/curated"
+    namespace = "admin/claude-code/curated"
     headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
     oid = _seed_curated(client, headers, namespace, "explicit-null")
 
@@ -1974,7 +1974,7 @@ def test_patch_omitted_field_is_still_omitted(
     `None` over every field the caller simply did not mention. A PATCH of one field must
     leave the others exactly as they were.
     """
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> str:
         saved = await episodic.create(
@@ -2020,7 +2020,7 @@ def test_lifecycle_transition_refuses_an_ambiguous_object_id(
 
     async def _seed() -> str:
         saved = await episodic.create(
-            EpisodicMemory(namespace="eric/claude-code/episodic", content="ambiguous-target")
+            EpisodicMemory(namespace="admin/claude-code/episodic", content="ambiguous-target")
         )
         return str(saved.object_id)
 

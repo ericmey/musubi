@@ -62,7 +62,7 @@ class TestLifecycleEvent:
         ev = LifecycleEvent(
             object_id=generate_ksuid(),
             object_type="episodic",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             from_state="provisional",
             to_state="matured",
             actor="maturation-worker",
@@ -77,7 +77,7 @@ class TestLifecycleEvent:
             LifecycleEvent(
                 object_id=generate_ksuid(),
                 object_type="episodic",
-                namespace="eric/claude-code/episodic",
+                namespace="admin/claude-code/episodic",
                 from_state="matured",
                 to_state="synthesized",
                 actor="x",
@@ -89,7 +89,7 @@ class TestLifecycleEvent:
             LifecycleEvent(
                 object_id=generate_ksuid(),
                 object_type="unknown-type",
-                namespace="eric/claude-code/episodic",
+                namespace="admin/claude-code/episodic",
                 from_state="matured",
                 to_state="demoted",
                 actor="x",
@@ -101,7 +101,7 @@ class TestLifecycleEvent:
             LifecycleEvent(
                 object_id=generate_ksuid(),
                 object_type="episodic",
-                namespace="eric/claude-code/episodic",
+                namespace="admin/claude-code/episodic",
                 from_state="provisional",
                 to_state="matured",
                 actor="x",
@@ -124,7 +124,7 @@ class TestLifecycleEvent:
         ev = LifecycleEvent(
             object_id=generate_ksuid(),
             object_type="concept",
-            namespace="eric/synth/concept",
+            namespace="admin/synth/concept",
             from_state="synthesized",
             to_state="matured",
             actor="concept-maturation",

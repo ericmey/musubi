@@ -15,7 +15,7 @@ _ARTIFACT_ID = "3GJhJKrgAOyI9ebWT8dLYUtUMGL"
 def _retraction_evidence(**changes: Any) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "kind": "artifact_escrow_v1",
-        "artifact_namespace": "eric/claude-code/artifact",
+        "artifact_namespace": "admin/claude-code/artifact",
         "artifact_ref": {"artifact_id": _ARTIFACT_ID},
         "original_sha256": "a" * 64,
         "original_utf8_bytes": 17,
@@ -36,7 +36,7 @@ def _retraction_evidence(**changes: Any) -> dict[str, Any]:
 def _memory_with_evidence(
     evidence: dict[str, Any],
     *,
-    namespace: str = "eric/claude-code/episodic",
+    namespace: str = "admin/claude-code/episodic",
     content: str = "[RETRACTED]",
 ) -> EpisodicMemory:
     return EpisodicMemory.model_validate(
@@ -166,7 +166,7 @@ def test_retraction_evidence_strict_shape_round_trips_without_storage_fields() -
 
 def test_absent_retraction_evidence_preserves_existing_wire_shape() -> None:
     memory = EpisodicMemory(
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         content="ordinary memory",
     )
 
@@ -212,7 +212,7 @@ def test_retraction_evidence_rejects_malformed_or_noncanonical_fields(
 
 def test_retraction_evidence_requires_derived_sibling_artifact_namespace() -> None:
     with pytest.raises(ValueError, match="sibling artifact namespace"):
-        _memory_with_evidence(_retraction_evidence(artifact_namespace="aoi/command-chair/artifact"))
+        _memory_with_evidence(_retraction_evidence(artifact_namespace="sam/command-chair/artifact"))
 
 
 def test_retraction_evidence_rejects_partial_shape() -> None:
