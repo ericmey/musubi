@@ -2,12 +2,12 @@
 
 ## Supported versions
 
-Musubi is pre-1.0 and moves fast. Security-relevant fixes land on the latest minor, tagged and published as the next patch release. Older tags are not backported.
+Security-relevant fixes land on the latest release line and are published as the next patch release. Older releases are not backported; upgrade to the latest release to receive fixes.
 
-| Version     | Supported          |
-|-------------|--------------------|
-| `v0.3.x`    | ✅ Yes              |
-| `< v0.3.0`  | ❌ No               |
+| Version                         | Supported          |
+|---------------------------------|--------------------|
+| Latest release (see [Releases](https://github.com/sourceblender/musubi/releases)) | ✅ Yes              |
+| Any older release               | ❌ No               |
 
 ## Reporting a vulnerability
 
@@ -28,7 +28,7 @@ Please include:
 
 ## Response timeline
 
-This is a personal project with a single maintainer, so response is best-effort rather than SLA-backed. That said:
+Musubi has a single maintainer, so response is best-effort rather than SLA-backed. That said:
 
 - **Acknowledgement:** within 72 hours of report.
 - **Initial assessment** (is this reproducible? severity?): within 7 days.

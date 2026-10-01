@@ -15,7 +15,7 @@ Integrates Musubi into the OpenClaw agent runtime. Mirrors agent episodic output
 
 **Implementation lives in a sibling repo:** `github.com/sourceblender/musubi-openclaw` (TypeScript OpenClaw plugin, Node.js 20+). Per [ADR-0022](../13-decisions/0022-extension-ecosystem-naming.md), non-Python integrations live in external `<system>-musubi` repos so their toolchain (pnpm, tsc, vitest) and release cadence stay separate from Musubi's Python monorepo.
 
-This spec is the **contract** the plugin implements against Musubi's canonical API. The contract lives here; the implementation lives in `openclaw-musubi`. TypeScript types are generated from `openapi.yaml` (in this repo) via `openapi-typescript`, giving the plugin compile-time safety against the canonical API.
+This spec is the **contract** the plugin implements against Musubi's canonical API. The contract lives here; the implementation lives in `musubi-openclaw`. TypeScript types are generated from `openapi.yaml` (in this repo) via `openapi-typescript`, giving the plugin compile-time safety against the canonical API.
 
 ## What OpenClaw is
 

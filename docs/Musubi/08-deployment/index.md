@@ -94,7 +94,7 @@ Kong (VLAN-wide gateway on `<kong-gateway>`) fronts Musubi. The Musubi host expo
 | TEI sparse | same image, different model |
 | TEI reranker | same image |
 | Ollama | `ollama/ollama:0.4.0-cuda` (or newer compatible) |
-| Musubi Core | `ghcr.io/sourceblender/musubi-core:v1.0.0` (self-built) |
+| Musubi Core | `ghcr.io/sourceblender/musubi-core:<version>` (published, signed) |
 
 Kong runs on `<kong-gateway>` (a separate VM); its image is pinned in Kong's own deployment repo, not Musubi's. See [[08-deployment/kong]].
 
