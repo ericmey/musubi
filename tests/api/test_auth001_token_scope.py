@@ -875,7 +875,12 @@ def test_duplicate_planes_route_returns_unique_targets(
     captured: dict[str, Any] = {}
 
     async def _capture(
-        *, client: object, embedder: object, reranker: object, query: dict[str, object]
+        *,
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        fast_timing: object,
     ) -> object:
         captured["query"] = query
         # Return a minimal valid response envelope.
@@ -978,7 +983,12 @@ def test_context_three_segment_wildcard_plane_uses_supplied_planes(
     captured: dict[str, Any] = {}
 
     async def _capture(
-        *, client: object, embedder: object, reranker: object, query: dict[str, object]
+        *,
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        fast_timing: object,
     ) -> object:
         captured["query"] = query
         from musubi.api.responses import RankedRetrieveResponse
@@ -1057,7 +1067,12 @@ def test_context_three_segment_wildcard_plane_dedup_planes(
     captured: dict[str, Any] = {}
 
     async def _capture(
-        *, client: object, embedder: object, reranker: object, query: dict[str, object]
+        *,
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        fast_timing: object,
     ) -> object:
         captured["query"] = query
         from musubi.api.responses import RankedRetrieveResponse

@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 from musubi import config as config_module
 from musubi.config import Settings, get_settings
+from musubi.retrieve.fast import FastTiming
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -51,6 +52,9 @@ _ENV_KEYS: tuple[str, ...] = (
     "LLM_MODEL",
     # Core
     "BRAIN_PORT",
+    "RETRIEVAL_FAST_ENCODING_TIMEOUT_S",
+    "RETRIEVAL_FAST_PLANE_TIMEOUT_S",
+    "RETRIEVAL_FAST_WHOLE_TIMEOUT_S",
     "VAULT_PATH",
     "ARTIFACT_BLOB_PATH",
     "LIFECYCLE_SQLITE_PATH",
@@ -373,6 +377,24 @@ def test_default_values_present_where_spec_allows(minimal_env: Path, _reset_cach
     assert settings.musubi_grpc is False
     assert settings.musubi_allow_plaintext is False
     assert settings.idempotency_receipt_sqlite_path is None
+    assert FastTiming.from_settings(settings) == FastTiming()
+
+
+def test_fast_deadline_env_overrides_are_independent(
+    monkeypatch: pytest.MonkeyPatch, minimal_env: Path, _reset_cache: None
+) -> None:
+    monkeypatch.setenv("RETRIEVAL_FAST_ENCODING_TIMEOUT_S", "0.75")
+    monkeypatch.setenv("RETRIEVAL_FAST_PLANE_TIMEOUT_S", "0.35")
+    monkeypatch.setenv("RETRIEVAL_FAST_WHOLE_TIMEOUT_S", "1.2")
+    assert FastTiming.from_settings(get_settings()) == FastTiming(0.75, 0.35, 1.2)
+
+
+def test_fast_deadlines_reject_nonpositive_values(
+    monkeypatch: pytest.MonkeyPatch, minimal_env: Path, _reset_cache: None
+) -> None:
+    monkeypatch.setenv("RETRIEVAL_FAST_ENCODING_TIMEOUT_S", "0")
+    with pytest.raises(ValidationError):
+        get_settings()
 
 
 def test_idempotency_receipt_sqlite_path_accepts_explicit_override(

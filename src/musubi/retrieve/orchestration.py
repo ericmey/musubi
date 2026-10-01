@@ -31,7 +31,7 @@ from musubi.retrieve.deep import (
 from musubi.retrieve.deep import (
     RetrievalQuery as DeepRetrievalQuery,
 )
-from musubi.retrieve.fast import run_fast_retrieve
+from musubi.retrieve.fast import FastTiming, run_fast_retrieve
 from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.retrieve.recent import _provenance_score_for, run_recent_retrieve
 from musubi.retrieve.scoring import calibrate_global_relevance
@@ -290,6 +290,7 @@ async def retrieve(
     llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
     account_access: bool = True,
+    fast_timing: FastTiming | None = None,
 ) -> Result[RetrievalEnvelope, RetrievalError]:
     """Execute the configured retrieval pipeline, then finalize at the shared boundary (telemetry +
     fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted.
@@ -300,7 +301,15 @@ async def retrieve(
     max_items/max_chars/filler) pass ``account_access=False`` and account the FINAL surfaced set
     themselves, so trimmed candidates are never counted.
     """
-    result = await _retrieve_uncounted(client, embedder, reranker, query=query, llm=llm, now=now)
+    result = await _retrieve_uncounted(
+        client,
+        embedder,
+        reranker,
+        query=query,
+        llm=llm,
+        now=now,
+        fast_timing=fast_timing or FastTiming(),
+    )
     # RET-002 (#500): account access ONCE, over exactly the delivered rows — after
     # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
     # hydration. Covers HTTP and streaming (both call this seam). Accounting runs before
@@ -329,6 +338,7 @@ async def _retrieve_uncounted(
     query: RetrievalQuery | dict[str, Any],
     llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
+    fast_timing: FastTiming,
 ) -> Result[RetrievalEnvelope, RetrievalError]:
     """Execute the configured retrieval pipeline based on the query (no telemetry/finalize)."""
 
@@ -387,6 +397,7 @@ async def _retrieve_uncounted(
                 namespace=targets[0][0],
                 plane=targets[0][1],
                 now=now,
+                fast_timing=fast_timing,
             )
             if isinstance(single, Ok):
                 return Ok(
@@ -415,6 +426,7 @@ async def _retrieve_uncounted(
                     namespace=ns,
                     plane=plane,
                     now=now,
+                    fast_timing=fast_timing,
                 )
                 for ns, plane in targets
             ),
@@ -520,6 +532,7 @@ async def _run_single(
     namespace: str,
     plane: str,
     now: float | None,
+    fast_timing: FastTiming,
 ) -> Result[RetrievalEnvelope, RetrievalError]:
     """Single-target pipeline dispatch. Extracted from :func:`retrieve`
     so cross-plane fanout can call it per target without re-parsing
@@ -716,7 +729,7 @@ async def _run_single(
             return Ok(value=RetrievalEnvelope(results=recent_results, warnings=tuple(warnings)))
 
         elif mode == "fast":
-            # Fast timeout (400ms)
+            # Independent encoding, search, and whole-call bounds.
             states = parsed_query.state_filter or ("matured", "promoted")
             if parsed_query.include_archived:
                 states = cast(Any, (*states, "demoted", "archived", "superseded"))
@@ -731,8 +744,10 @@ async def _run_single(
                     limit=parsed_query.limit,
                     now=now,
                     state_filter=cast(Any, states),
+                    encoding_timeout_s=fast_timing.encoding_timeout_s,
+                    plane_timeout_s=fast_timing.plane_timeout_s,
                 ),
-                timeout=0.400,
+                timeout=fast_timing.whole_timeout_s,
             )
 
             if isinstance(f_res, Err):

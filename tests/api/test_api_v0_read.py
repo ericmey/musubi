@@ -20,16 +20,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import cast
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from qdrant_client import QdrantClient
 
+from musubi.api.dependencies import get_settings_dep
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
+from musubi.retrieve.fast import FastTiming
+from musubi.retrieve.orchestration import RetrievalEnvelope
 from musubi.settings import Settings
+from musubi.types.common import Ok
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
@@ -770,6 +776,41 @@ def test_retrieve_endpoint_routes_to_plane(
     assert r.status_code == 200
     body = r.json()
     assert "results" in body
+
+
+def test_retrieve_http_passes_configured_fast_deadlines(
+    client: TestClient,
+    auth: dict[str, str],
+    api_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = api_settings.model_copy(
+        update={
+            "retrieval_fast_encoding_timeout_s": 0.75,
+            "retrieval_fast_plane_timeout_s": 0.35,
+            "retrieval_fast_whole_timeout_s": 1.2,
+        }
+    )
+    cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = lambda: configured
+    observed: dict[str, float] = {}
+
+    async def capture_retrieve(*args: object, **kwargs: object) -> Ok[RetrievalEnvelope]:
+        timing = cast(FastTiming, kwargs["fast_timing"])
+        observed.update(
+            encoding=timing.encoding_timeout_s,
+            search=timing.plane_timeout_s,
+            whole=timing.whole_timeout_s,
+        )
+        return Ok(value=RetrievalEnvelope(results=[], warnings=()))
+
+    monkeypatch.setattr("musubi.api.routers.retrieve.run_orchestration_retrieve", capture_retrieve)
+    response = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={"namespace": "eric/claude-code/episodic", "query_text": "gpu", "mode": "fast"},
+    )
+    assert response.status_code == 200
+    assert observed == {"encoding": 0.75, "search": 0.35, "whole": 1.2}
 
 
 def _seed_episodic_batch(episodic: EpisodicPlane, namespace: str, fragments: list[str]) -> None:
