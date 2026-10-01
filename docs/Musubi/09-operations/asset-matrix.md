@@ -4,172 +4,139 @@ section: 09-operations
 tags: [backup, canonical, derived, operations, section/operations, status/complete, type/runbook]
 type: runbook
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[09-operations/index]]"
 reviewed: false
 ---
 # Asset Matrix
 
-Where each piece of data lives, who owns it, and what happens when the store is lost.
+Where each piece of data lives, who writes it, and what happens when the store is lost.
 
-**Principle:** if we lose a derived store, we rebuild it. If we lose a canonical store without a backup, data is gone. Keep the canonical set small and well-backed-up.
+**Principle:** if we lose a derived store, we rebuild it. If we lose a canonical store
+without a backup, the data is gone. Keep the canonical set small and well backed up.
+
+All state lives in the Compose stack's named volumes: `qdrant-storage`,
+`qdrant-snapshots`, `vault`, `artifact-blobs`, `lifecycle` and `logs`. The public backup
+procedure archives all six cold, as one set ([[09-operations/backup-restore]]), so the
+recovery point for every row below is the time of your last complete backup set.
 
 ## The matrix
 
-| Data | Canonical store | Derived stores | Backup strategy | RPO target |
+| Data | Canonical store | Derived stores | Backup | Notes |
 |---|---|---|---|---|
-| Episodic memory | Qdrant `musubi_episodic` | — | Qdrant snapshot (6h) → SATA SSD | 6 hours |
-| Curated knowledge (body) | Vault `.md` files | Qdrant `musubi_curated` | git push (15min) → remote repo | 15 minutes |
-| Curated knowledge (frontmatter) | Vault `.md` frontmatter | Qdrant payload | git push (15min) | 15 minutes |
-| Synthesized concept | Qdrant `musubi_concept` | — | Qdrant snapshot (6h) | 6 hours |
-| Artifact (blob) | `/var/lib/musubi/artifact-blobs/` | — | rsync to SATA SSD (hourly) | 1 hour |
-| Artifact (metadata) | Qdrant (artifact head row) | — | Qdrant snapshot (6h) | 6 hours |
-| Artifact chunks (text + vector) | Qdrant `musubi_artifact_chunks` | (regenerable from blob) | Qdrant snapshot (6h) | 6 hours (faster via re-chunk) |
-| Thoughts | Qdrant `musubi_thoughts` | — | Qdrant snapshot (6h) | 6 hours |
-| Lifecycle events | sqlite `lifecycle/work.sqlite:lifecycle_events` | — | sqlite `.backup` (daily) → SATA | 24 hours |
-| Write-log (vault ↔ Qdrant echo) | sqlite `lifecycle/work.sqlite:write_log` | — | sqlite `.backup` (daily) | (can regenerate partially) |
-| Schedule locks | sqlite `lifecycle/work.sqlite:schedule_locks` | — | sqlite `.backup` (daily) | (stateless; fine to lose) |
-| Config | `/etc/musubi/` + `.env` | — | Ansible git repo + `.vault.yml` | Git push (per change) |
-| Secrets | Secret manager (the bundled role uses 1Password Connect) + `.vault.yml` | — | Secret manager, off-host | Real-time |
-| OAuth tokens (issued) | JWT signed, not persisted | — | Re-issue from signing key | — |
-| Qdrant config | `/etc/musubi/qdrant-config.yaml` | — | Ansible git | Per-change |
+| Episodic memory | Qdrant `musubi_episodic` (`qdrant-storage`) | — | cold volume set | only copy |
+| Curated knowledge (body + frontmatter) | Markdown in the `vault` volume | Qdrant `musubi_curated` | cold volume set; optionally also git | the worker's 6-hourly `vault_reconcile` upserts vault files into Qdrant |
+| Synthesized concept | Qdrant `musubi_concept` | — | cold volume set | only copy |
+| Artifact (blob bytes) | `artifact-blobs` volume | — | cold volume set | stored as `<namespace>/<object_id>`; its SHA-256 is in the artifact metadata |
+| Artifact (metadata) | Qdrant `musubi_artifact` | — | cold volume set | title, tags, source |
+| Artifact chunks (text + vectors) | Qdrant `musubi_artifact_chunks` | derivable from blobs in principle | cold volume set | no re-chunk tool exists |
+| Thoughts | Qdrant `musubi_thought` | — | cold volume set | only copy |
+| Lifecycle audit mirror | Qdrant `musubi_lifecycle_events` | — | cold volume set | |
+| Lifecycle state (event log, cursors, synthesis candidates, outbox) | sqlite `work.sqlite` in the `lifecycle` volume | — | cold volume set | |
+| Idempotency receipts | sqlite `idempotency-receipts.sqlite` in the `lifecycle` volume | — | cold volume set | |
+| Vault write-log (echo prevention) | sqlite `vault-writelog.db` in the `lifecycle` volume | — | cold volume set | |
+| Qdrant snapshots | `qdrant-snapshots` volume | — | cold volume set | only if you take them |
+| Config | root `docker-compose.yml` + your `.env` | — | your own config management | keep `.env` private |
+| Secrets (`JWT_SIGNING_KEY`, `QDRANT_API_KEY`, …) | your secret manager or private `.env` | — | your secret manager, off-host | losing `JWT_SIGNING_KEY` invalidates every token |
+| Issued tokens | not stored; JWTs signed with `JWT_SIGNING_KEY` | — | re-mint from the signing key | |
+| Model caches (GPU overlay) | `tei-models`, `ollama-models` volumes | — | none needed | re-download on start |
 
 ## Canonical store ownership
 
-### Vault (`/var/lib/musubi/vault/`)
+### Vault (`vault` volume)
 
-**Owns:**
+**Owns:** curated Markdown body text and frontmatter, including files the lifecycle
+worker writes on promotion and reflection.
 
-- Curated Markdown body text.
-- Curated frontmatter.
-- `reflections/` (daily AI-generated reflections).
-- `.obsidian/` config (kept per-user; don't sync Obsidian plugin state from agent-side writes).
+**Does not own:** episodic memories or vectors (Qdrant only).
 
-**Does not own:**
+**Write access:** humans editing the vault, and the lifecycle worker (promotion,
+reflection). Core and the worker both mount the volume.
 
-- Episodic memories (those live in Qdrant only).
-- Vector embeddings (stored in Qdrant).
+**Backup:** part of the cold set. Keeping the vault in git and pushing to a private remote
+on a schedule gives curated knowledge its own history; Musubi does not ship a script for
+that.
 
-**Write access:**
+### Artifact blobs (`artifact-blobs` volume)
 
-- Human via Obsidian editor.
-- Lifecycle Worker (concept promotion writes new curated files).
-- Nothing else.
+**Owns:** raw file bytes for uploaded artifacts, stored at `<namespace>/<object_id>`. The
+artifact's metadata row records the blob's SHA-256.
 
-**Backup:** git push every 15 min (cron on host). Remote repo on GitHub private. See [[09-operations/backup-restore#vault]].
+**Write access:** Core's artifact upload. Read-only after write.
 
-### Artifact blobs (`/var/lib/musubi/artifact-blobs/`)
+### Qdrant (`qdrant-storage` volume)
 
-**Owns:** raw file bytes for uploaded artifacts (PDF, HTML, VTT, etc.), content-addressed.
+**Owns:** episodic memories, concepts, thoughts, artifact metadata and chunks, the
+lifecycle audit mirror, and a **copy** of curated knowledge.
 
-**Write access:** Musubi Core's artifact service on upload. Read-only after write.
+**Write access:** Core and the lifecycle worker.
 
-**Backup:** hourly rsync to `/mnt/snapshots/artifact-blobs/`. 90-day retention on the SATA SSD.
+### sqlite (`lifecycle` volume)
 
-### Qdrant (`/var/lib/musubi/qdrant/`)
+**Owns:** `work.sqlite` (lifecycle event log, maturation and synthesis cursors, synthesis
+candidates, lifecycle outbox), `idempotency-receipts.sqlite`, `vault-writelog.db`, and
+job lock files under `locks/`.
 
-**Owns:**
-
-- Episodic memories (body + vector + payload).
-- Synthesized concepts.
-- Thoughts.
-- Artifact head rows + artifact chunks (text + vectors).
-- **Copy** of curated (derived from vault on sync).
-
-**Write access:** Musubi Core.
-
-**Backup:** full snapshot every 6 hours (via Qdrant snapshot API) → rsync to SATA.
-
-### sqlite (`/var/lib/musubi/lifecycle/work.sqlite`)
-
-**Owns:**
-
-- Lifecycle events log (append-only).
-- Write-log for vault ↔ Qdrant echo prevention.
-- Schedule locks for APScheduler.
-- Boot-scan cursors.
-- Concept synthesis watermarks.
-
-**Write access:** Lifecycle Worker, Vault Watcher.
-
-**Backup:** daily `sqlite3 lifecycle/work.sqlite .backup /mnt/snapshots/lifecycle.sqlite.<ts>`. Point-in-time restore via replay of `lifecycle_events`.
+**Write access:** Core (idempotency receipts, lifecycle store) and the lifecycle worker.
 
 ## Derivability
 
-Each derived store can be rebuilt from its canonical source:
-
 ### Curated in Qdrant
 
-Loss recovery:
-
-1. Stop Core.
-2. `DELETE collection musubi_curated`.
-3. `musubi-cli index rebuild --collection musubi_curated --source vault`.
-4. Start Core.
-
-Rebuild time at v1 scale: a few minutes per 1000 docs (dense + sparse encode on GPU).
+The lifecycle worker's `vault_reconcile` job (every 6 hours) walks the vault and upserts
+every Markdown file that carries an `object_id` into the curated plane. There is no
+separate rebuild command.
 
 ### Artifact chunks in Qdrant
 
-Loss recovery:
+Derivable from the blobs in principle, but no re-chunk command exists (planned, not
+implemented). Restore chunks from the backup set.
 
-1. `musubi-cli artifacts rechunk --all`.
-2. Worker pulls each blob, re-runs the chunker, reinserts chunks.
+### Artifact metadata in Qdrant
 
-Rebuild time: depends on chunker. HTML/PDF ~5-20 min per 1000 artifacts.
+Not derivable: it carries user-supplied title, tags and topics. Restore from the backup
+set.
 
-### Artifact head rows in Qdrant
+## Data that is not canonical anywhere else
 
-Less trivially regenerable — the head row carries user-supplied metadata (title, tags, topics). If only Qdrant is lost but snapshots exist, restore from snapshot. If snapshots are also lost, reconstruct from `artifact-blobs/` directory listing + file metadata — title falls back to filename, tags are empty. Not great; that's why snapshots are non-negotiable.
-
-## Data that isn't truly canonical anywhere else
-
-Two classes of data live only in Qdrant + snapshots:
-
-1. **Episodic memories.**
-2. **Concepts.**
-
-For these, Qdrant snapshots are the only backup. If all of {Qdrant, snapshots on NVMe, snapshots on SATA} are lost, the data is gone. This is why snapshots go to the SATA SSD (separate disk), and daily ones rotate off-host to the NAS/cloud if configured.
-
-Artifact **content** (blob) is redundant with the rsync copy — losing Qdrant doesn't lose the PDF. Artifact **chunks+vectors** are rebuildable from the blob. Artifact **head row** is the one piece that's only in Qdrant+snapshot.
+Episodic memories, concepts, thoughts and artifact metadata live only in Qdrant. If both
+Qdrant and every backup set are lost, they are gone. That is why backups go off the host.
 
 ## Retention policies
 
 | Data | Retention |
 |---|---|
-| Episodic memory (matured) | Indefinite until demoted (see [[06-ingestion/demotion]]) |
-| Episodic memory (provisional, unenriched) | 7 days |
-| Curated | Indefinite until manual delete |
-| Concept | Until rejected or promoted |
-| Thoughts (read) | 90 days then soft-delete |
-| Thoughts (unread) | 180 days then soft-delete |
-| Artifacts | Indefinite; hard-delete via operator |
-| Lifecycle events | 180 days (configurable) |
-| Write-log | 30 days after `consumed_at` |
-| Snapshots | 90 days rolling |
-| Access logs | 30 days |
+| Episodic memory (provisional) | archived after 7 days by the hourly `provisional_ttl` job (archived, not deleted) |
+| Episodic memory (matured) | until demoted; see [[06-ingestion/demotion]] |
+| Curated | until deleted by hand |
+| Concept | until rejected or promoted |
+| Thoughts | kept: a 30-day hard delete exists in `src/musubi/ops/retention.py`, but nothing in the public stack runs it |
+| Artifacts | kept; opt-in archival after 180 days unreferenced with `MUSUBI_ARTIFACT_ARCHIVAL_ENABLED=true` (blob bytes kept) |
+| Lifecycle outbox (terminal rows) | 30 days (`lifecycle_cleanup_retention_s`), pruned by the worker |
+| Backup sets and snapshots | your choice |
+| Container logs | your Docker logging driver's settings |
 
 ## Ownership boundaries
 
-Rule: **a single writer per canonical row.**
+Rule: **one writer per canonical row.**
 
-| Row | Single writer |
+| Row | Writer |
 |---|---|
-| Episodic row | Capture API (or Lifecycle Worker for state transitions) |
-| Curated frontmatter | Vault Watcher ingesting vault edits, or Lifecycle Worker on promotion |
-| Curated body | Only vault write + Watcher echo |
-| Concept row | Concept Synthesis job (create) / Lifecycle Worker (state transitions) |
-| Artifact head | Artifact upload API (create) / operator (archive/purge) |
-| Artifact chunk | Chunker (create) / Lifecycle (archive) |
+| Episodic row | Capture API (create); lifecycle transitions (state changes) |
+| Curated row | Curated API, vault reconcile from vault edits, or lifecycle promotion |
+| Concept row | Synthesis job (create); lifecycle transitions (state changes) |
+| Artifact metadata | Artifact upload API (create); operator lifecycle actions |
+| Artifact chunk | The lifecycle worker's artifact indexer, after upload |
 
-If two writers could touch a row, we either give one authority (operator precedence) or version it and detect conflicts — never silently overwrite.
+If two writers could touch a row, one gets authority (operator precedence) or the row is
+versioned and conflicts are detected; never a silent overwrite.
 
 ## Test contract
 
-**Module under test:** no specific code — this doc is a contract for the rest.
+**Module under test:** no specific code; this page is a contract for the rest.
 
-1. `test_every_asset_has_canonical_owner_documented` (doc lint)
-2. `test_backup_cadence_matches_claimed_rpo`
-3. `test_restore_drills_run_quarterly` (operational; see [[09-operations/runbooks]])
-4. `test_curated_rebuild_from_vault_produces_matching_qdrant_count`
-5. `test_artifact_rechunk_produces_same_chunk_count_as_snapshot`
+1. `test_every_asset_has_canonical_owner_documented` (`tests/ops/test_backup.py`) — every
+   matrix row names data, a canonical store and a backup.
+2. `test_restore_drills_run_quarterly` (same file) — `RESTORE_DRILL_CADENCE_DAYS <= 92`.
+3. `test_named_current_state_docs_reject_the_retired_lifecycle_file`
+   (`tests/ops/test_lifecycle_storage_doc_drift.py`).

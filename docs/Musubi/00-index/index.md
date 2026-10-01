@@ -4,12 +4,12 @@ section: 00-index
 tags: [index, navigation, section/index, status/complete, type/index]
 type: index
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 reviewed: false
 ---
 # Root Index
 
-Musubi is the **shared memory and knowledge plane** for a small-team AI agent fleet. It is a standalone server. Every interface (MCP, LiveKit, OpenClaw, direct HTTP) is an independent downstream project that calls Musubi over the canonical API.
+Musubi is the **shared memory and knowledge plane** for a small team of AI agents. It is a standalone server. Every interface calls Musubi over the canonical HTTP API: the MCP server, the CLI and the Python SDK ship in this repo; LiveKit, OpenClaw and the other agent integrations are separate repositories.
 
 ## Mental model in one picture
 
@@ -20,9 +20,9 @@ Musubi is the **shared memory and knowledge plane** for a small-team AI agent fl
                        vault files                 │
                           │                         ▼
                           │            ┌──────────────────────────┐
-                          │            │  Adapter projects        │
-                          │            │  musubi-mcp, musubi-lk,  │
-                          │            │  musubi-openclaw, curl   │
+                          │            │  Clients                 │
+                          │            │  MCP, CLI, SDK, LiveKit, │
+                          │            │  OpenClaw, plain HTTP    │
                           │            └────────────┬─────────────┘
                           │                         │  canonical API
                           ▼                         ▼
@@ -32,13 +32,17 @@ Musubi is the **shared memory and knowledge plane** for a small-team AI agent fl
                  │  │  Episodic   │  │  Curated    │  │ Source  │  │
                  │  │  Plane      │  │  Knowledge  │  │ Artifact│  │
                  │  │ (Qdrant)    │  │  Plane      │  │ Plane   │  │
-                 │  │             │  │  (Obsidian  │  │ (object │  │
-                 │  │             │  │   vault +   │  │ store + │  │
+                 │  │             │  │  (Obsidian  │  │ (blob   │  │
+                 │  │             │  │   vault +   │  │ dir +   │  │
                  │  │             │  │   Qdrant    │  │ Qdrant  │  │
                  │  │             │  │   index)    │  │ chunks) │  │
                  │  └─────────────┘  └─────────────┘  └─────────┘  │
-                 │           Lifecycle engine (maturation,          │
-                 │           synthesis, promotion, demotion)        │
+                 └─────────────────────────────────────────────────┘
+                                          ▲ same Qdrant, vault, blobs
+                 ┌─────────────────────────────────────────────────┐
+                 │  Lifecycle worker (separate process):           │
+                 │  maturation, synthesis, promotion, demotion,    │
+                 │  reflection, vault reconcile                    │
                  └─────────────────────────────────────────────────┘
 ```
 
@@ -60,48 +64,42 @@ Plus a bridge layer:
 |---|---|---|
 | 00 | [[00-index/index|Index]] | You are here. Navigation, executive summary, guardrails. |
 | 01 | [[01-overview/index|Overview]] | Mission, scope, stakeholders, the three planes explained. |
-| 02 | Current state | Honest gap analysis. What the POC is vs what this doc asks for. |
 | 03 | [[03-system-design/index|System design]] | Component architecture. Core abstraction boundary. Namespaces. |
 | 04 | [[04-data-model/index|Data model]] | Schemas, relationships, lifecycle states. |
 | 05 | [[05-retrieval/index|Retrieval]] | Scoring formula, fast/deep/blended paths, orchestration queries. |
 | 06 | [[06-ingestion/index|Ingestion]] | Capture, maturation, synthesis, promotion, demotion. Obsidian sync. |
-| 07 | [[07-interfaces/index|Interfaces]] | Canonical API, SDK, adapter specs (MCP, LiveKit, OpenClaw, REST/gRPC). |
-| 08 | [[08-deployment/index|Deployment]] | Ansible, bootstrap order, secrets, container topology. |
+| 07 | [[07-interfaces/index|Interfaces]] | Canonical HTTP API, SDK, adapter specs (MCP, LiveKit, OpenClaw). |
+| 08 | [[08-deployment/index|Deployment]] | Docker Compose install, host requirements, secrets, GPU topology. |
 | 09 | [[09-operations/index|Operations]] | Backup, observability, runbooks, canonical vs derived assets. |
 | 10 | [[10-security/index|Security]] | Auth, tenant isolation, PII handling, redaction. |
-| 11 | Migration | Path from POC to target. Data migration plan. |
-| 12 | [[12-roadmap/index|Roadmap]] | Phased implementation plan with agent-parallelizable slices. |
+| 11 | Migration | Schema and re-embedding migrations. See [[11-migration/re-embedding]]. |
+| 12 | [[12-roadmap/index|Roadmap]] | Longer-range direction (v2, v3). Open work is tracked as GitHub issues. |
 | 13 | [[13-decisions/index|Decisions]] | ADRs for every load-bearing choice. |
 
 ## Key landing pages
 
-- Vault Dashboard — live status snapshot, review progress, gap hotspots.
 - [[00-index/reading-tour|Reading Tour]] — plain-English guided path for first-time review.
 - [[00-index/architecture.canvas|Architecture Canvas]] — visual map of the whole system.
 - [[_tools/README|Vault Tools]] — `check.py`, the docs health check CI runs.
-- [[00-index/obsidian-setup|Obsidian Setup]] — verify-after-restart checklist for plugin configs.
-- Operator Notes — scratchpad for reactions while reviewing.
-- [[00-index/executive-summary|Executive Summary]] — top 5 decisions, top 5 risks, top 5 next steps.
-- [[CLAUDE|Coding Agent Entry Point]] — CLAUDE.md. Start here if you're an agent, not a human.
+- [[00-index/executive-summary|Executive Summary]] — top 5 decisions and top 5 risks.
+- [[CLAUDE|Coding agent entry point]] — CLAUDE.md. Start here if you're an agent, not a human.
 - [[00-index/agent-guardrails|Agent Guardrails]] — Qdrant and vault rules; the contributor contract is AGENTS.md at the repo root.
 - [[00-index/definition-of-done|Definition of Done]] — the universal merge checklist.
 - [[00-index/research-questions|Research Questions]] — consolidated open questions across the vault.
-- Stubs & Placeholders — what's intentionally brief and why.
 - [[00-index/test-index|Test Contract Index]] — every spec's behaviour-under-test.
 - [[00-index/glossary|Glossary]] — vocabulary used across the vault.
 - [[00-index/conventions|Conventions]] — naming, frontmatter, link style.
-- Bases — dynamic filters over the vault (by status, by section, etc.).
 
 ## External research grounding
 
-This design draws on (all current as of April 2026):
+This design draws on:
 
 - **MemGPT / Letta** three-tier OS-inspired memory (core / recall / archival) with agent self-editing.
 - **Mem0** fact-extraction pipeline with ADD/UPDATE/DELETE/NOOP operations and graph-enhanced variant.
 - **Zep / Graphiti** temporal knowledge graph with bitemporal modeling (event time + ingestion time) and fact validity windows.
 - **Stanford Generative Agents** retrieval scoring (relevance + recency + importance) with LLM-rated importance.
-- **Qdrant 1.15+** native BM25, BM42, SPLADE++ hybrid search, named vectors, Query API server-side fusion.
-- **Gemini Embedding-001** GA (3072-d default, Matryoshka to 1536/768, RETRIEVAL_QUERY/DOCUMENT task types).
+- **Qdrant** named dense and sparse vectors with Query API server-side fusion (Musubi runs Qdrant 1.17).
+- **BGE-M3** dense embeddings and **SPLADE v3** learned sparse embeddings, served by Text Embeddings Inference.
 - **LiveKit Agents** dual-agent RAG pattern (Slow Thinker pre-fetches; Fast Talker reads from cache) and `on_user_turn_completed` hook.
 - **MCP Authorization spec** (finalized June 2025) — OAuth 2.1 with dynamic client registration.
 

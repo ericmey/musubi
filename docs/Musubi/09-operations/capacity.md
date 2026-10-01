@@ -4,42 +4,49 @@ section: 09-operations
 tags: [capacity, operations, scale, section/operations, status/draft, type/runbook]
 type: runbook
 status: draft
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[09-operations/index]]"
 reviewed: false
 ---
 # Capacity Planning
 
-What size is Musubi? When does it outgrow one box? What's the signal to look at before it does?
+What size is Musubi? When does it outgrow one box? What signal tells you before it does?
+
+All hardware figures refer to the measured reference host (Ryzen 5, 32 GB RAM, RTX 3080
+10 GB, NVMe; see [[08-deployment/host-profile]]) running the GPU overlay. **Most numbers
+on this page are planning estimates that have not been re-measured against the current
+release;** each table says which.
 
 ## v1 scope
 
-Small team:
+Small team / single operator:
 
 - **Users:** 1-5 humans, 3-10 agent presences.
 - **Captures:** 100-5,000 / day.
-- **Retrievals:** 500-10,000 / day (voice sessions are retrieval-heavy; coding sessions bursty).
+- **Retrievals:** 500-10,000 / day (voice sessions are retrieval-heavy; coding sessions
+  bursty).
 - **Curated docs:** ~500-5,000 long-term.
 - **Concepts:** ~500 active at steady state.
 - **Artifacts:** ~1,000-10,000 / year.
 
-Comfortably within one box. Not even close to saturating the 10 GB GPU or 32 GB RAM.
-
 ## Resource footprint
 
-Measured on a representative workload (5 presences, ~2k captures/day, ~5k retrievals/day):
+Planning estimates (unverified) for ~5 presences, ~2k captures/day, ~5k retrievals/day:
 
 | Resource | Idle | Typical | Peak |
 |---|---|---|---|
 | CPU | 5% | 15% | 60% (synthesis batch) |
 | RAM | 8 GB | 14 GB | 22 GB |
-| VRAM | 8.5 GB | 9.0 GB | 9.5 GB |
-| Disk (write) | negligible | few MB/min | 50 MB/min (sync batch) |
-| Network (LAN) | < 1 KB/s | 100 KB/s | 5 MB/s (sync) |
+| VRAM | see below | ~9 GB | ~9.5 GB |
+| Disk (write) | negligible | few MB/min | ~50 MB/min (batch) |
+
+The one VRAM measurement on record: about 3.3 GiB in use on the reference host with all
+four GPU services running and idle (whether the LLM was resident was not recorded). The
+budget in [[08-deployment/gpu-inference-topology]] assumes ~9 GB with everything loaded.
 
 ## Growth model
 
-Storage growth per year (steady state):
+Planning estimates (unverified), steady state:
 
 | Store | Rate | Year 1 | Year 3 | Year 5 |
 |---|---|---|---|---|
@@ -48,122 +55,107 @@ Storage growth per year (steady state):
 | Concepts (Qdrant) | 100 MB/yr | 100 MB | 300 MB | 500 MB |
 | Artifact blobs | 10-30 GB/yr | 20 GB | 60 GB | 100 GB |
 | Artifact chunks (Qdrant) | 5 GB/yr | 5 GB | 15 GB | 25 GB |
-| sqlite events | 500 MB/yr | 500 MB | 1 GB | 2 GB |
-| Snapshots (90d on SATA) | — | ~30 GB held | ~30 GB | ~30 GB |
+| Lifecycle sqlite | 500 MB/yr | 500 MB | 1 GB | 2 GB |
 
-Year-5 totals: ~180 GB. NVMe is 1 TB. Runway: 15+ years before NVMe pressure.
+Year-5 total: roughly 150 GB of live data, plus whatever backup sets and snapshots you
+keep on the same disk. Artifact blobs dominate growth.
 
-Artifact blobs dominate growth. The 4 TB SATA absorbs them if NVMe hits headroom.
+## Retrieval and capture throughput
 
-## Retrieval throughput
+Planning estimates (unverified):
 
-Measured:
+- **Fast retrieval:** ~150 req/s sustained (GPU encoders are the limit).
+- **Deep retrieval:** ~10 req/s sustained (reranker-bound).
+- **Single capture:** ~50 ms p95 (dense + sparse encode, Qdrant write, dedup probe).
+- **Sustained capture:** ~50/s; batch endpoint higher.
 
-- **Fast path:** ~150 req/s sustained (GPU encoder is the limit).
-- **Deep path:** ~10 req/s sustained (reranker + LLM-none; rerank is batched).
+v1 workload is ~2k captures/day (0.02/s average): orders of magnitude of headroom.
 
-If both paths are loaded heavily at once, fast path is bounded by VRAM contention. We don't get close to this in practice.
+## Scale signals: when to worry
 
-## Capture throughput
+Measure these with your own monitoring:
 
-- Single capture: ~50ms p95 (dense+sparse encode + Qdrant write + dedup probe).
-- Sustained: ~50 captures/s.
-- Batch: up to 100 captures / POST → ~200/s sustained.
+- Disk holding Docker's volumes > 75% full (host exporter).
+- VRAM near the card's limit for 10+ minutes (GPU exporter; Core emits no GPU metrics).
+- Retrieval p95 above 500 ms, sustained:
+  `histogram_quantile(0.95, sum by (le) (rate(musubi_http_request_duration_ms_bucket{endpoint="/v1/retrieve"}[5m])))`.
+- `musubi_lifecycle_job_duration_seconds` for a job approaching its schedule interval.
 
-v1 workload: ~2k/day = 0.02/s avg. Orders of magnitude of headroom.
-
-## Scale signals — when to worry
-
-Alert fires when:
-
-- `node_filesystem_avail_bytes{mountpoint="/var/lib/musubi"} / total < 0.25` (75% full).
-- `gpu_vram_used_mb > 9500` sustained for 10 min.
-- `musubi_retrieve_duration_ms{mode="fast"}` p95 > 500ms sustained.
-- Ingest backlog (provisional > 7d) > 1000 items.
-
-Any of these ⇒ time to think about scaling.
+Any of these means it is time to think about scaling.
 
 ## Scaling options (in order of effort)
 
-### 1. Optimize current box
+### 1. Tune the current box
 
-- Tune HNSW params (see [[08-deployment/qdrant-config]]).
-- Raise `max_batch_tokens` on TEI if GPU has headroom.
-- Enable Qdrant on-disk payload compression (post-1.15 feature).
-- Prune old episodic memories past demotion rules.
+- Raise TEI `--max-batch-tokens` if the GPU has headroom (overlay `command:` lines).
+- Prune episodic memories through the demotion rules ([[06-ingestion/demotion]]).
+- HNSW and quantization settings are fixed at collection creation
+  ([[08-deployment/qdrant-config]]); changing them means rebuilding a collection.
 
-Typical gain: 2-3x headroom without new hardware.
+### 2. Add or upgrade a GPU
 
-### 2. Add a second GPU
+Put the LLM on a second or larger card; the encoders stay where they are.
 
-Install a second card (or upgrade to a 24 GB card). Rehost the LLM on the bigger GPU; encoders stay on the 3080. VRAM pressure goes away.
+### 3. Move the LLM off-box
 
-Cost: ~$1-2k for a 4090 or similar.
-
-### 3. Move LLM off-box
-
-Run Ollama on a second host with a larger GPU. Core calls over LAN. Encoders stay co-located with Qdrant (latency-critical).
-
-Cost: parts of a second box.
+Run Ollama on a second host with a larger GPU and point `OLLAMA_URL` at it
+(`LIFECYCLE_LLM_*` can move maturation and synthesis to any OpenAI-compatible endpoint,
+but promotion and reflection always use `OLLAMA_URL`). Keep the encoders close to Core:
+they are on the
+capture and retrieval path.
 
 ### 4. Move Qdrant to a separate host
 
-Qdrant on a big-RAM box, Core + inference on another. Networking ~1ms on LAN.
-
-At this scale, revisit the single-host-only assumption throughout the stack. See `scaling`.
+Not supported by the shipped stack, which runs Qdrant in the same Compose project. This
+is multi-host migration work, outside v1 scope.
 
 ### 5. Cluster Qdrant
 
-Qdrant 1.x supports sharding + replication. Multi-node.
-
-Only needed if we approach 100M+ vectors. Not expected in v1 scope.
+Qdrant supports sharding and replication. Only needed far beyond v1 scope.
 
 ## LLM capacity
 
-Qwen2.5-7B Q4 on a 3080 generates ~30-50 tokens/s. That's fine for:
-
-- Synthesis: ~500 tokens per concept candidate × ~50 candidates/day = ~25k tokens/day = ~10 min of LLM time.
-- Rendering: ~1200 tokens per promotion × ~5/day = ~6k tokens/day = ~3 min.
-- Maturation: optional, batched, flexible.
-
-Total LLM load: ~15 min/day of GPU time. Plenty of headroom.
-
-If we start using LLM in the hot path (not planned), revisit.
+Planning estimate (unverified): Qwen 3 4B Q4 on a 3080 generates tens of tokens per
+second. At ~50 synthesis candidates and ~5 promotions a day, the LLM is busy for minutes
+a day, not hours. The LLM never runs on the capture or retrieval path.
 
 ## Request rate limits vs capacity
 
-Kong rate limits are coarse (300/min/IP). Core per-token limits from [[07-interfaces/canonical-api#rate-limits]]:
+Core rate-limits **write-method** requests (POST, PUT, PATCH, DELETE) per token, per
+minute (`src/musubi/api/rate_limit.py`):
 
-- 100 captures/min/token.
-- 500 retrievals/min/token.
+| Bucket | Limit / min |
+|---|---|
+| `capture` (episodic and curated writes) | 100 |
+| `thought` | 100 |
+| `artifact-upload` | 20 |
+| `batch-write` | 50 |
+| `transition` | 50 |
+| `default` (everything else, including `POST /v1/retrieve` and `/v1/context`) | 200 |
 
-At current GPU capacity, we could saturate with ~3 simultaneous clients at full throttle. The rate limits are intentionally lower than physical capacity — they're there to protect against runaway clients, not to manage capacity per se.
+Operator-scoped tokens get 10x. GET requests are not rate-limited. Any edge rate limit in
+your reverse proxy is your own setting. The limits are there to stop runaway clients, not
+to manage capacity.
 
 ## Cost of running
 
-v1 is self-hosted on owned hardware. Marginal cost:
-
-- Electricity: ~$15-30/month for the box.
-- Internet: shared with other traffic; negligible increment.
-- Backup storage (off-site): optional; $5-10/month if using B2.
-- Domain + cert: ~$15/year.
-
-Total: < $50/month. Versus a SaaS equivalent (vector DB + LLM API + storage) at similar throughput: $200-500/month. Economics favor self-hosting here.
+Self-hosted on owned hardware, the marginal costs are electricity, off-host backup
+storage, and a domain and certificate if you expose Core. Compare against a hosted
+vector DB plus LLM API plus storage at similar throughput.
 
 ## Forecasting
 
-Use the dashboard's growth curves. If disk growth is tracking above projection by a factor of 2 for > 2 weeks → alert → investigate. Common causes:
+If disk growth runs above projection by 2x for more than two weeks, investigate. Common
+causes:
 
-- Chatty presence capturing too aggressively.
-- Chunker output blown up (misconfigured `max_tokens`).
-- Artifacts too large (enforce per-upload cap).
+- A presence capturing too aggressively.
+- Chunker output larger than expected.
+- Very large artifact uploads.
 
 ## Test contract
 
-**Module under test:** capacity math + thresholds
+**Module under test:** capacity math and thresholds.
 
-1. `test_storage_growth_rate_projection_matches_observed` (ongoing)
-2. `test_retrieve_p95_stays_under_400ms_at_150rps` (load test)
-3. `test_capture_p95_stays_under_300ms_at_50rps` (load test)
-4. `test_synthesis_completes_under_1h_on_50_candidates` (perf)
-5. `test_gpu_vram_alert_fires_at_9500mb`
+No automated test covers this page. Load and growth tests (retrieval p95 at 150 req/s,
+capture p95 at 50 req/s, synthesis time on 50 candidates, storage growth) are planned,
+not implemented.

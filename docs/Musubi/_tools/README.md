@@ -1,10 +1,10 @@
 ---
-title: "`_tools/` — validation and notifications"
+title: "`_tools/`: docs health check"
 section: _tools
 type: index
 status: complete
 tags: [type/index, status/complete, tooling]
-updated: 2026-09-30
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: true
 ---

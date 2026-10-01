@@ -4,7 +4,7 @@ section: 01-overview
 tags: [overview, scope, section/overview, status/complete, type/overview]
 type: overview
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[01-overview/index]]"
 reviewed: false
 ---
@@ -20,7 +20,7 @@ Musubi is built on Qdrant and uses it extensively, but Musubi is not "a wrapper 
 
 Musubi does not execute agent loops. It does not own the LLM. It does not route messages between agents (that is a role for LiveKit, an MCP host, or a framework like Letta). Musubi serves memory and ingests memory. That is all.
 
-The existing `thoughts` subsystem in the POC is a narrow exception — a durable inter-presence message channel — and will be preserved but remains scoped to *durable* messages, not real-time routing.
+The thoughts plane is a narrow exception: a durable inter-presence message channel, scoped to *durable* messages, not real-time routing. See [[04-data-model/thoughts]].
 
 ## Not a multi-org SaaS
 
@@ -28,7 +28,7 @@ Auth, isolation, and ops are designed for a small team sharing one host. Attempt
 
 ## Not a document management system
 
-Artifacts are ingested by reference. Musubi stores metadata and chunk embeddings; the canonical file lives in the vault's artifact folder. If you want editing, versioning with diffs, or complex permissioning on documents, use git + your editor; Musubi tracks what you tell it.
+Artifacts are uploaded once and kept as immutable blobs. Musubi stores the bytes under `ARTIFACT_BLOB_PATH`, plus metadata and chunk embeddings in Qdrant. If you want editing, versioning with diffs, or complex permissioning on documents, use git + your editor; Musubi tracks what you tell it.
 
 ## Not a knowledge graph database
 
@@ -36,17 +36,17 @@ We considered a KG-first architecture (Graphiti model) and rejected it for v1. S
 
 ## Not a chat history store
 
-The POC's `thought_history` is preserved but is *not* the canonical record of every chat message. Full chat history lives in the adapter (Claude's conversation memory, LiveKit's session transcript, Discord's channel) or as an artifact (a session export). Musubi stores episodic memories that *distill* conversations, not verbatim logs.
+Thought history (`POST /v1/thoughts/history`) is *not* the canonical record of every chat message. Full chat history lives in the adapter (Claude's conversation memory, LiveKit's session transcript, Discord's channel) or as an artifact (a session export). Musubi stores episodic memories that *distill* conversations, not verbatim logs.
 
 If you want verbatim logs, the artifact plane is the right home — ingest the session transcript as an artifact and let the episodic plane reference chunks of it.
 
 ## Not a real-time streaming system
 
-Ingestion is request-response. No Kafka. No streaming update feed to clients. If a client needs to know "what just changed," it polls or uses the (optional, post-v1) change-feed endpoint. This is deliberate: it keeps the system simple to reason about.
+Ingestion is request-response. No Kafka. No feed of memory changes to clients. If a client needs to know "what just changed," it polls (for example `GET /v1/lifecycle/events`). The only streams are thoughts (`/v1/thoughts/stream`) and streamed retrieval results (`/v1/retrieve/stream`). This is deliberate: it keeps the system simple to reason about.
 
 ## Not a replacement for Obsidian
 
-The vault is the user's primary surface for curated knowledge. Musubi does not build a competing viewer or editor. A future `musubi-studio` web UI may be built for lifecycle/audit browsing, but editing curated knowledge remains Obsidian-first.
+The vault is the user's primary surface for curated knowledge. Musubi does not build a competing viewer or editor. A future web UI may be built for lifecycle/audit browsing, but editing curated knowledge remains Obsidian-first.
 
 ## Not an evaluation harness
 
