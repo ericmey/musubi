@@ -1,168 +1,100 @@
+# Public Musubi stack. The operator supplies inference endpoints in .env.
+# For local GPU inference, also use deploy/docker/compose.local-gpu.yml.
 name: musubi
 
-x-logging: &default-logging
-  driver: journald
-  options:
-    tag: "musubi.{{.Name}}"
-
-x-gpu: &gpu
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - capabilities: [gpu]
-
-x-health-defaults: &health-defaults
-  interval: 30s
-  timeout: 5s
-  retries: 5
-
-networks:
-  musubi-net:
-    name: musubi-net
-
-volumes:
-  tei-models:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/musubi/tei-models
-  ollama-models:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/musubi/ollama-models
+x-core-image: &core-image ghcr.io/sourceblender/musubi-core@sha256:887a4b8af778da49c7795fbfe1332465521de37b436caa9f94462b9d43e10af9
+x-core-env: &core-env
+  QDRANT_HOST: qdrant
+  QDRANT_PORT: "6333"
+  QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+  JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+  TEI_DENSE_URL: ${TEI_DENSE_URL:?Set TEI_DENSE_URL in .env}
+  TEI_SPARSE_URL: ${TEI_SPARSE_URL:?Set TEI_SPARSE_URL in .env}
+  TEI_RERANKER_URL: ${TEI_RERANKER_URL:?Set TEI_RERANKER_URL in .env}
+  OLLAMA_URL: ${OLLAMA_URL:?Set OLLAMA_URL in .env}
+  MUSUBI_ALLOW_PLAINTEXT: "true"
+  BRAIN_PORT: "8100"
+  VAULT_PATH: /var/lib/musubi/vault
+  ARTIFACT_BLOB_PATH: /var/lib/musubi/artifact-blobs
+  LIFECYCLE_SQLITE_PATH: /var/lib/musubi/lifecycle/work.sqlite
+  LOG_DIR: /var/log/musubi
 
 services:
+  volume-init:
+    # The published Core image runs as UID 999/GID 985. New named volumes
+    # start root-owned, so grant that user the volume roots before Core boots.
+    image: *core-image
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown 999:985 /var/lib/musubi/vault /var/lib/musubi/artifact-blobs /var/lib/musubi/lifecycle /var/log/musubi"]
+    volumes:
+      - vault:/var/lib/musubi/vault
+      - artifact-blobs:/var/lib/musubi/artifact-blobs
+      - lifecycle:/var/lib/musubi/lifecycle
+      - logs:/var/log/musubi
+    restart: "no"
+
   qdrant:
-    image: qdrant/qdrant:v1.15.0@sha256:1111111111111111111111111111111111111111111111111111111111111111
-    volumes:
-      - /var/lib/musubi/qdrant-storage:/qdrant/storage
-    networks: [musubi-net]
-    expose:
-      - "6333"
-      - "6334"
-    healthcheck:
-      <<: *health-defaults
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      start_period: 60s
-    restart: unless-stopped
-    logging: *default-logging
-
-  tei-dense:
-    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:2222222222222222222222222222222222222222222222222222222222222222
-    command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
-    volumes:
-      - tei-models:/data
-    networks: [musubi-net]
-    healthcheck:
-      <<: *health-defaults
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      start_period: 120s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  tei-sparse:
-    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:2222222222222222222222222222222222222222222222222222222222222222
-    command: --model-id naver/splade-v3 --pooling splade --max-batch-tokens 16384
-    volumes:
-      - tei-models:/data
-    networks: [musubi-net]
-    healthcheck:
-      <<: *health-defaults
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      start_period: 120s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  tei-reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:2222222222222222222222222222222222222222222222222222222222222222
-    command: --model-id BAAI/bge-reranker-v2-m3 --pooling rerank
-    volumes:
-      - tei-models:/data
-    networks: [musubi-net]
-    healthcheck:
-      <<: *health-defaults
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      start_period: 120s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  ollama:
-    image: ollama/ollama:0.4.0-cuda@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    image: qdrant/qdrant:v1.17.1
     environment:
-      OLLAMA_KEEP_ALIVE: "24h"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_NUM_PARALLEL: "1"
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
     volumes:
-      - ollama-models:/root/.ollama
-    networks: [musubi-net]
+      - qdrant-storage:/qdrant/storage
+      - qdrant-snapshots:/qdrant/snapshots
     healthcheck:
-      <<: *health-defaults
-      test: ["CMD-SHELL", "ollama list | grep -q qwen3:4b"]
-      timeout: 10s
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/6333"]
+      interval: 10s
+      timeout: 5s
       retries: 10
-      start_period: 300s
-    <<: *gpu
+      start_period: 30s
     restart: unless-stopped
-    logging: *default-logging
 
   core:
-    image: ghcr.io/ericmey/musubi-core:v1.0.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
-    env_file:
-      - path: /etc/musubi/.env.production
-        required: false
+    image: *core-image
+    env_file: ${MUSUBI_ENV_FILE:-.env}
+    environment: *core-env
     volumes:
-      - /var/lib/musubi/vault:/var/lib/musubi/vault
-      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
-      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
-      - /var/log/musubi:/var/log/musubi
-    networks: [musubi-net]
+      - vault:/var/lib/musubi/vault
+      - artifact-blobs:/var/lib/musubi/artifact-blobs
+      - lifecycle:/var/lib/musubi/lifecycle
+      - logs:/var/log/musubi
     ports:
-      - "127.0.0.1:8100:8100"
+      - "${MUSUBI_CORE_BIND:-127.0.0.1}:${MUSUBI_CORE_PORT:-8100}:8100"
     depends_on:
+      volume-init: {condition: service_completed_successfully}
       qdrant: {condition: service_healthy}
-      tei-dense: {condition: service_healthy}
-      tei-sparse: {condition: service_healthy}
-      tei-reranker: {condition: service_healthy}
-      ollama: {condition: service_healthy}
     healthcheck:
-      <<: *health-defaults
-      test: ["CMD", "curl", "-f", "http://localhost:8100/v1/ops/health"]
-      start_period: 30s
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8100/v1/ops/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     restart: unless-stopped
-    logging: *default-logging
 
-  # Lifecycle worker. Shares the core image — same code, different entrypoint.
-  # Drives the lifecycle job schedule and exposes /metrics on :8101 for the
-  # Prometheus scrape (see docs/Musubi/06-ingestion/lifecycle-engine.md
-  # § Job registry). Shares the core+worker DIR unit /var/lib/musubi/lifecycle
-  # (parity with the ansible template).
   lifecycle-worker:
-    image: ghcr.io/ericmey/musubi-core:v1.0.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
-    env_file:
-      - path: /etc/musubi/.env.production
-        required: false
+    image: *core-image
+    env_file: ${MUSUBI_ENV_FILE:-.env}
+    environment: *core-env
     command: ["python", "-m", "musubi.lifecycle.runner"]
     volumes:
-      - /var/lib/musubi/vault:/var/lib/musubi/vault
-      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
-      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
-      - /var/log/musubi:/var/log/musubi
-    networks: [musubi-net]
-    expose:
-      - "8101"
+      - vault:/var/lib/musubi/vault
+      - artifact-blobs:/var/lib/musubi/artifact-blobs
+      - lifecycle:/var/lib/musubi/lifecycle
+      - logs:/var/log/musubi
     depends_on:
-      qdrant: {condition: service_healthy}
-      ollama: {condition: service_healthy}
+      core: {condition: service_healthy}
     healthcheck:
-      <<: *health-defaults
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; b=urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).read().decode(); v=[l.split()[-1] for l in b.splitlines() if l.startswith('musubi_lifecycle_coordinator_ready ')]; sys.exit(0 if v and float(v[-1]) == 1.0 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 30s
     restart: unless-stopped
-    logging: *default-logging
+
+volumes:
+  qdrant-storage:
+  qdrant-snapshots:
+  vault:
+  artifact-blobs:
+  lifecycle:
+  logs:

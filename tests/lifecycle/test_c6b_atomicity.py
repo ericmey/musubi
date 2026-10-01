@@ -9678,9 +9678,12 @@ def _env_lifecycle_path(text: str) -> str | None:
 
 
 def _compose_lifecycle_host_path(text: str) -> str | None:
-    """The host side of the lifecycle bind mount (``<host>:<container>``) in a compose/j2 file."""
+    """Canonical lifecycle directory from a bind or named-volume Compose mount."""
     m = re.search(r"(/var/lib/musubi/lifecycle[\w./-]*)\s*:", text)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    named = re.search(r"(?:^|\s)lifecycle:(/var/lib/musubi/lifecycle[\w./-]*)", text)
+    return named.group(1) if named else None
 
 
 def _first_lifecycle_sqlite(text: str) -> str | None:
@@ -9915,7 +9918,7 @@ def test_p0c_drift_root_compose_dir_mount_and_worker() -> None:
     worker = _has_lifecycle_worker_service(text)
     if not (_resolves_canonical_mount(mount) and worker):
         raise DefectStillPresent(
-            "root compose docker-compose.yml does not resolve the canonical DIR storage: lifecycle host "
+            "root compose docker-compose.yml does not resolve the canonical DIR storage: lifecycle "
             f"mount={mount!r} (needs EXACTLY {_CANONICAL_DIR_MOUNT!r}), "
             f"lifecycle-worker service present={worker}. §E: root compose must mount the DIR and run a "
             "lifecycle-worker before coordinator source lands."
