@@ -1,40 +1,53 @@
 ---
 title: Redaction
 section: 10-security
-tags: [pii, privacy, redaction, section/security, security, status/complete, type/spec]
+tags: [pii, privacy, redaction, section/security, security, status/research-needed, type/spec]
 type: spec
-status: complete
-updated: 2026-04-17
+status: research-needed
+updated: 2026-10-01
 up: "[[10-security/index]]"
 reviewed: false
 implements: "docs/Musubi/10-security/"
 ---
 # Redaction
 
-Optional PII / secret redaction for captured content. Off by default; enabled per-adapter or per-namespace.
+PII and secret redaction for captured content.
 
-## When to use
+## What exists today
 
-Different presences capture different shapes of content. Sometimes what we capture contains sensitive strings that we'd rather not persist:
+**Core has no redaction pipeline.** `POST /v1/episodic` and the other capture
+routes store content as the client sends it. If content must be scrubbed, the
+client has to do it before capture.
 
-- LiveKit voice session — user dictates a credit card number aloud.
-- OpenClaw captures a logged-in page that leaks a session cookie in the DOM.
-- A coding session with Claude Code includes a `.env` file fragment.
+The one implemented redactor lives in the external
+[`musubi-livekit`](https://github.com/sourceblender/musubi-livekit) adapter: an
+opt-in `redact_pii` pass (enabled with `redact_pii=True` in its adapter config)
+that replaces email addresses, US SSN-shaped numbers and 10-digit phone numbers in
+voice transcripts with `[REDACTED]` before capture. Core keeps a compatibility
+import at `src/musubi/adapters/livekit/redaction.py`, which only works when
+`musubi-livekit` is installed. See that repository for its configuration.
 
-Redaction scrubs these patterns before the content lands in Qdrant or vault.
+Separately, Core scrubs JWT-shaped strings from its own **log messages**
+(`src/musubi/observability/logging_setup.py`). That protects logs, not stored
+content.
 
-## Default: off
+The rest of this page is a **proposal, not implemented**.
 
-Most captured content is intentionally personal. We don't want to mangle it. Redaction is opt-in:
+## Why it is off by default
 
-```env
-MUSUBI_LIVEKIT_REDACTION=on    # LiveKit adapter
-MUSUBI_CAPTURE_REDACTION=off   # default
-```
+Different presences capture different shapes of content, and sometimes that
+content contains strings we would rather not persist:
 
-## What gets redacted
+- a voice session where someone reads a card number aloud;
+- a browser capture of a page that shows a session token;
+- a coding session that includes an `.env` fragment.
 
-Pattern categories (configurable per-deploy):
+But captured content is free-form, and mangling it hurts recall. Redaction should
+stay opt-in, per adapter or per namespace.
+
+## Proposed: Core redaction pipeline (planned, not implemented)
+
+Pattern categories, configurable per deployment:
 
 | Category | Pattern | Replacement |
 |---|---|---|
@@ -48,95 +61,46 @@ Pattern categories (configurable per-deploy):
 | JWT tokens | `eyJ[a-zA-Z0-9._-]{20,}` | `[redacted-jwt]` |
 | Private key headers | `-----BEGIN ... PRIVATE KEY-----` | (drop blob) |
 
-More categories addable in `musubi/redaction/patterns.py`.
-
-## When redaction runs
-
-In the ingestion pipeline, **before** embedding:
+It would run in the capture path **before** embedding, so the original is never
+persisted:
 
 ```
 capture → pydantic validation → [redaction] → dedup probe → encode → write
 ```
 
-The original content is never persisted — we redact on the way in. This is deliberate; re-redacting derived data is harder.
+Per-namespace policy would choose the categories and the action on a match:
+`redact` (replace and store) or `reject` (refuse the capture with a `BAD_REQUEST`
+error the adapter can show to the user). Some namespaces (a coding session the
+developer authored) would leave it off.
 
-## Exceptions per namespace
+Each redaction would emit a structured log event (namespace, categories matched,
+characters redacted, object id; never the original text) so over-redaction can be
+spotted and a noisy category switched off.
 
-Some namespaces shouldn't ever hold even-redacted sensitive strings. Config:
+### Domain exclusion
 
-```yaml
-# /etc/musubi/redaction-policy.yaml
-namespaces:
-  "alex/livekit-voice/episodic":
-    enabled: true
-    categories: [credit_cards, api_keys, jwt, private_key]
-    on_match: redact           # or: reject
+For browser adapters, excluding whole domains (banking, health, sign-in pages) at
+capture time beats redaction: the content never reaches Musubi. That belongs in the
+adapter's own settings; see the adapter's repository.
 
-  "alex/openclaw/episodic":
-    enabled: true
-    categories: [api_keys, jwt]
-    on_match: redact
+### LLM-pass redaction
 
-  "alex/claude-code/episodic":
-    enabled: false             # trust; coding session is developer-authored
-```
-
-`on_match: reject` is strict — the capture call returns a structured error (`BAD_REQUEST` with `reason: sensitive_content_rejected`). Adapter can surface to user.
-
-## Domain exclusion (capture-time)
-
-Per-adapter, a list of URLs or domains where capture is disabled entirely. For OpenClaw:
-
-```yaml
-# OpenClaw extension settings.json
-excluded_domains:
-  - "*.bank.com"
-  - "*.healthcare.gov"
-  - "accounts.google.com"
-  - "*.banking.example.com"
-```
-
-If the user highlights text on an excluded domain, the "Remember this" option is disabled. If they try the API anyway, it refuses.
-
-Full exclusion beats redaction for banking/healthcare/auth domains — we don't want the content hitting our pipeline at all.
-
-## LLM-pass redaction
-
-Optional second pass: a small LLM call to detect PII that regex misses (names, addresses, rare patterns). Off by default (costs GPU time). When on:
+An optional second pass with the configured local LLM to catch PII that regex
+misses (names, addresses). It costs GPU time per capture, so it would be enabled
+per namespace, for voice or open-ended web captures only:
 
 ```
 capture → regex redact → llm redact → store
 ```
 
-Cost: ~100ms per capture (local Qwen2.5 on 3080). Not worth it for most captures; enable per-namespace for voice or open-ended web captures.
+### Keeping the original
 
-## Keep-the-original option
-
-For some workflows, we want the original preserved in a secure subset while the redacted version is indexed. Not supported in v1 — adds complexity. Instead: use domain exclusion or `on_match: reject`.
-
-## Export + redaction
-
-When the user exports ("give me everything you have"), the export carries **only** the stored (post-redaction) content. There's no shadow copy. Redacted content stays redacted; user can't recover the original. This is by design.
-
-## False positives
-
-Redaction is pattern-based and will sometimes over-redact — e.g., a 16-digit test string that passes Luhn. The system logs redaction events:
-
-```json
-{
-  "event": "capture.redacted",
-  "namespace": "...",
-  "categories_matched": ["credit_cards"],
-  "chars_redacted": 16,
-  "object_id": "..."
-}
-```
-
-User can disable categories that cause too many false positives on their workload.
+Not planned. Preserving an unredacted copy beside the redacted one adds a second,
+more sensitive store. Use domain exclusion or `reject` instead.
 
 ## Test Contract
 
-**Module under test:** `musubi/redaction/*`
+**Module under test:** the proposed Core redaction module (does not exist yet)
 
 1. `test_credit_card_luhn_redacted`
 2. `test_non_luhn_16_digit_not_redacted`
@@ -147,4 +111,3 @@ User can disable categories that cause too many false positives on their workloa
 7. `test_redaction_runs_before_embedding`
 8. `test_redacted_event_logged_with_categories`
 9. `test_redaction_does_not_leak_original_in_logs`
-10. `test_domain_exclusion_refuses_capture_on_excluded_host`

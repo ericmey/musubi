@@ -1,261 +1,232 @@
 ---
 title: Auth
 section: 10-security
-tags: [auth, oauth, scopes, section/security, security, status/complete, tokens, type/spec]
+tags: [auth, jwt, scopes, section/security, security, status/complete, tokens, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[10-security/index]]"
 reviewed: false
-implements: "docs/Musubi/10-security/"
+implements: ["src/musubi/auth/", "tests/auth/"]
 ---
 # Auth
 
-Authentication + authorization for Musubi. OAuth 2.1 for human/adapter flows; JWT bearer tokens validated at the edge.
+Authentication and authorization for Musubi Core. Every protected call carries a
+JWT bearer token. Core validates the token itself and then checks its scopes
+against the namespace the call touches. The code is `src/musubi/auth/tokens.py`
+(validation), `src/musubi/auth/scopes.py` (scope checks and audit events) and
+`src/musubi/auth/middleware.py` (the request helper the routes call).
 
-> **v1.0 convention note:** the token and scope examples on this page use the pre-v1.0 `admin/<agent>` shape (human-as-tenant). As of v1.0, namespaces are agent-as-tenant — `alex/voice`, `sam/discord`, etc. — per [[13-decisions/0030-agent-as-tenant|ADR 0030]]. The validation pipeline, scope-glob matching, and test contract on this page are still correct; only the example strings need a sweep. Read [[03-system-design/namespaces]] for the authoritative shape.
+Core does not issue tokens. There is no login flow, no token endpoint, no refresh
+token and no per-token revocation. Whoever holds the signing key (or runs the
+identity provider) mints tokens; Core only verifies them.
 
 ## Model
 
-Single authority. Every call carries a bearer token; every token has a scope list; every scope names a namespace glob + access level.
-
 ```
-┌─────────┐                     ┌──────────────┐                  ┌──────────────┐
-│ Adapter │───── 1. PKCE ─────▶ │   Auth       │                  │   Kong      │
-│  (MCP,  │                     │  Authority   │                  │  (musubi     │
-│ LiveKit,│◀─── 2. token ────── │  /oauth/*    │                  │   edge)      │
-│ Openclaw│                     └──────────────┘                  └──────────────┘
-└─────────┘                                                              │
-    │                                                                    │
-    └──── 3. Bearer <token> ────────────────────────────────────────────▶│
-                                                                         │ 4. JWT validate
-                                                                         ▼
-                                                                   ┌──────────────┐
-                                                                   │  Musubi Core │
-                                                                   │  scope check │
-                                                                   └──────────────┘
+┌──────────────┐   Authorization: Bearer <jwt>   ┌───────────────────────────┐
+│ Agent / SDK  │ ──────────────────────────────▶ │ Musubi Core               │
+│ / plugin     │   (optionally through an        │ 1. validate signature +   │
+└──────────────┘    operator-provided TLS        │    claims                 │
+                    reverse proxy)               │ 2. check scope against    │
+                                                 │    the requested namespace│
+                                                 └───────────────────────────┘
 ```
 
-1. Adapter starts PKCE flow.
-2. User logs in at the authority, approves scopes, token issued.
-3. Adapter calls Musubi with `Authorization: Bearer <jwt>`.
-4. Kong (or Core — implementation detail) validates JWT signature + exp. Core checks scope against the requested namespace.
+1. The client sends `Authorization: Bearer <jwt>`.
+2. Core verifies the signature and the claims (below). Failure is a 401.
+3. The route checks the token's scopes against the namespace (or the `operator`
+   requirement). Failure is a 403.
 
-## Token format
+## Signing: HS256 or RS256
 
-JWT, RS256 signed:
+Core accepts exactly two algorithms, chosen by the token's `alg` header
+(`tokens.py:19`, `tokens.py:109-122`). Anything else is rejected.
+
+- **HS256 (default).** The token is signed with the shared secret in the
+  `JWT_SIGNING_KEY` environment variable (`settings.py:277`). Anyone who holds
+  that key can mint tokens, so treat it like a root credential.
+- **RS256 via the issuer's JWKS.** Core fetches
+  `<OAUTH_AUTHORITY>/.well-known/jwks.json` (`tokens.py:252-253`) and picks the key
+  whose `kid` matches the token header. A token without a `kid` header is rejected
+  (`tokens.py:130-132`). Core does not cache the JWKS: it fetches it on each
+  validation, with a 5-second timeout. Core does not publish a JWKS of its own.
+
+Both settings are required at startup. `OAUTH_AUTHORITY` is also the expected
+issuer for HS256 tokens.
+
+## Token claims
 
 ```json
 {
-  "iss": "https://auth.internal.example.com",
-  "sub": "admin-claude-code",          // principal id
+  "iss": "https://auth.example.test",
   "aud": "musubi",
-  "iat": 1744892400,
-  "exp": 1744896000,                   // 1h
-  "jti": "abc-123",
-  "scope": [
-    "admin/claude-code:r",
-    "admin/claude-code/*:rw",
-    "admin/_shared/curated:r",
-    "admin/_shared/artifact:rw"
-  ],
-  "presence": "admin/claude-code"
+  "sub": "alex/claude-code",
+  "presence": "alex/claude-code",
+  "scope": "alex/claude-code:r alex/claude-code/*:rw alex/shared/curated:r",
+  "iat": 1790000000,
+  "exp": 1790003600
 }
 ```
 
-Key fields:
+| claim | rule | source |
+|---|---|---|
+| `iss` | required; must equal `OAUTH_AUTHORITY` without a trailing `/` | `tokens.py:89`, `tokens.py:248-249` |
+| `aud` | required; the string `"musubi"` | `tokens.py:18`, `tokens.py:175` |
+| `presence` | required; a concrete `tenant/name` identity: exactly two non-empty segments, no `*` | `tokens.py:217-223` |
+| `sub` | required; must equal `presence` | `tokens.py:225-226` |
+| `scope` | required; a space-separated string or a JSON list of strings | `tokens.py:202-207` |
+| `exp`, `nbf`, `iat` | checked if present (PyJWT). Core does not require `exp`, but a token without it never expires, so always set one | `tokens.py:84-92` |
+| `jti` | optional; must be a string if present. Core does not check it against anything | `tokens.py:179-180` |
 
-- `sub` — principal ID (per-adapter install).
-- `scope` — array of namespace-scope entries (see below).
-- `presence` — the presence this token speaks for; used for thought routing + default namespace resolution.
-- `exp` — 1-hour lifetime.
-- `jti` — unique; used for replay defense if we add a nonce store later.
+One more cross-check: every namespace scope that names a concrete tenant must name
+the **same tenant as `presence`**. A token for `alex/claude-code` that carries
+`sam/discord/episodic:r` is not a narrower token, it is an invalid one: the whole
+token is rejected with a 401 (`tokens.py:228-232`). Wildcard-tenant scopes
+(`*/...`, `**`) and `operator` are exempt from this check (`tokens.py:236-245`).
 
 ## Scope syntax
 
 ```
-<namespace-glob>:<access-level>
+<namespace-glob>:<access>
 ```
 
-Namespace glob:
+Access is `r` (read), `w` (write) or `rw` (both). A scope without a `:` or with any
+other access string never matches a namespace (`scopes.py:211-217`).
 
-- `admin/claude-code/episodic` — exact.
-- `admin/_shared/curated` — shared scope.
-- `admin/*/episodic` — all of the admin's episodic (rare; operator scope).
-- `**` — recursive read across all namespaces. Recursive namespace scope is
-  read-only by policy; `**:rw` does not grant write access. Use explicit
-  segment wildcards for scoped writes, or `operator` for admin/migration
-  actions.
+The namespace glob is matched segment by segment (`scopes.py:220-232`):
 
-Access level:
+- A literal segment must be equal.
+- `*` matches exactly one segment.
+- **The glob must have the same number of segments as the namespace.** `alex/*:rw`
+  matches the 2-segment `alex/voice` and nothing else; it does not cover
+  `alex/voice/episodic`. Use `alex/*/*:rw` for every plane of every Alex presence.
+- `**` on its own matches every namespace, **for reads only**. `**:rw` and `**:w`
+  never grant write access (`scopes.py:205-206`). Use explicit segment wildcards for
+  scoped writes.
 
-- `r` — read (retrieve, get).
-- `w` — write (capture, patch).
-- `rw` — read + write.
+Examples (namespaces are `tenant/presence/plane`; see [[03-system-design/namespaces]]):
 
-Non-namespace scopes (special):
+| scope | grants |
+|---|---|
+| `alex/voice/episodic:rw` | read and write one namespace |
+| `alex/*/episodic:r` | read Alex's episodic plane on every presence |
+| `alex/voice/*:rw` | read and write every plane of `alex/voice` |
+| `alex/voice:r` | 2-segment reads: cross-plane retrieve and the thoughts stream for `alex/voice` |
+| `alex/shared/curated:r` | read Alex's shared curated knowledge |
+| `*/*/episodic:r` | read every agent's episodic plane (a cross-tenant survey scope) |
+| `**:r` | read everything |
 
-- `operator` — admin endpoints.
+Some endpoints take a 2-segment namespace, so a presence token typically carries
+both `<tenant>/<presence>:r` and `<tenant>/<presence>/*:rw`. The per-endpoint table
+is in [[07-interfaces/canonical-api]] (Scope by endpoint).
 
-**Thoughts scopes** — there is **no** separate `thoughts:send` / `thoughts:check:<presence>` / `thoughts:history:<presence>` keyword scope. Every thoughts endpoint (send, check, read, history, stream) checks against the standard namespace-scope form. See [[07-interfaces/canonical-api#scope-by-endpoint]] for the full table; the short version:
+### The `operator` scope
 
-- `POST /v1/thoughts/send` → 3-segment `<tenant>/<presence>/thought:w`
-- `POST /v1/thoughts/read` → 3-segment `<tenant>/<presence>/thought:w` (marking read mutates state)
-- `POST /v1/thoughts/check` / `/history` → 3-segment `<tenant>/<presence>/thought:r`
-- `GET /v1/thoughts/stream` → 2-segment `<tenant>/<presence>:r`
+The literal scope `operator` is required by the operator endpoints
+(`scopes.py:180-196`), by hard delete (`DELETE /v1/episodic/{id}?hard=true`) and by
+artifact purge. Operator tokens also get a 10x multiplier on the per-token write
+rate limits (`src/musubi/api/rate_limit.py`).
 
-A token with `<tenant>/<presence>:r` + `<tenant>/<presence>/*:rw` covers every thoughts flow for that presence.
+An operator token is still an ordinary token: it needs a concrete `presence`, a
+matching `sub`, and the claims above. There is no special command or flow for it.
+Mint it the same way as an agent token, add `operator` to its scope, give it a
+short `exp`, and do not hand it to agents.
 
-## Signing key
+### Thoughts
 
-- Algorithm: RS256 (2048-bit RSA key).
-- Private key lives at `/etc/musubi/jwt-signing-key.pem` (mode 0400, owned by `musubi` user).
-- Public key embedded in Core's config; also published at `/.well-known/jwks.json` (read-only) for adapters that support JWKS discovery.
+There is no separate `thoughts:*` keyword scope. Every thoughts endpoint checks the
+standard namespace form:
 
-Rotation procedure in [[09-operations/runbooks#rotate-tokens]].
-
-## Auth authority
-
-Two options:
-
-### Self-hosted (default)
-
-A small FastAPI service (`musubi-auth`) runs on the same box:
-
-- OAuth 2.1 endpoints: `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`, `/oauth/introspect`.
-- User store: single admin user, password hashed with Argon2id.
-- Client registry: YAML file (`/etc/musubi/oauth-clients.yaml`) listing registered adapters + allowed redirect URIs + default scopes.
-- Stores: sqlite `auth.sqlite` for PKCE pending flows + refresh tokens.
-
-Enough for a small team. Not hardened for anonymous internet use.
-
-### External IdP (optional)
-
-Anything OIDC-compatible (Authelia, Keycloak, Auth0). Musubi verifies signature via JWKS URL; scopes come from the IdP.
-
-## Client registry
-
-```yaml
-# /etc/musubi/oauth-clients.yaml
-clients:
-  - client_id: musubi-mcp
-    redirect_uris: ["chrome-extension://<ext-id>/oauth/callback",
-                    "http://localhost:<port>/oauth/callback"]
-    allowed_scopes:
-      - admin/claude-code:r
-      - admin/claude-code/*:rw
-      - admin/_shared/curated:r
-    public: true    # PKCE only, no client secret
-
-  - client_id: musubi-livekit
-    redirect_uris: ["http://localhost:8200/oauth/callback"]
-    allowed_scopes:
-      - admin/livekit-voice:r
-      - admin/livekit-voice/*:rw
-      - admin/_shared/curated:r
-      - admin/_shared/concept:r
-      - admin/_shared/artifact:rw
-    public: true
-
-  - client_id: musubi-openclaw
-    redirect_uris: ["chrome-extension://<ext-id>/oauth/callback"]
-    allowed_scopes:
-      - admin/openclaw:r
-      - admin/openclaw/*:rw
-      - admin/_shared/curated:r
-    public: true
-```
-
-No client secrets — PKCE is mandatory.
+- `POST /v1/thoughts/send` and `POST /v1/thoughts/read` need `w` on the 3-segment
+  `<tenant>/<presence>/thought` namespace (marking read mutates state).
+- `POST /v1/thoughts/check` and `POST /v1/thoughts/history` need `r` on that
+  namespace.
+- `GET /v1/thoughts/stream` needs `r` on the 2-segment `<tenant>/<presence>`.
 
 ## Validation pipeline
 
-On each request Core:
+On each protected request Core:
 
-1. Parse `Authorization: Bearer <jwt>`. 401 if missing.
-2. Verify signature with public key. 401 on mismatch.
-3. Check `iss`, `aud`, `exp`, `nbf`. 401 on mismatch / expired.
-4. Check `jti` against revocation list (cached from auth authority). 401 if revoked.
-5. Extract `scope` + `presence`.
-6. Per-endpoint scope check:
-   - Capture → `<namespace>:w`.
-   - Retrieve → `<namespace>:r` (or read any of the planes named in the query).
-   - Thought send → `<tenant>/<presence>/thought:w` + recipient must be a known presence.
-   - Thought read (mark as read) → `<tenant>/<presence>/thought:w` (state mutation).
-   - Thought check / history → `<tenant>/<presence>/thought:r`.
-   - Thought stream (SSE) → `<tenant>/<presence>:r` (2-segment).
-   - Operator endpoint → `operator`.
-7. If check fails, 403 with structured error.
+1. Reads `Authorization: Bearer <jwt>`. Missing or not a bearer: 401
+   `missing bearer token` (`middleware.py:59-67`).
+2. Reads the unverified header and rejects any `alg` other than HS256 or RS256.
+3. Resolves the key: `JWT_SIGNING_KEY` for HS256, the matching JWKS key for RS256.
+4. Verifies the signature and `iss`, `aud`, `exp`, `nbf` (PyJWT). An expired token
+   is a 401 `token expired`; any other failure is a 401 with PyJWT's message.
+5. Requires `sub`, `iss`, `aud`, `presence` and a well-formed `scope`; requires a
+   concrete `presence`, `sub == presence`, and that every concrete-tenant scope
+   names the presence's tenant. Failure: 401.
+6. Checks the route's requirement: a namespace with `r` or `w`, or `operator`.
+   Failure: 403 (`scopes.py:105-141`).
 
-All this is in `musubi/auth/middleware.py`. It's a FastAPI dependency; every route carries it.
+A bearer token is validated even on public routes. If a request **presents** a
+bearer that does not validate, Core answers 401 instead of serving the request
+anonymously (`src/musubi/api/presented_bearer.py`). A request with no
+`Authorization` header still reaches public routes.
 
-### Network-protected read-only ops exceptions
+### Network-protected read-only ops endpoints
 
-`GET /v1/ops/health`, `GET /v1/ops/status`, and `GET /v1/ops/metrics` are the
-bounded exceptions to the bearer-per-route rule. Deployment probes and the local
-Prometheus scraper need them before tenant auth is available. They are protected by
-UFW's trusted-VLAN/Kong-source allow rule and the private Compose network; they are
-not safe for public exposure. Mutating and debug ops still require `operator`.
-
-The enforcement, accepted disclosure, negative proof, owner, and review triggers are
+`GET /v1/ops/health`, `GET /v1/ops/status` and `GET /v1/ops/metrics` do not require
+a token, so that deployment probes and a Prometheus scraper can reach them. They
+are not safe to expose publicly: restrict them at the network layer (a host
+firewall, a private Compose network, or the reverse proxy). Mutating and debug ops
+endpoints still require `operator`. The decision and its accepted disclosure are
 recorded in [[13-decisions/0038-network-protect-read-only-ops-endpoints]].
 
 ## Scope checks on retrieval
 
-Retrieval is trickier — a query might span namespaces (blended). Rule:
+A retrieval can touch several namespaces. `POST /v1/retrieve` resolves the request
+into concrete `(namespace, plane)` targets and runs every target through one
+read-only enforcement seam, `enforce_namespace_policy` (`scopes.py:40-102`):
 
-- The `namespace` in the query names a concrete target or a scoped wildcard.
-- For multi-plane or wildcard retrieval, the token must have read access to each
-  concrete namespace selected by the request. Core checks every expanded target
-  before querying it (see [[05-retrieval/blended]]).
+- **2-segment or multi-plane requests** are expanded to one namespace per plane,
+  and the token needs read scope on **each** of them.
+- **Wildcard namespaces** (`alex/*/episodic`) are expanded against the stored data
+  first; each expanded target must then pass the scope check.
+- For both of these, one unreadable target rejects the whole request with a 403.
+- **No namespace at all** recalls across the caller's own tenant: Core enumerates
+  the stored namespaces for the presence's tenant and keeps only the ones the token
+  can read. In this mode an unreadable namespace is silently dropped (and not
+  logged as a denial) rather than failing the request
+  (`src/musubi/api/routers/retrieve.py`).
 
-For example, a client reading `admin/_shared/curated` and
-`admin/_shared/concept` needs read scope for both. The old
-`admin/_shared/blended` virtual address is not a public retrieval address.
+After authorization, Core removes any namespace on the configured exclusion lists
+(the `default_excluded_namespaces` and `per_agent_excluded_namespaces` settings,
+keyed by `sub` or `presence`). An explicitly requested namespace that is excluded
+returns an empty result, not a 403.
 
-## Refresh tokens
+## Token lifetime, rotation and revocation
 
-- Issued with `offline_access` scope.
-- 30-day lifetime, rotated on each use.
-- Stored server-side (auth authority), encrypted.
-- Revocable via `/oauth/revoke` or the CLI.
+- **Lifetime** is whatever the issuer puts in `exp`. Core imposes no maximum. Keep
+  agent tokens reasonably short and operator tokens short.
+- **No refresh tokens.** A client gets a new token the same way it got the first one.
+- **No per-token revocation.** Core keeps no revocation list and ignores `jti`. To
+  invalidate a leaked HS256 token, rotate `JWT_SIGNING_KEY` and restart Core; every
+  token signed with the old key stops validating at once, so re-mint the ones you
+  still need. With RS256, revoke at the identity provider by removing the key from
+  its JWKS (Core re-reads the JWKS on every validation).
+- **Overlapping keys** work only under RS256: while the JWKS lists both the old and
+  the new `kid`, tokens signed by either validate. HS256 has a single key.
 
-## Sign-out
+## Token passing to clients
 
-Adapter calls `/oauth/revoke` with the refresh token. Authority deletes it. Access tokens still valid until expiry (up to 1h); adapters clear their local copy immediately.
+Clients pass the token in the `MUSUBI_TOKEN` environment variable:
 
-Core learns about revoked tokens via a short-TTL cache refresh (60s) or `/oauth/introspect` for per-request validation (costlier).
+- the in-repo MCP adapter reads `MUSUBI_TOKEN` and `MUSUBI_API_URL`
+  (`src/musubi/adapters/mcp/server.py`);
+- the `musubi` CLI and `musubi-context` read `MUSUBI_TOKEN` or `--token`.
 
-For small-team scope, we lean on short lifetimes rather than active revocation checks.
-
-## Operator tokens
-
-Issued manually by the admin. Scope: `operator`, plus any specific namespaces. Lifetime: 1h like normal. Not auto-refreshed — operators re-auth each session.
-
-The only way to get an operator token is via the CLI:
-
-```
-musubi-auth issue-operator --subject admin --ttl 1h
-```
-
-No web flow.
-
-## Token passing to adapters
-
-Each adapter stores its token differently:
-
-- **MCP (stdio):** `MUSUBI_TOKEN` env var or `~/.musubi/token` file (0600).
-- **MCP (HTTP):** OAuth 2.1 via MCP client's token handler.
-- **LiveKit:** env var `MUSUBI_TOKEN` at worker startup.
-- **OpenClaw:** `chrome.storage.local` (encrypted at rest by Chromium).
+External plugins document their own token storage; see each plugin's repository
+(listed in the [user guide](../../guide/connect.md)).
 
 ## Example: unauthorized capture
 
 ```
 POST /v1/episodic
-Authorization: Bearer <token with scope admin/claude-code/episodic:rw>
+Authorization: Bearer <token for alex/claude-code with scope alex/claude-code/episodic:rw>
 
-{"namespace": "admin/livekit-voice/episodic", "content": "..."}
+{"namespace": "alex/voice/episodic", "content": "..."}
 ```
 
 → 403
@@ -264,44 +235,56 @@ Authorization: Bearer <token with scope admin/claude-code/episodic:rw>
 {
   "error": {
     "code": "FORBIDDEN",
-    "detail": "namespace 'admin/livekit-voice/episodic' not in token scope",
-    "hint": "request a token with scope including this namespace"
+    "detail": "namespace 'alex/voice/episodic' not in token scope for 'w' access",
+    "hint": ""
   }
 }
 ```
+
+The detail string comes from `scopes.py:131`; the envelope is
+`src/musubi/api/errors.py`.
 
 ## Example: thought inbox namespace mismatch
 
 ```
 POST /v1/thoughts/check
-Authorization: Bearer <token with presence=admin/claude-code, scope admin/claude-code/thought:r>
+Authorization: Bearer <token for alex/claude-code with scope alex/claude-code/thought:r>
 
-{"namespace": "admin/livekit-voice/thought", "presence": "livekit-voice"}
+{"namespace": "alex/voice/thought", "presence": "voice"}
 ```
 
-→ 403. The request body's `namespace` is `admin/livekit-voice/thought` but the token's scope only grants `admin/claude-code/thought:r`. The scope matcher compares the requested namespace against the token's scope list verbatim — no implicit presence-of-token check.
+→ 403. The token grants `alex/claude-code/thought:r`; the request names
+`alex/voice/thought`. The matcher compares the requested namespace against the
+token's scopes verbatim. It does not infer anything from the token's own presence.
 
 ## Auditing
 
-Every auth decision is logged:
+Every scope decision emits one structured log record on the `musubi.auth.scopes`
+logger at INFO, with message `auth.allow` or `auth.deny` (`scopes.py:239-257`):
 
 ```json
 {
-  "ts": "...",
-  "event": "auth.allow",
+  "ts": "2026-10-01T10:21:34.512Z",
+  "level": "info",
+  "service": "musubi.auth.scopes",
+  "msg": "auth.allow",
   "request_id": "...",
-  "sub": "admin-claude-code",
-  "endpoint": "POST /v1/episodic",
-  "namespace": "admin/claude-code/episodic",
-  "scope_used": "admin/claude-code/episodic:rw"
+  "event": "auth.allow",
+  "sub": "alex/claude-code",
+  "namespace": "alex/claude-code/episodic",
+  "access": "w",
+  "scope_used": "alex/claude-code/episodic:rw"
 }
 ```
 
-Denials have `event: auth.deny` + `reason: ...`. 30-day retention; operator-only read.
+Denials carry `"event": "auth.deny"`, `"scope_used": null` and a `reason`. Token
+validation failures (the 401 cases) are not audit events. Records go to the
+process's standard log stream; retention and access control are whatever the
+operator's log pipeline provides. See [[10-security/audit]].
 
 ## Test Contract
 
-**Module under test:** `musubi/auth/*`, `musubi-auth/`
+**Module under test:** `src/musubi/auth/*` (tests in `tests/auth/test_auth.py`)
 
 1. `test_missing_bearer_returns_401`
 2. `test_expired_token_returns_401`
@@ -310,9 +293,10 @@ Denials have `event: auth.deny` + `reason: ...`. 30-day retention; operator-only
 5. `test_scope_mismatch_returns_403_with_detail`
 6. `test_operator_scope_required_for_admin_endpoints`
 7. `test_blended_query_expands_and_checks_plane_scopes`
-8. `test_pkce_flow_end_to_end` (integration)
-9. `test_refresh_token_rotation_issues_new_refresh`
-10. `test_revocation_invalidates_token_within_60s_cache`
-11. `test_signing_key_rotation_dual_verify_period`
-12. `test_every_auth_decision_emits_audit_line`
-13. `test_operator_issued_only_via_cli`
+8. `test_recursive_scope_grants_read_without_write`
+9. `test_signing_key_rotation_dual_verify_period` (RS256 JWKS with two keys)
+10. `test_every_auth_decision_emits_audit_line`
+
+PKCE, refresh-token, revocation-cache and operator-issuing-CLI tests from the earlier
+OAuth design remain in the test file as skipped placeholders; those features are not
+implemented.
