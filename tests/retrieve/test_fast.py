@@ -279,17 +279,24 @@ async def test_fast_path_shares_encoding_with_real_hybrid_search(
 @pytest.mark.asyncio
 async def test_fast_path_bounds_cold_encoding_before_fanout() -> None:
     class SlowEncoder(_CountingEmbedder):
+        sparse_cancelled = False
+
         async def embed_dense(self, texts: list[str]) -> list[list[float]]:
             await asyncio.sleep(0.05)
             return await super().embed_dense(texts)
 
         async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
-            await asyncio.sleep(0.05)
-            return await super().embed_sparse(texts)
+            try:
+                await asyncio.sleep(0.05)
+                return await super().embed_sparse(texts)
+            except asyncio.CancelledError:
+                self.sparse_cancelled = True
+                raise
 
+    embedder = SlowEncoder()
     result = await run_fast_retrieve(
         _client(),
-        SlowEncoder(),
+        embedder,
         namespace=NAMESPACE,
         query="gpu",
         collection=COLLECTION,
@@ -299,6 +306,7 @@ async def test_fast_path_bounds_cold_encoding_before_fanout() -> None:
 
     assert isinstance(result, Err)
     assert result.error.code == "embeddings_unavailable"
+    assert embedder.sparse_cancelled is True
 
 
 @pytest.mark.asyncio
