@@ -88,6 +88,21 @@ Include a `spec-update: <path>` trailer when your change also edits a spec file 
 - **Test plan.** Bulleted list of what you verified. If anything is deferred (e.g. an integration test that needs the live image), call it out.
 - **CI must be green** before flipping to ready-for-review. `gh pr checks <n>` locally mirrors the sidebar on github.com.
 
+## Releases and merge policy
+
+Enforced on `main` by the repository ruleset, not just by convention:
+
+- **One approving review, from someone other than the last pusher.** A new push dismisses earlier approvals, so the reviewed commit is the one that merges.
+- **Required checks:** `check` and `smoke` must pass. Review threads must be resolved, history stays linear, and merges are squash-only.
+- **No bypass,** including for the release automation.
+
+Releases:
+
+1. Conventional commits on `main` drive [release-please](https://github.com/googleapis/release-please). Only `feat`, `fix`, `perf` and `refactor` cut a release; `docs` and `ci` are hidden and do not.
+2. Release-please opens the release PR and arms auto-merge. Auto-merge waits for the approval and the checks above. **Review the release PR like any other:** the diff should be only the version files and the changelog entries you expect.
+3. Merging the release PR triggers the signed-image build and publish workflow. **It deploys nothing.** The image exists only if that workflow passes (its vulnerability scan can block it), so verify the published digest and signature separately.
+4. Deploying is a separate pin PR (auto-merge never armed), reviewed against the registry digest and the signature, then an operator-run deploy. See [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md).
+
 ## Style
 
 - Python: black-compatible via ruff. Strict mypy. Full type hints on every public function.
