@@ -24,7 +24,7 @@ for each family and prints a report.
 To target a single family:
 
     sudo docker exec -e MUSUBI_FORCE_SYNTHESIS_CONFIRM=1 \\
-        -e MUSUBI_FORCE_FAMILY=aoi musubi-core-1 \\
+        -e MUSUBI_FORCE_FAMILY=alex musubi-core-1 \\
         python3 /tmp/force_synthesis.py
 
 Safe to run repeatedly: synthesis is idempotent given the cursor +

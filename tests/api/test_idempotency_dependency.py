@@ -36,16 +36,16 @@ from musubi.api.write_auth import AuthorizedWrite
 from musubi.auth.tokens import AuthContext
 
 OP = "capture_episodic.bucket=capture"
-NS = "eric/claude-code/episodic"
+NS = "admin/claude-code/episodic"
 
 
 def _auth() -> AuthContext:
     return AuthContext(
-        subject="eric/claude-code",
+        subject="admin/claude-code",
         issuer="https://auth.test",
         audience="musubi",
         scopes=(f"{NS}:rw",),
-        presence="eric/claude-code",
+        presence="admin/claude-code",
         token_id="t",
     )
 
@@ -313,7 +313,7 @@ class _FakeRequest:
         return Headers(raw=[(b"idempotency-key", b"k"), (b"content-type", b"application/json")])
 
     async def body(self) -> bytes:
-        return b'{"namespace":"eric/claude-code/episodic","content":"c"}'
+        return b'{"namespace":"admin/claude-code/episodic","content":"c"}'
 
 
 def test_release_when_dependency_raises_after_acquire_before_state() -> None:

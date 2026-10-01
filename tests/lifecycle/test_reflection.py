@@ -114,12 +114,12 @@ def now() -> datetime:
 
 @pytest.fixture
 def reflection_namespace() -> str:
-    return "eric/lifecycle-worker/curated"
+    return "admin/lifecycle-worker/curated"
 
 
 @pytest.fixture
 def episodic_namespace() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 def _coordinator(qdrant: QdrantClient, sink: LifecycleEventSink) -> LifecycleTransitionCoordinator:
@@ -271,7 +271,7 @@ async def _run(
     vault: FakeVaultWriter,
     thoughts: FakeThoughtEmitter,
     llm: FakeReflectionLLM | None = None,
-    namespace: str = "eric/lifecycle-worker/curated",
+    namespace: str = "admin/lifecycle-worker/curated",
     now: datetime,
     config: ReflectionConfig | None = None,
 ) -> ReflectionResult:
@@ -425,7 +425,7 @@ async def test_promotion_section_lists_both_promoted_and_skipped(
     promoted_event = LifecycleEvent(
         object_id="P" * 27,
         object_type="concept",
-        namespace="eric/lifecycle-worker/concept",
+        namespace="admin/lifecycle-worker/concept",
         from_state="matured",
         to_state="promoted",
         actor="lifecycle-promotion",
@@ -566,7 +566,7 @@ async def test_revisit_section_filters_by_importance_and_age(
             title="Project ship dates",
             content="Important milestones for the team.",
             importance=9,
-            vault_path="curated/eric/projects/ship-dates.md",
+            vault_path="curated/admin/projects/ship-dates.md",
             body_hash=_hash("Important milestones for the team."),
         )
     )
@@ -577,7 +577,7 @@ async def test_revisit_section_filters_by_importance_and_age(
             title="Trivia",
             content="Some inconsequential note.",
             importance=3,
-            vault_path="curated/eric/trivia.md",
+            vault_path="curated/admin/trivia.md",
             body_hash=_hash("Some inconsequential note."),
         )
     )
@@ -802,10 +802,10 @@ def test_render_frontmatter_contains_required_fields() -> None:
     fm = render_frontmatter(
         date=datetime(2026, 4, 17, 6, 0, 0, tzinfo=UTC),
         object_id="A" * 27,
-        namespace="eric/lifecycle-worker/curated",
+        namespace="admin/lifecycle-worker/curated",
     )
     assert "object_id: AAAAAAAAAAAAAAAAAAAAAAAAAAA" in fm
-    assert "namespace: eric/lifecycle-worker/curated" in fm
+    assert "namespace: admin/lifecycle-worker/curated" in fm
     assert "topics:" in fm
     assert "reflection" in fm
     assert "musubi-managed: true" in fm
@@ -963,7 +963,7 @@ async def test_llm_exception_falls_back_to_skip_notice(
         vault=vault,
         thoughts=FakeThoughtEmitter(),
         llm=RaisingLLM(),
-        namespace="eric/lifecycle-worker/curated",
+        namespace="admin/lifecycle-worker/curated",
         now=now,
         config=_config(),
     )
@@ -992,7 +992,7 @@ async def test_revisit_filters_recently_accessed(
             title="Recently read",
             content="Touched yesterday.",
             importance=9,
-            vault_path="curated/eric/recently-read.md",
+            vault_path="curated/admin/recently-read.md",
             body_hash=_hash("Touched yesterday."),
         )
     )
@@ -1044,7 +1044,7 @@ async def test_revisit_handles_old_last_accessed_at(
             title="Old but important",
             content="Long-untouched but high-importance.",
             importance=9,
-            vault_path="curated/eric/long-untouched.md",
+            vault_path="curated/admin/long-untouched.md",
             body_hash=_hash("Long-untouched but high-importance."),
         )
     )
@@ -1097,7 +1097,7 @@ async def test_revisit_handles_malformed_last_accessed_at(
             title="Garbled timestamp",
             content="Bad timestamp test.",
             importance=9,
-            vault_path="curated/eric/garbled.md",
+            vault_path="curated/admin/garbled.md",
             body_hash=_hash("Bad timestamp test."),
         )
     )

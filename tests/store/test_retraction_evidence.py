@@ -12,7 +12,7 @@ import pytest
 from musubi.types.common import generate_ksuid
 from musubi.types.episodic import RetractionEvidence
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 _CONTENT = "the original false claim"
 _CONTENT_BYTES = _CONTENT.encode()
 
@@ -20,7 +20,7 @@ _CONTENT_BYTES = _CONTENT.encode()
 def _evidence(**changes: Any) -> RetractionEvidence:
     body: dict[str, Any] = {
         "kind": "artifact_escrow_v1",
-        "artifact_namespace": "eric/claude-code/artifact",
+        "artifact_namespace": "admin/claude-code/artifact",
         "artifact_ref": {"artifact_id": generate_ksuid()},
         "original_sha256": hashlib.sha256(_CONTENT_BYTES).hexdigest(),
         "original_utf8_bytes": len(_CONTENT_BYTES),

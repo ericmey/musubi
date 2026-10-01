@@ -67,7 +67,7 @@ def _seed_contradiction(qdrant: QdrantClient, namespace: str) -> str:
 def seeded(qdrant: QdrantClient) -> dict[str, str]:
     """One contradiction in tenant A's namespace, one in tenant B's."""
     return {
-        "a": _seed_contradiction(qdrant, "eric/claude-code/concept"),
+        "a": _seed_contradiction(qdrant, "admin/claude-code/concept"),
         "b": _seed_contradiction(qdrant, "mallory/evil/concept"),
     }
 
@@ -89,7 +89,7 @@ def test_ordinary_token_omitted_namespace_must_be_403(
     client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
     # ordinary token, NO ?namespace= — currently scrolls every tenant's concepts
-    token = _ordinary(api_settings, "eric/claude-code/concept")
+    token = _ordinary(api_settings, "admin/claude-code/concept")
     r = client.get(ROUTE, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 403, (
         f"omitted-namespace contradictions returned {r.status_code} for an ORDINARY token "
@@ -116,7 +116,7 @@ def test_operator_omitted_namespace_succeeds_cross_namespace(
 def test_ordinary_token_own_namespace_returns_only_own(
     client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
-    ns = "eric/claude-code/concept"
+    ns = "admin/claude-code/concept"
     token = _ordinary(api_settings, ns)
     r = client.get(ROUTE, params={"namespace": ns}, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, f"own-namespace contradictions failed: {r.status_code}"
@@ -131,7 +131,7 @@ def test_ordinary_token_foreign_namespace_must_be_403(
     client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
     # token authorized on A, explicitly requests B's namespace
-    token = _ordinary(api_settings, "eric/claude-code/concept")
+    token = _ordinary(api_settings, "admin/claude-code/concept")
     r = client.get(
         ROUTE,
         params={"namespace": "mallory/evil/concept"},
@@ -157,8 +157,8 @@ def test_backend_failure_must_not_be_empty_200(
     monkeypatch.setattr(QdrantClient, "scroll", _boom, raising=True)
     r = client.get(
         ROUTE,
-        params={"namespace": "eric/claude-code/concept"},
-        headers={"Authorization": f"Bearer {_ordinary(api_settings, 'eric/claude-code/concept')}"},
+        params={"namespace": "admin/claude-code/concept"},
+        headers={"Authorization": f"Bearer {_ordinary(api_settings, 'admin/claude-code/concept')}"},
     )
     # SECURE: a backend outage is an error, never clean-looking empty data
     assert r.status_code >= 500, (

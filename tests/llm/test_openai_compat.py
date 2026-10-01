@@ -2,7 +2,7 @@
 
 Same client, second wire protocol: ``api="openai"`` speaks
 ``/v1/chat/completions`` with strict ``json_schema`` response_format so the
-lifecycle worker can target LiteLLM-fronted house models. The contract above
+lifecycle worker can target LiteLLM-fronted models. The contract above
 the transport is identical to the Ollama wire — same Protocol methods, same
 return-None-on-failure — so these tests mirror ``test_ollama.py`` shapes and
 assert only what the new wire adds:
@@ -30,7 +30,7 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
 _BASE = "http://litellm:4000"
-_MODEL = "house/backup"
+_MODEL = "example/large"
 _KEY = "sk-litellm-test"
 
 
@@ -139,10 +139,10 @@ async def test_synthesize_cluster_happy_path_openai(httpx_mock: HTTPXMock) -> No
         method="POST",
         json=_completion_body(
             {
-                "title": "Sunday gravy at house scale",
+                "title": "Sunday gravy at team scale",
                 "content": "Cooking for eight changed the kitchen's rhythm.",
                 "rationale": "All three memories describe the same cooking arc.",
-                "tags": ["cooking", "house"],
+                "tags": ["cooking", "team"],
                 "importance": 6,
                 "contradicts_notice": "",
             }
@@ -150,7 +150,7 @@ async def test_synthesize_cluster_happy_path_openai(httpx_mock: HTTPXMock) -> No
     )
     out = await _client().synthesize_cluster(SynthesisInput(memories))
     assert out is not None
-    assert out.title == "Sunday gravy at house scale"
+    assert out.title == "Sunday gravy at team scale"
     assert out.importance == 6
 
 

@@ -44,22 +44,22 @@ def _upsert_thought(
 def test_check_includes_unicast_and_broadcast_excludes_unrelated(
     client: TestClient, qdrant: QdrantClient, api_settings: Any
 ) -> None:
-    ns = "eric/ns/thought"
-    me = "eric/me"
+    ns = "admin/ns/thought"
+    me = "admin/me"
 
     # Unicast to me
-    t1 = _upsert_thought(qdrant, ns, "eric/other", me)
+    t1 = _upsert_thought(qdrant, ns, "admin/other", me)
     # Broadcast to all
-    t2 = _upsert_thought(qdrant, ns, "eric/other", "all")
+    t2 = _upsert_thought(qdrant, ns, "admin/other", "all")
 
     # Excludes other-recipient
-    _upsert_thought(qdrant, ns, "eric/other", "eric/someone_else")
+    _upsert_thought(qdrant, ns, "admin/other", "admin/someone_else")
     # Excludes self-send
     _upsert_thought(qdrant, ns, me, "all")
     _upsert_thought(qdrant, ns, me, me)
     # Excludes already-read-by-me
-    _upsert_thought(qdrant, ns, "eric/other", me, read_by=[me])
-    _upsert_thought(qdrant, ns, "eric/other", "all", read_by=["eric/someone_else", me])
+    _upsert_thought(qdrant, ns, "admin/other", me, read_by=[me])
+    _upsert_thought(qdrant, ns, "admin/other", "all", read_by=["admin/someone_else", me])
 
     token = mint_token(api_settings, scopes=[f"{ns}:r"])
     r = client.post(
@@ -77,20 +77,20 @@ def test_check_includes_unicast_and_broadcast_excludes_unrelated(
 def test_history_includes_sent_and_received_excludes_unrelated(
     client: TestClient, qdrant: QdrantClient, api_settings: Any
 ) -> None:
-    ns = "eric/ns/thought"
-    me = "eric/me"
+    ns = "admin/ns/thought"
+    me = "admin/me"
 
     # Sent by me
-    t1 = _upsert_thought(qdrant, ns, me, "eric/other")
+    t1 = _upsert_thought(qdrant, ns, me, "admin/other")
     # Unicast to me
-    t2 = _upsert_thought(qdrant, ns, "eric/other", me)
+    t2 = _upsert_thought(qdrant, ns, "admin/other", me)
     # Broadcast to all
-    t3 = _upsert_thought(qdrant, ns, "eric/other", "all")
+    t3 = _upsert_thought(qdrant, ns, "admin/other", "all")
     # Sent by me to all
     t4 = _upsert_thought(qdrant, ns, me, "all")
 
     # Excludes unrelated in same namespace
-    _upsert_thought(qdrant, ns, "eric/someone", "eric/someone_else")
+    _upsert_thought(qdrant, ns, "admin/someone", "admin/someone_else")
 
     token = mint_token(api_settings, scopes=[f"{ns}:r"])
     r = client.post(
@@ -106,11 +106,11 @@ def test_history_includes_sent_and_received_excludes_unrelated(
 
 
 def test_namespace_auth_enforced_before_read(client: TestClient, api_settings: Any) -> None:
-    ns = "eric/ns/thought"
-    me = "eric/me"
+    ns = "admin/ns/thought"
+    me = "admin/me"
 
     # Requesting a namespace without scope
-    token = mint_token(api_settings, scopes=["eric/other/thought:r"])
+    token = mint_token(api_settings, scopes=["admin/other/thought:r"])
     r = client.post(
         "/v1/thoughts/check",
         headers={"Authorization": f"Bearer {token}"},

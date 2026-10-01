@@ -37,20 +37,20 @@ def test_default_discovery_uses_server_side_namespace_facet_not_point_scroll() -
             assert isinstance(facet_filter, models.Filter)
             condition = cast(list[models.FieldCondition], facet_filter.must)[0]
             assert condition.key == "identity_family"
-            assert condition.match == models.MatchValue(value="eric")
+            assert condition.match == models.MatchValue(value="admin")
             return SimpleNamespace(
                 hits=[
-                    SimpleNamespace(value="eric/other/episodic"),
-                    SimpleNamespace(value="eric/chair/episodic"),
+                    SimpleNamespace(value="admin/other/episodic"),
+                    SimpleNamespace(value="admin/chair/episodic"),
                     SimpleNamespace(value=7),
                 ]
             )
 
     assert _enumerate_family_targets(
-        cast(Any, _FacetOnlyClient()), family="eric", planes=["episodic"]
+        cast(Any, _FacetOnlyClient()), family="admin", planes=["episodic"]
     ) == [
-        ("eric/chair/episodic", "episodic"),
-        ("eric/other/episodic", "episodic"),
+        ("admin/chair/episodic", "episodic"),
+        ("admin/other/episodic", "episodic"),
     ]
 
 
@@ -65,7 +65,7 @@ def test_direct_orchestration_rejects_empty_namespace_without_resolved_targets()
     query = RetrievalQuery(
         namespace="",
         mode="recent",
-        namespace_targets=[NamespaceTarget(namespace="eric/chair/episodic", plane="episodic")],
+        namespace_targets=[NamespaceTarget(namespace="admin/chair/episodic", plane="episodic")],
     )
     assert query.namespace_targets is not None
 
@@ -73,7 +73,7 @@ def test_direct_orchestration_rejects_empty_namespace_without_resolved_targets()
 def _patch_auth(
     monkeypatch: pytest.MonkeyPatch,
     scopes: tuple[str, ...],
-    subject: str = "eric",
+    subject: str = "admin",
     presence: str = "command-chair",
 ) -> None:
     ctx = AuthContext(
@@ -113,12 +113,14 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/command-chair/episodic", "hello chair")
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
-    _seed_qdrant(client, token, "eric/other/episodic", "hello other")
+    _seed_qdrant(client, token, "admin/command-chair/episodic", "hello chair")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/other/episodic", "hello other")
 
     res = client.post(
         "/v1/retrieve",
@@ -128,9 +130,9 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
 
-    assert "eric/command-chair/episodic" in namespaces
-    assert "eric/other/episodic" in namespaces
-    assert "eric/private/episodic" not in namespaces
+    assert "admin/command-chair/episodic" in namespaces
+    assert "admin/other/episodic" in namespaces
+    assert "admin/private/episodic" not in namespaces
 
 
 def test_default_read_returns_authorized_subset_instead_of_failing_on_other_targets(
@@ -139,16 +141,16 @@ def test_default_read_returns_authorized_subset_instead_of_failing_on_other_targ
     from tests.api.conftest import mint_token
 
     seed_token = mint_token(
-        api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair"
+        api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair"
     )
-    _seed_qdrant(client, seed_token, "eric/command-chair/episodic", "allowed memory")
-    _seed_qdrant(client, seed_token, "eric/other/episodic", "unauthorized memory")
+    _seed_qdrant(client, seed_token, "admin/command-chair/episodic", "allowed memory")
+    _seed_qdrant(client, seed_token, "admin/other/episodic", "unauthorized memory")
 
     _patch_auth(
         monkeypatch,
-        ("eric/command-chair/*:r",),
-        subject="eric",
-        presence="eric/command-chair",
+        ("admin/command-chair/*:r",),
+        subject="admin",
+        presence="admin/command-chair",
     )
     res = client.post(
         "/v1/retrieve",
@@ -158,7 +160,7 @@ def test_default_read_returns_authorized_subset_instead_of_failing_on_other_targ
 
     assert res.status_code == 200
     namespaces = {row["namespace"] for row in res.json()["results"]}
-    assert namespaces == {"eric/command-chair/episodic"}
+    assert namespaces == {"admin/command-chair/episodic"}
 
 
 def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
@@ -166,16 +168,16 @@ def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
     _patch_auth(
         monkeypatch,
         ("*/*/*:r", "*/*/*:w"),
-        subject="eric",
-        presence="eric/command-chair",
+        subject="admin",
+        presence="admin/command-chair",
     )
-    _seed_qdrant(client, token, "eric/command-chair/episodic", "chair continuity memory")
-    _seed_qdrant(client, token, "eric/other/episodic", "other continuity memory")
-    _seed_qdrant(client, token, "eric/private/episodic", "sales continuity memory")
+    _seed_qdrant(client, token, "admin/command-chair/episodic", "chair continuity memory")
+    _seed_qdrant(client, token, "admin/other/episodic", "other continuity memory")
+    _seed_qdrant(client, token, "admin/private/episodic", "sales continuity memory")
 
     res = client.post(
         "/v1/context",
@@ -185,9 +187,9 @@ def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
 
     assert res.status_code == 200
     namespaces = {item["namespace"] for group in res.json()["groups"] for item in group["items"]}
-    assert "eric/command-chair/episodic" in namespaces
-    assert "eric/other/episodic" in namespaces
-    assert "eric/private/episodic" not in namespaces
+    assert "admin/command-chair/episodic" in namespaces
+    assert "admin/other/episodic" in namespaces
+    assert "admin/private/episodic" not in namespaces
 
 
 def test_context_empty_wildcard_still_flows_through_namespace_policy(
@@ -195,8 +197,8 @@ def test_context_empty_wildcard_still_flows_through_namespace_policy(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r",), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="admin/command-chair")
+    _patch_auth(monkeypatch, ("*/*/*:r",), subject="admin", presence="admin/command-chair")
     monkeypatch.setattr("musubi.api.routers.context._expand_wildcard_targets", lambda *_args: [])
 
     observed: list[list[tuple[str, str]]] = []
@@ -209,7 +211,7 @@ def test_context_empty_wildcard_still_flows_through_namespace_policy(
 
     res = client.post(
         "/v1/context",
-        json={"namespace": "eric/*", "query_text": "nothing stored"},
+        json={"namespace": "admin/*", "query_text": "nothing stored"},
         headers={"Authorization": f"Bearer {token}"},
     )
 
@@ -235,8 +237,8 @@ def test_omitted_namespace_rejects_unknown_plane_as_bad_request(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r",), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="admin/command-chair")
+    _patch_auth(monkeypatch, ("*/*/*:r",), subject="admin", presence="admin/command-chair")
 
     res = client.post(path, json=payload, headers={"Authorization": f"Bearer {token}"})
 
@@ -250,7 +252,7 @@ def test_context_empty_namespace_is_rejected_at_request_validation(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="admin/command-chair")
     res = client.post(
         "/v1/context",
         json={"namespace": "", "query_text": "invalid empty namespace"},
@@ -265,8 +267,8 @@ def test_stream_empty_wildcard_still_flows_through_namespace_policy(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r",), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="admin/command-chair")
+    _patch_auth(monkeypatch, ("*/*/*:r",), subject="admin", presence="admin/command-chair")
     monkeypatch.setattr(
         "musubi.api.routers.writes_retrieve_stream._expand_wildcard_targets", lambda *_args: []
     )
@@ -282,7 +284,7 @@ def test_stream_empty_wildcard_still_flows_through_namespace_policy(
 
     res = client.post(
         "/v1/retrieve/stream",
-        json={"namespace": "eric/*", "query_text": "nothing stored"},
+        json={"namespace": "admin/*", "query_text": "nothing stored"},
         headers={"Authorization": f"Bearer {token}"},
     )
 
@@ -297,14 +299,16 @@ def test_default_exclusion_not_bypassed_by_empty_settings_override(
     # With no per-agent exclusions configured, the operator baseline still applies.
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/private/episodic",
+            "namespace": "admin/private/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -321,14 +325,16 @@ def test_default_exclusion_not_bypassed_by_settings_subtract(
     # A wildcard read cannot reach a namespace the baseline excludes.
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/*/episodic",
+            "namespace": "admin/*/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -337,7 +343,7 @@ def test_default_exclusion_not_bypassed_by_settings_subtract(
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/private/episodic" not in namespaces
+    assert "admin/private/episodic" not in namespaces
 
 
 def test_default_exclusion_not_bypassed_by_direct_target(
@@ -345,14 +351,16 @@ def test_default_exclusion_not_bypassed_by_direct_target(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/private/episodic",
+            "namespace": "admin/private/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -368,14 +376,16 @@ def test_default_exclusion_not_bypassed_by_wildcard(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/*/episodic",
+            "namespace": "admin/*/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -384,7 +394,7 @@ def test_default_exclusion_not_bypassed_by_wildcard(
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/private/episodic" not in namespaces
+    assert "admin/private/episodic" not in namespaces
 
 
 def test_default_exclusion_not_bypassed_by_recent_lane(
@@ -392,13 +402,15 @@ def test_default_exclusion_not_bypassed_by_recent_lane(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/private/episodic", "mode": "recent", "query_text": "hello"},
+        json={"namespace": "admin/private/episodic", "mode": "recent", "query_text": "hello"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
@@ -410,14 +422,16 @@ def test_default_exclusion_not_bypassed_by_streaming(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve/stream",
         json={
-            "namespace": "eric/private/episodic",
+            "namespace": "admin/private/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -425,7 +439,7 @@ def test_default_exclusion_not_bypassed_by_streaming(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
-    assert b"eric/private/episodic" not in res.content
+    assert b"admin/private/episodic" not in res.content
 
 
 def test_default_exclusion_not_bypassed_by_adapter_path(
@@ -433,14 +447,16 @@ def test_default_exclusion_not_bypassed_by_adapter_path(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/private/episodic",
+            "namespace": "admin/private/episodic",
             "mode": "deep",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -457,26 +473,28 @@ def test_per_agent_exclusions_add_to_default_baseline(
     # Per-agent exclusions add to the configured baseline; they never remove it.
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
     def mock_get_settings() -> Settings:
         args = api_settings.model_dump()
-        args["per_agent_excluded_namespaces"] = {"eric": ("custom",)}
+        args["per_agent_excluded_namespaces"] = {"admin": ("custom",)}
         return Settings(**args)
 
     from musubi.api.dependencies import get_settings_dep
 
     cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
-    _seed_qdrant(client, token, "eric/custom/episodic", "hello custom")
-    _seed_qdrant(client, token, "eric/command-chair/episodic", "hello chair")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/custom/episodic", "hello custom")
+    _seed_qdrant(client, token, "admin/command-chair/episodic", "hello chair")
 
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/*/episodic",
+            "namespace": "admin/*/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -485,9 +503,9 @@ def test_per_agent_exclusions_add_to_default_baseline(
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/command-chair/episodic" in namespaces
-    assert "eric/custom/episodic" not in namespaces
-    assert "eric/private/episodic" not in namespaces
+    assert "admin/command-chair/episodic" in namespaces
+    assert "admin/custom/episodic" not in namespaces
+    assert "admin/private/episodic" not in namespaces
 
 
 def test_per_agent_settings_adds_to_default(
@@ -495,14 +513,16 @@ def test_per_agent_settings_adds_to_default(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
     def mock_get_settings() -> Settings:
         args = api_settings.model_dump()
         args["per_agent_excluded_namespaces"] = {
-            "eric": ("custom1",),
-            "eric/command-chair": ("custom2",),
+            "admin": ("custom1",),
+            "admin/command-chair": ("custom2",),
         }
         return Settings(**args)
 
@@ -510,13 +530,13 @@ def test_per_agent_settings_adds_to_default(
 
     cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
-    _seed_qdrant(client, token, "eric/custom1/episodic", "hello")
-    _seed_qdrant(client, token, "eric/command-chair/episodic", "hello")
+    _seed_qdrant(client, token, "admin/custom1/episodic", "hello")
+    _seed_qdrant(client, token, "admin/command-chair/episodic", "hello")
 
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/*/episodic",
+            "namespace": "admin/*/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -525,8 +545,8 @@ def test_per_agent_settings_adds_to_default(
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/command-chair/episodic" in namespaces
-    assert "eric/custom1/episodic" not in namespaces
+    assert "admin/command-chair/episodic" in namespaces
+    assert "admin/custom1/episodic" not in namespaces
 
 
 def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
@@ -534,14 +554,16 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
     def mock_get_settings() -> Settings:
         args = api_settings.model_dump()
         args["per_agent_excluded_namespaces"] = {
-            "eric": ("custom1",),
-            "eric/command-chair": ("custom2",),
+            "admin": ("custom1",),
+            "admin/command-chair": ("custom2",),
         }
         return Settings(**args)
 
@@ -549,14 +571,14 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
 
     cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
-    _seed_qdrant(client, token, "eric/custom1/episodic", "hello")
-    _seed_qdrant(client, token, "eric/custom2/episodic", "hello")
-    _seed_qdrant(client, token, "eric/command-chair/episodic", "hello")
+    _seed_qdrant(client, token, "admin/custom1/episodic", "hello")
+    _seed_qdrant(client, token, "admin/custom2/episodic", "hello")
+    _seed_qdrant(client, token, "admin/command-chair/episodic", "hello")
 
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/*/episodic",
+            "namespace": "admin/*/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -565,9 +587,9 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/command-chair/episodic" in namespaces
-    assert "eric/custom1/episodic" not in namespaces
-    assert "eric/custom2/episodic" not in namespaces
+    assert "admin/command-chair/episodic" in namespaces
+    assert "admin/custom1/episodic" not in namespaces
+    assert "admin/custom2/episodic" not in namespaces
 
 
 def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
@@ -577,13 +599,13 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
 
     # Missing read scope for private
     token = mint_token(
-        api_settings, scopes=["eric/command-chair/*:r"], presence="eric/command-chair"
+        api_settings, scopes=["admin/command-chair/*:r"], presence="admin/command-chair"
     )
-    _patch_auth(monkeypatch, ("eric/command-chair/*:r",))
+    _patch_auth(monkeypatch, ("admin/command-chair/*:r",))
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/private/episodic",
+            "namespace": "admin/private/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -599,14 +621,16 @@ def test_canonical_config_source_is_single_no_scattered_exceptions(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
     def mock_get_settings() -> Settings:
         args = api_settings.model_dump()
         args["per_agent_excluded_namespaces"] = {
-            "eric": ("custom1",),
-            "eric/command-chair": ("custom2",),
+            "admin": ("custom1",),
+            "admin/command-chair": ("custom2",),
         }
         return Settings(**args)
 
@@ -615,11 +639,11 @@ def test_canonical_config_source_is_single_no_scattered_exceptions(
     cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
     # Using context to prove the single seam propagates cleanly to all routes
-    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
+    _seed_qdrant(client, token, "admin/private/episodic", "hello private")
     res = client.post(
         "/v1/context",
         json={
-            "namespace": "eric/private/episodic",
+            "namespace": "admin/private/episodic",
             "planes": ["episodic"],
             "mode": "startup",
             "query_text": "hello",
@@ -635,15 +659,17 @@ def test_explicit_narrowing_still_narrows(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
-    _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="admin/command-chair")
+    _patch_auth(
+        monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="admin", presence="admin/command-chair"
+    )
 
-    _seed_qdrant(client, token, "eric/command-chair/episodic", "hello chair")
-    _seed_qdrant(client, token, "eric/other/episodic", "hello other")
+    _seed_qdrant(client, token, "admin/command-chair/episodic", "hello chair")
+    _seed_qdrant(client, token, "admin/other/episodic", "hello other")
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/command-chair/episodic",
+            "namespace": "admin/command-chair/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -652,8 +678,8 @@ def test_explicit_narrowing_still_narrows(
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/command-chair/episodic" in namespaces
-    assert "eric/other/episodic" not in namespaces
+    assert "admin/command-chair/episodic" in namespaces
+    assert "admin/other/episodic" not in namespaces
 
 
 def test_write_to_excluded_namespace_permitted_under_existing_write_scope(
@@ -661,11 +687,11 @@ def test_write_to_excluded_namespace_permitted_under_existing_write_scope(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["eric/private/*:w"], presence="eric/private")
-    _patch_auth(monkeypatch, ("eric/private/*:w",))
+    token = mint_token(api_settings, scopes=["admin/private/*:w"], presence="admin/private")
+    _patch_auth(monkeypatch, ("admin/private/*:w",))
     res = client.post(
         "/v1/episodic",
-        json={"namespace": "eric/private/episodic", "content": "test write", "importance": 5},
+        json={"namespace": "admin/private/episodic", "content": "test write", "importance": 5},
         headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "test2"},
     )
     assert res.status_code == 202
@@ -678,11 +704,11 @@ def test_direct_matcher_unit_tests_does_not_break_auth001() -> None:
     from musubi.types.common import Ok
 
     ctx = AuthContext(
-        subject="eric",
+        subject="admin",
         issuer="test",
         audience="musubi",
         scopes=("*/*/*:r",),
-        presence="eric/command-chair",
+        presence="admin/command-chair",
         token_id="test",
     )
     s = Settings(
@@ -704,7 +730,7 @@ def test_direct_matcher_unit_tests_does_not_break_auth001() -> None:
             "vault_path": "/",
             "artifact_blob_path": "/",
             "lifecycle_sqlite_path": "/",
-            "per_agent_excluded_namespaces": {"eric": ("custom1",)},
+            "per_agent_excluded_namespaces": {"admin": ("custom1",)},
         }
     )
 
@@ -734,11 +760,11 @@ def test_implicit_discovery_does_not_audit_each_unauthorized_candidate(
     from musubi.types.common import Ok
 
     context = AuthContext(
-        subject="eric",
+        subject="admin",
         issuer="test",
         audience="musubi",
-        scopes=("eric/command-chair/*:r",),
-        presence="eric/command-chair",
+        scopes=("admin/command-chair/*:r",),
+        presence="admin/command-chair",
         token_id="test",
     )
     settings = Settings(
@@ -766,16 +792,16 @@ def test_implicit_discovery_does_not_audit_each_unauthorized_candidate(
         result = enforce_namespace_policy(
             context,
             targets=[
-                ("eric/command-chair/episodic", "episodic"),
-                ("aoi/voice/episodic", "episodic"),
-                ("tama/voice/episodic", "episodic"),
+                ("admin/command-chair/episodic", "episodic"),
+                ("sam/voice/episodic", "episodic"),
+                ("taylor/voice/episodic", "episodic"),
             ],
             settings=settings,
             reject_unauthorized=False,
         )
 
     assert isinstance(result, Ok)
-    assert result.value == [("eric/command-chair/episodic", "episodic")]
+    assert result.value == [("admin/command-chair/episodic", "episodic")]
     assert [record.message for record in caplog.records] == ["auth.allow"]
 
 
@@ -816,7 +842,7 @@ def test_planes_dedup_in_enumerate_family_targets(
     monkeypatch.setattr(fake, "facet", _facet)
 
     _r._enumerate_family_targets(
-        fake, family="eric", planes=["episodic", "episodic", "curated", "episodic"]
+        fake, family="admin", planes=["episodic", "episodic", "curated", "episodic"]
     )
     # Exactly 2 unique collections were faceted (episodic, curated).
     assert sorted(facet_calls) == ["musubi_curated", "musubi_episodic"], (
@@ -841,8 +867,8 @@ def test_duplicate_planes_route_returns_unique_targets(
     fake = QdrantClient(":memory:")
     # Inject a controlled set of distinct namespaces per plane.
     ns_for_plane: dict[str, list[str]] = {
-        "musubi_episodic": ["eric/a/episodic", "eric/b/episodic"],
-        "musubi_curated": ["eric/c/curated"],
+        "musubi_episodic": ["admin/a/episodic", "admin/b/episodic"],
+        "musubi_curated": ["admin/c/curated"],
     }
 
     def _facet(collection_name: str, *_args: object, **_kwargs: object) -> object:
@@ -864,7 +890,7 @@ def test_duplicate_planes_route_returns_unique_targets(
 
     # Auth bypass — the orchestrator will be mocked below to capture
     # the final targets.
-    _patch_auth(monkeypatch, ("eric/*/*:r",))
+    _patch_auth(monkeypatch, ("admin/*/*:r",))
 
     # Mock the orchestrator to capture the targets it received. The
     # route imports it as `run_orchestration_retrieve`, so we patch

@@ -239,7 +239,7 @@ def mint_token(
     settings: Settings,
     *,
     scopes: list[str] | None = None,
-    presence: str = "eric/claude-code",
+    presence: str = "admin/claude-code",
     subject: str | None = None,
     token_id: str = "test-token",
     expires_delta: timedelta = timedelta(hours=1),
@@ -253,7 +253,7 @@ def mint_token(
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
         "jti": token_id,
-        "scope": " ".join(scopes or ["eric/claude-code/episodic:r"]),
+        "scope": " ".join(scopes or ["admin/claude-code/episodic:r"]),
         "presence": presence,
     }
     return jwt.encode(
@@ -268,11 +268,11 @@ def valid_token(api_settings: Settings) -> str:
     return mint_token(
         api_settings,
         scopes=[
-            "eric/claude-code/episodic:rw",
-            "eric/claude-code/curated:rw",
-            "eric/claude-code/concept:rw",
-            "eric/claude-code/artifact:rw",
-            "eric/claude-code/thought:rw",
+            "admin/claude-code/episodic:rw",
+            "admin/claude-code/curated:rw",
+            "admin/claude-code/concept:rw",
+            "admin/claude-code/artifact:rw",
+            "admin/claude-code/thought:rw",
         ],
     )
 

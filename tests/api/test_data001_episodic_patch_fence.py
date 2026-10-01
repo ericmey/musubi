@@ -19,7 +19,7 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 from tests.support.identity_seed import seed_v2_identity_via_migration
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 _OTHER_NS = "other-agent/other-presence/episodic"
 
 

@@ -119,9 +119,9 @@ class HttpxOllamaClient:
     - ``api="openai"``: ``/v1/chat/completions`` with
       ``response_format: json_schema (strict)`` — any OpenAI-compatible
       endpoint (LiteLLM, vLLM, llama.cpp server). This is how the
-      lifecycle worker reaches the 35B house lane, whose structured
-      output actually survives the synthesis schema; the co-located
-      4B measured 0% on it (see the ADR for the full gradient).
+      lifecycle worker can use a larger model whose structured output
+      survives the synthesis schema; a measured co-located 4B model
+      produced no concepts (see the ADR for the full gradient).
 
     Everything above the transport — prompt loading, payload shaping,
     pydantic validation, debug dumps, the return-None-on-failure
@@ -136,7 +136,7 @@ class HttpxOllamaClient:
         a trailing ``/v1`` (normalized).
     model:
         Model id as the endpoint knows it (``qwen3:4b`` for local
-        Ollama; ``house/backup`` behind LiteLLM).
+        Ollama; ``example/large`` behind LiteLLM).
     timeout_s:
         Per-request timeout. Defaults to 120s — leave headroom for a
         cold batch on either lane.

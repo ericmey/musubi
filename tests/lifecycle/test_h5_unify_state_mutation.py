@@ -78,7 +78,7 @@ def test_h5_concept_promotion_receipt_participates_in_replay_and_full_readback()
     base = {
         "collection": "musubi_concept",
         "object_id": generate_ksuid(),
-        "namespace": "eric/shared/concept",
+        "namespace": "admin/shared/concept",
         "expected_version": 7,
         "target_state": "promoted",
         "actor": "test",
@@ -199,7 +199,7 @@ def _eligible_concept() -> SynthesizedConcept:
     now = utc_now()
     return SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         title="H5 transition",
         content="content",
         synthesis_rationale="rationale",
@@ -244,7 +244,7 @@ async def test_h5_promotion_final_runs_dependent_work_once(tmp_path: Path) -> No
 def _demotion_deps(outcome: object) -> tuple[Any, list[Any]]:
     point = SimpleNamespace(
         payload={
-            "namespace": "eric/shared/concept",
+            "namespace": "admin/shared/concept",
             "object_id": generate_ksuid(),
             "created_epoch": 0.0,
             "last_reinforced_epoch": 0.0,
@@ -293,7 +293,7 @@ async def test_h5_demotion_final_increments_completed_once() -> None:
     object_id = generate_ksuid()
     final = _transition_result(
         object_id=object_id,
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         to_state="demoted",
     )
     outcome = _ResultProbe(final)

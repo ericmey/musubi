@@ -101,7 +101,7 @@ def _final(result: object) -> TransitionResult:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/concept"
+    return "admin/claude-code/concept"
 
 
 def _ksuids(n: int) -> list[str]:
@@ -479,8 +479,8 @@ async def test_get_returns_none_for_missing_id(plane: ConceptPlane, ns: str) -> 
 
 
 async def test_isolation_read_enforcement(plane: ConceptPlane) -> None:
-    a_ns = "eric/claude-code/concept"
-    b_ns = "yua/livekit/concept"
+    a_ns = "admin/claude-code/concept"
+    b_ns = "alex/livekit/concept"
     a = await plane.create(_make(namespace=a_ns))
     b = await plane.create(_make(namespace=b_ns))
     assert await plane.get(namespace=a_ns, object_id=b.object_id) is None
@@ -488,8 +488,8 @@ async def test_isolation_read_enforcement(plane: ConceptPlane) -> None:
 
 
 async def test_isolation_write_enforcement(plane: ConceptPlane) -> None:
-    a_ns = "eric/claude-code/concept"
-    b_ns = "yua/livekit/concept"
+    a_ns = "admin/claude-code/concept"
+    b_ns = "alex/livekit/concept"
     a = await plane.create(_make(namespace=a_ns))
     result = await plane.transition(
         namespace=b_ns,

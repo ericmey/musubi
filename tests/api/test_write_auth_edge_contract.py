@@ -31,7 +31,7 @@ from musubi.settings import Settings
 from tests.api.conftest import mint_token
 
 CAPTURE_PATHS = {"/v1/episodic", "/v1/episodic/batch", "/v1/curated"}
-NS = "eric/claude-code"
+NS = "admin/claude-code"
 
 
 def _post_capture_routes(app: FastAPI) -> list[APIRoute]:
@@ -75,7 +75,7 @@ def _valid_body(path: str) -> dict[str, Any]:
         "namespace": f"{NS}/curated",
         "title": "t",
         "content": "c",
-        "vault_path": "Eric/x.md",
+        "vault_path": "Admin/x.md",
         "body_hash": "a" * 64,  # curated body_hash is a 64-char sha256 hex
     }
 

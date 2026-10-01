@@ -54,14 +54,14 @@ def test_counter_increments_and_renders_text_format() -> None:
     c = reg.counter(
         "musubi_capture_total", "captures by namespace + plane", labelnames=["namespace", "plane"]
     )
-    c.labels(namespace="eric/x/episodic", plane="episodic").inc()
-    c.labels(namespace="eric/x/episodic", plane="episodic").inc()
-    c.labels(namespace="eric/y/episodic", plane="episodic").inc()
+    c.labels(namespace="admin/x/episodic", plane="episodic").inc()
+    c.labels(namespace="admin/x/episodic", plane="episodic").inc()
+    c.labels(namespace="admin/y/episodic", plane="episodic").inc()
     text = render_text_format(reg)
     assert "# HELP musubi_capture_total captures by namespace + plane" in text
     assert "# TYPE musubi_capture_total counter" in text
-    assert 'musubi_capture_total{namespace="eric/x/episodic",plane="episodic"} 2' in text
-    assert 'musubi_capture_total{namespace="eric/y/episodic",plane="episodic"} 1' in text
+    assert 'musubi_capture_total{namespace="admin/x/episodic",plane="episodic"} 2' in text
+    assert 'musubi_capture_total{namespace="admin/y/episodic",plane="episodic"} 1' in text
 
 
 def test_histogram_buckets_and_sum() -> None:
@@ -746,10 +746,10 @@ def test_structured_formatter_includes_extra_fields() -> None:
         args=(),
         exc_info=None,
     )
-    record.namespace = "eric/x/episodic"
+    record.namespace = "admin/x/episodic"
     record.object_id = "k" * 27
     payload = json.loads(formatter.format(record))
-    assert payload["namespace"] == "eric/x/episodic"
+    assert payload["namespace"] == "admin/x/episodic"
     assert payload["object_id"] == "k" * 27
 
 

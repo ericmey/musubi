@@ -645,9 +645,9 @@ def _h(subject: str, key: str) -> dict[str, str]:
 def test_d3_12_full_identity_replay_reauth_and_principal_tuple() -> None:
     _cache, counters, obs, client = _mk()
     for path, key, ct in [("/dict", "d1", "application/json"), ("/resp", "r1", "text/csv")]:
-        first = client.post(path, headers=_h("eric", key), json={"payload": 1})
+        first = client.post(path, headers=_h("admin", key), json={"payload": 1})
         assert first.status_code == 200 and first.headers.get("x-idempotent-replay") is None
-        replay = client.post(path, headers=_h("eric", key), json={"payload": 1})
+        replay = client.post(path, headers=_h("admin", key), json={"payload": 1})
         assert replay.headers.get("x-idempotent-replay") == "true", "same identity+digest replays"
         assert replay.content == first.content and replay.headers.get(
             "content-type", ""
@@ -657,15 +657,15 @@ def test_d3_12_full_identity_replay_reauth_and_principal_tuple() -> None:
         counters["acquire"] == 2 and counters["dict_handler"] == 1 and counters["resp_handler"] == 1
     )
     # identity binds the validated principal TUPLE (issuer, subject, presence), not token text.
-    assert obs.stored[0][:3] == ("https://auth.test", "eric", "eric/claude-code")
+    assert obs.stored[0][:3] == ("https://auth.test", "admin", "admin/claude-code")
 
 
 def test_d3_same_key_same_identity_different_body_is_409_no_handler() -> None:
     _cache, counters, _obs, client = _mk()
-    a = client.post("/dict", headers=_h("eric", "k"), json={"payload": "A"})
+    a = client.post("/dict", headers=_h("admin", "k"), json={"payload": "A"})
     assert a.status_code == 200
     b = client.post(
-        "/dict", headers=_h("eric", "k"), json={"payload": "B"}
+        "/dict", headers=_h("admin", "k"), json={"payload": "B"}
     )  # same identity, diff body
     assert b.status_code == 409, "same identity + different body must be 409, not a replay"
     assert b.headers.get("x-idempotent-replay") is None
@@ -674,9 +674,9 @@ def test_d3_same_key_same_identity_different_body_is_409_no_handler() -> None:
 
 def test_d3_same_key_across_namespace_is_distinct_execution() -> None:
     _cache, counters, _obs, client = _mk()
-    r_a = client.post("/dict?namespace=eric/a", headers=_h("eric", "k"), json={"p": 1})
+    r_a = client.post("/dict?namespace=admin/a", headers=_h("admin", "k"), json={"p": 1})
     r_b = client.post(
-        "/dict?namespace=eric/b", headers=_h("eric", "k"), json={"p": 1}
+        "/dict?namespace=admin/b", headers=_h("admin", "k"), json={"p": 1}
     )  # same key, other ns
     assert r_a.status_code == 200 and r_b.status_code == 200
     assert r_b.headers.get("x-idempotent-replay") is None, (
@@ -690,9 +690,9 @@ def test_d3_json_byte_exact_whitespace_or_keyorder_change_is_409_not_replay() ->
     logical JSON with different whitespace/key-order is a DIFFERENT digest → 409, never a replay."""
     _cache, counters, _obs, client = _mk()
     ct = {"content-type": "application/json"}
-    first = client.post("/dict", headers={**_h("eric", "k"), **ct}, content=b'{"a":1,"b":2}')
+    first = client.post("/dict", headers={**_h("admin", "k"), **ct}, content=b'{"a":1,"b":2}')
     assert first.status_code == 200
-    reorder = client.post("/dict", headers={**_h("eric", "k"), **ct}, content=b'{"b":2, "a":1}')
+    reorder = client.post("/dict", headers={**_h("admin", "k"), **ct}, content=b'{"b":2, "a":1}')
     assert reorder.status_code == 409, (
         "different bytes (key-order+whitespace) → 409, NOT semantic replay"
     )
@@ -704,7 +704,7 @@ def test_d3_duplicate_idempotency_key_header_is_400() -> None:
     r = client.post(
         "/dict",
         headers=[
-            ("authorization", "Bearer tok-eric"),
+            ("authorization", "Bearer tok-admin"),
             ("idempotency-key", "a"),
             ("idempotency-key", "b"),
         ],
@@ -716,8 +716,8 @@ def test_d3_duplicate_idempotency_key_header_is_400() -> None:
 
 def test_d3_control_eligible_path_without_state_never_stores_or_acquires() -> None:
     _cache, counters, obs, client = _mk()
-    client.post("/no-idem", headers=_h("eric", "k"), json={"p": 1})
-    client.post("/no-idem", headers=_h("eric", "k"), json={"p": 1})
+    client.post("/no-idem", headers=_h("admin", "k"), json={"p": 1})
+    client.post("/no-idem", headers=_h("admin", "k"), json={"p": 1})
     assert obs.stored == [] and obs.acquired_seen == [] and obs.released == []
     assert counters["no_idem_handler"] == 2, (
         "no dependency state → no replay; handler runs both times"
@@ -726,7 +726,7 @@ def test_d3_control_eligible_path_without_state_never_stores_or_acquires() -> No
 
 def test_d3_control_invalid_auth_never_looks_up_or_acquires() -> None:
     cache, counters, _obs, client = _mk()
-    client.post("/dict", headers=_h("eric", "d1"), json={"p": 1})  # seed
+    client.post("/dict", headers=_h("admin", "d1"), json={"p": 1})  # seed
     before = dict(cache)
     r = client.post(
         "/dict", headers={"Authorization": "Bearer BAD", "Idempotency-Key": "d1"}, json={"p": 1}
@@ -739,26 +739,26 @@ def test_d3_control_invalid_auth_never_looks_up_or_acquires() -> None:
 
 def test_d3_control_foreign_namespace_never_looks_up_or_acquires() -> None:
     _cache, counters, _obs, client = _mk()
-    client.post("/dict?namespace=eric/x", headers=_h("eric", "d1"), json={"p": 1})
+    client.post("/dict?namespace=admin/x", headers=_h("admin", "d1"), json={"p": 1})
     acq = counters["acquire"]
-    r = client.post("/dict?namespace=eric/x", headers=_h("mallory", "d1"), json={"p": 1})
+    r = client.post("/dict?namespace=admin/x", headers=_h("mallory", "d1"), json={"p": 1})
     assert r.status_code == 403 and counters["acquire"] == acq, "authz blocks before idem runs"
 
 
 def test_d3_control_5xx_not_cached_lease_released() -> None:
     _cache, counters, obs, client = _mk()
-    r = client.post("/boom", headers=_h("eric", "b1"), json={"p": 1})
+    r = client.post("/boom", headers=_h("admin", "b1"), json={"p": 1})
     assert r.status_code == 503 and obs.stored == []
     assert len(obs.released) == 1, "lease released on the 5xx path"
-    client.post("/boom", headers=_h("eric", "b1"), json={"p": 1})
+    client.post("/boom", headers=_h("admin", "b1"), json={"p": 1})
     assert counters["boom_handler"] == 2, "nothing cached → handler runs again (no false replay)"
 
 
 def test_d3_control_key_collision_across_principal_and_operation_does_not_replay() -> None:
     _cache, counters, _obs, client = _mk()
-    client.post("/dict", headers=_h("eric", "shared"), json={"p": 1})
+    client.post("/dict", headers=_h("admin", "shared"), json={"p": 1})
     other_principal = client.post("/dict", headers=_h("mallory", "shared"), json={"p": 1})
     assert other_principal.headers.get("x-idempotent-replay") is None, "no cross-principal replay"
-    other_op = client.post("/resp", headers=_h("eric", "shared"), json={"p": 1})
+    other_op = client.post("/resp", headers=_h("admin", "shared"), json={"p": 1})
     assert other_op.headers.get("x-idempotent-replay") is None, "no cross-operation replay"
     assert counters["dict_handler"] == 2 and counters["resp_handler"] == 1

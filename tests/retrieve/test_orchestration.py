@@ -73,7 +73,7 @@ def _fast_hit(object_id: str, *, score: float = 0.5, plane: str = "episodic") ->
         score=score,
         score_components=_score_components(relevance=score),
         payload={
-            "namespace": "eric/test/episodic",
+            "namespace": "admin/test/episodic",
             "plane": plane,
             "state": "matured",
             "importance": 5,
@@ -94,7 +94,7 @@ def _scored_hit(object_id: str, *, score: float = 0.5, plane: str = "episodic") 
         score=score,
         score_components=_score_components(relevance=score),
         payload={
-            "namespace": f"eric/test/{plane}",
+            "namespace": f"admin/test/{plane}",
             "plane": plane,
             "state": "matured",
             "importance": 5,
@@ -113,7 +113,7 @@ async def _retrieve(
     **q: Any,
 ) -> Any:
     query = RetrievalQuery(
-        namespace=q.pop("namespace", "eric/test/episodic"),
+        namespace=q.pop("namespace", "admin/test/episodic"),
         query_text=q.pop("query_text", "gpu"),
         mode=cast(Any, mode),
         planes=q.pop("planes", ["episodic"]),
@@ -270,7 +270,7 @@ def _hybrid_hits(n: int = 6) -> list[HybridHit]:
             object_id=f"oid-{i}",
             score=1.0 - i * 0.01,
             payload={
-                "namespace": "eric/test/episodic",
+                "namespace": "admin/test/episodic",
                 "plane": "episodic",
                 "state": "matured",
                 "content": f"Hit {i}",
@@ -342,13 +342,13 @@ async def test_planes_run_in_parallel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("musubi.retrieve.orchestration.run_fast_retrieve", slow_fast)
 
     query = RetrievalQuery(
-        namespace="eric/test",
+        namespace="admin/test",
         query_text="gpu",
         mode="fast",
         namespace_targets=[
-            NamespaceTarget(namespace="eric/test/episodic", plane="episodic"),
-            NamespaceTarget(namespace="eric/test/curated", plane="curated"),
-            NamespaceTarget(namespace="eric/test/concept", plane="concept"),
+            NamespaceTarget(namespace="admin/test/episodic", plane="episodic"),
+            NamespaceTarget(namespace="admin/test/curated", plane="curated"),
+            NamespaceTarget(namespace="admin/test/concept", plane="concept"),
         ],
     )
     t0 = time.monotonic()
@@ -433,7 +433,7 @@ async def test_fast_timing_override_reaches_pipeline_and_whole_call(
 
     monkeypatch.setattr("musubi.retrieve.orchestration.run_fast_retrieve", slow_fast)
     query = RetrievalQuery(
-        namespace="eric/test/episodic", query_text="gpu", mode="fast", planes=["episodic"]
+        namespace="admin/test/episodic", query_text="gpu", mode="fast", planes=["episodic"]
     )
     result = await retrieve(
         client=cast(Any, _MockQdrant()),
@@ -545,13 +545,13 @@ async def test_tiebreak_on_object_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("musubi.retrieve.orchestration.run_fast_retrieve", fake_fast)
 
     query = RetrievalQuery(
-        namespace="eric/test",
+        namespace="admin/test",
         query_text="gpu",
         mode="fast",
         namespace_targets=[
-            NamespaceTarget(namespace="eric/test/concept", plane="concept"),
-            NamespaceTarget(namespace="eric/test/episodic", plane="episodic"),
-            NamespaceTarget(namespace="eric/test/curated", plane="curated"),
+            NamespaceTarget(namespace="admin/test/concept", plane="concept"),
+            NamespaceTarget(namespace="admin/test/episodic", plane="episodic"),
+            NamespaceTarget(namespace="admin/test/curated", plane="curated"),
         ],
     )
     result = await retrieve(
@@ -620,12 +620,12 @@ async def test_partial_plane_failure_returns_partial_with_warning(
     monkeypatch.setattr("musubi.retrieve.orchestration.run_fast_retrieve", flaky_fast)
 
     query = RetrievalQuery(
-        namespace="eric/test",
+        namespace="admin/test",
         query_text="gpu",
         mode="fast",
         namespace_targets=[
-            NamespaceTarget(namespace="eric/test/episodic", plane="episodic"),
-            NamespaceTarget(namespace="eric/test/curated", plane="curated"),
+            NamespaceTarget(namespace="admin/test/episodic", plane="episodic"),
+            NamespaceTarget(namespace="admin/test/curated", plane="curated"),
         ],
     )
     result = await retrieve(

@@ -88,7 +88,7 @@ class MockDeps:
 def make_concept() -> SynthesizedConcept:
     return SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/test/concept",
+        namespace="admin/test/concept",
         title="Test Concept",
         content="content",
         synthesis_rationale="reason",

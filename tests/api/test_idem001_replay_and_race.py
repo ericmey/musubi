@@ -43,7 +43,7 @@ REPLAY = "X-Idempotent-Replay"
 
 
 def _capture_body(
-    ns: str = "eric/claude-code/episodic", content: str = "idem001 probe"
+    ns: str = "admin/claude-code/episodic", content: str = "idem001 probe"
 ) -> dict[str, Any]:
     return {"namespace": ns, "content": content, "tags": ["kind:episode"], "importance": 3}
 

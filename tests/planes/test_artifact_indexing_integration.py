@@ -45,7 +45,7 @@ def _artifact() -> SourceArtifact:
     now = utc_now()
     return SourceArtifact(
         object_id=generate_ksuid(),
-        namespace="eric/dev/artifact",
+        namespace="admin/dev/artifact",
         created_at=now,
         updated_at=now,
         title="race",

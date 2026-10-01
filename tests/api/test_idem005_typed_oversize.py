@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from musubi.api.dependencies import get_episodic_plane
 from musubi.api.idempotency import IdempotencyLeaseCache, get_idempotency_lease_cache
 
-NAMESPACE = "eric/claude-code/episodic"
+NAMESPACE = "admin/claude-code/episodic"
 
 
 class _RecordingPlane:

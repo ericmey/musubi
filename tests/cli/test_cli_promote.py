@@ -19,7 +19,7 @@ _BASE = "http://localhost:8100/v1"
 _TOKEN = "operator-token-fake"
 _CONCEPT_ID = "3CmTEST0000000000000000000001"
 _CURATED_ID = "3CmTEST0000000000000000000002"
-_NAMESPACE = "eric/shared/concept"
+_NAMESPACE = "admin/shared/concept"
 
 
 @pytest.fixture(autouse=True)
@@ -110,14 +110,14 @@ def test_force_promote_custom_reason_flows_into_body(
             "--curated-id",
             _CURATED_ID,
             "--reason",
-            "escalated by eric",
+            "escalated by admin",
             "--token",
             _TOKEN,
         ],
     )
     assert result.exit_code == 0, result.output
     body = json.loads(httpx_mock.get_request().read())  # type: ignore[union-attr]
-    assert body["reason"] == "escalated by eric"
+    assert body["reason"] == "escalated by admin"
 
 
 def test_reject_sets_rejected_fields_and_posts_reason(

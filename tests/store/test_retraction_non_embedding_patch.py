@@ -18,7 +18,7 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory, RetractionEvidence
 
 _COLLECTION = "musubi_episodic"
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 _ORIGINAL = "the exact false claim retained for retrieval"
 
 
@@ -105,7 +105,7 @@ def _evidence(anchor: dict[str, Any]) -> RetractionEvidence:
     return RetractionEvidence.model_validate(
         {
             "kind": "artifact_escrow_v1",
-            "artifact_namespace": "eric/claude-code/artifact",
+            "artifact_namespace": "admin/claude-code/artifact",
             "artifact_ref": {"artifact_id": generate_ksuid()},
             "original_sha256": hashlib.sha256(original).hexdigest(),
             "original_utf8_bytes": len(original),

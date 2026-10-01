@@ -14,7 +14,7 @@ pytestmark = pytest.mark.anyio
 def test_streaming_retrieval_ranked(
     client: TestClient, episodic: EpisodicPlane, qdrant: QdrantClient, valid_token: str
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     resp = client.post(
         "/v1/episodic",
@@ -70,7 +70,7 @@ def test_streaming_retrieval_ranked(
 def test_streaming_retrieval_recent(
     client: TestClient, episodic: EpisodicPlane, qdrant: QdrantClient, valid_token: str
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     resp = client.post(
         "/v1/episodic",
@@ -114,27 +114,27 @@ def test_streaming_retrieval_wildcard_auth_forbids(
 
     token = mint_token(
         api_settings,
-        scopes=["nyla/streaming-wildcard/episodic:r"],
-        presence="nyla/streaming-wildcard",
+        scopes=["casey/streaming-wildcard/episodic:r"],
+        presence="casey/streaming-wildcard",
     )
 
     write_token = mint_token(
         api_settings,
-        scopes=["nyla/streaming-wildcard/episodic:rw", "nyla/streaming-other/episodic:rw"],
-        presence="nyla/streaming-wildcard",
+        scopes=["casey/streaming-wildcard/episodic:rw", "casey/streaming-other/episodic:rw"],
+        presence="casey/streaming-wildcard",
     )
 
     r1 = client.post(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {write_token}"},
-        json={"namespace": "nyla/streaming-wildcard/episodic", "content": "Allowed"},
+        json={"namespace": "casey/streaming-wildcard/episodic", "content": "Allowed"},
     )
     assert r1.status_code // 100 == 2
 
     r2 = client.post(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {write_token}"},
-        json={"namespace": "nyla/streaming-other/episodic", "content": "Forbidden"},
+        json={"namespace": "casey/streaming-other/episodic", "content": "Forbidden"},
     )
     assert r2.status_code // 100 == 2
 
@@ -142,7 +142,7 @@ def test_streaming_retrieval_wildcard_auth_forbids(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "namespace": "nyla/*/episodic",
+            "namespace": "casey/*/episodic",
             "query_text": "content",
             "mode": "fast",
         },
@@ -157,7 +157,7 @@ def test_streaming_retrieval_zero_row_warning_header(client: TestClient, valid_t
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "nothing here",
             "mode": "fast",
             "limit": 5,
@@ -193,7 +193,7 @@ def test_streaming_retrieval_degraded_warning_header(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "trigger degradation",
             "mode": "blended",
             "limit": 5,
@@ -228,7 +228,7 @@ def test_streaming_typed_error_mapping(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "trigger error",
             "mode": "fast",
         },
@@ -243,7 +243,7 @@ def test_streaming_typed_error_mapping(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "trigger error",
             "mode": "fast",
         },
@@ -278,7 +278,7 @@ def test_streaming_retrieval_forwards_all_query_parameters(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "param test",
             "mode": "recent",
             "limit": 7,
@@ -298,7 +298,7 @@ def test_streaming_retrieval_forwards_all_query_parameters(
     assert captured_query["include_archived"] is True
     assert captured_query["include_lineage"] is False
     assert captured_query["namespace_targets"] == [
-        {"namespace": "eric/claude-code/episodic", "plane": "episodic"}
+        {"namespace": "admin/claude-code/episodic", "plane": "episodic"}
     ]
 
 
@@ -317,15 +317,15 @@ def test_streaming_retrieval_multi_plane_fanout(
         fast_timing: object,
     ) -> object:
         assert query["namespace_targets"] == [
-            {"namespace": "eric/claude-code/episodic", "plane": "episodic"},
-            {"namespace": "eric/claude-code/curated", "plane": "curated"},
+            {"namespace": "admin/claude-code/episodic", "plane": "episodic"},
+            {"namespace": "admin/claude-code/curated", "plane": "curated"},
         ]
         return Ok(
             value=RetrievalEnvelope(
                 results=[
                     RetrievalResult(
                         object_id="ep-1",
-                        namespace="eric/claude-code/episodic",
+                        namespace="admin/claude-code/episodic",
                         plane="episodic",
                         snippet="ep content",
                         score=0.9,
@@ -342,7 +342,7 @@ def test_streaming_retrieval_multi_plane_fanout(
                     ),
                     RetrievalResult(
                         object_id="cur-1",
-                        namespace="eric/claude-code/curated",
+                        namespace="admin/claude-code/curated",
                         plane="curated",
                         snippet="cur content",
                         score=0.8,
@@ -368,7 +368,7 @@ def test_streaming_retrieval_multi_plane_fanout(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "planes": ["episodic", "curated"],
             "query_text": "fanout",
             "mode": "fast",

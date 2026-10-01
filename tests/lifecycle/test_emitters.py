@@ -43,12 +43,12 @@ async def test_emit_sends_a_valid_thought() -> None:
     emitter = ThoughtsPlaneEmitter(
         thoughts=plane,  # type: ignore[arg-type]
         from_presence="lifecycle-worker",
-        namespace="eric/ops/thought",
+        namespace="admin/ops/thought",
     )
     await emitter.emit("ops-alerts", "Concept X demoted")
     assert len(plane.sent) == 1
     thought = plane.sent[0]
-    assert thought.namespace == "eric/ops/thought"
+    assert thought.namespace == "admin/ops/thought"
     assert thought.channel == "ops-alerts"
     assert thought.from_presence == "lifecycle-worker"
     assert thought.to_presence == "all"
@@ -60,7 +60,7 @@ async def test_emit_folds_title_into_content() -> None:
     emitter = ThoughtsPlaneEmitter(
         thoughts=plane,  # type: ignore[arg-type]
         from_presence="lifecycle-worker",
-        namespace="eric/ops/thought",
+        namespace="admin/ops/thought",
     )
     await emitter.emit("ops", "body text", title="Alert")
     assert plane.sent[0].content == "[Alert] body text"
@@ -70,10 +70,10 @@ async def test_emit_uses_default_namespace_when_not_supplied() -> None:
     plane = _StubThoughtsPlane()
     emitter = ThoughtsPlaneEmitter(
         thoughts=plane,  # type: ignore[arg-type]
-        from_presence="aoi",
+        from_presence="sam",
     )
     await emitter.emit("broadcast", "hello")
-    assert plane.sent[0].namespace == "aoi/ops/thought"
+    assert plane.sent[0].namespace == "sam/ops/thought"
 
 
 async def test_emit_targeted_recipient() -> None:
@@ -81,11 +81,11 @@ async def test_emit_targeted_recipient() -> None:
     emitter = ThoughtsPlaneEmitter(
         thoughts=plane,  # type: ignore[arg-type]
         from_presence="lifecycle-worker",
-        namespace="eric/ops/thought",
-        to_presence="aoi",
+        namespace="admin/ops/thought",
+        to_presence="sam",
     )
-    await emitter.emit("direct", "hey aoi")
-    assert plane.sent[0].to_presence == "aoi"
+    await emitter.emit("direct", "hey sam")
+    assert plane.sent[0].to_presence == "sam"
 
 
 def test_missing_from_presence_raises() -> None:
@@ -102,7 +102,7 @@ async def test_emit_does_not_swallow_plane_errors() -> None:
     emitter = ThoughtsPlaneEmitter(
         thoughts=plane,  # type: ignore[arg-type]
         from_presence="lifecycle-worker",
-        namespace="eric/ops/thought",
+        namespace="admin/ops/thought",
     )
     with pytest.raises(RuntimeError, match="qdrant down"):
         await emitter.emit("ops", "boom")

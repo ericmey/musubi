@@ -28,7 +28,7 @@ def _access_count(qdrant: QdrantClient, namespace: str, object_id: str) -> int |
 def test_streaming_retrieval_accounts_each_delivered_row_once(
     client: TestClient, qdrant: QdrantClient, valid_token: str
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
     resp = client.post(
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},

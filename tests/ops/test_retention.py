@@ -53,13 +53,13 @@ def test_retention_refuses_stored_unindexed_artifact_policy_candidate(
 ) -> None:
     escrow = MagicMock()
     escrow.payload = {
-        "namespace": "eric/command-chair/artifact",
+        "namespace": "admin/command-chair/artifact",
         "object_id": "3H1q1qtb3BGwodFekT1omv2IVZZ",
         "artifact_state": "stored_unindexed",
     }
     ordinary = MagicMock()
     ordinary.payload = {
-        "namespace": "eric/command-chair/artifact",
+        "namespace": "admin/command-chair/artifact",
         "object_id": "3H1q1vkf5A6gJlMlUyyghHj65i0",
         "artifact_state": "indexed",
     }
@@ -71,5 +71,5 @@ def test_retention_refuses_stored_unindexed_artifact_policy_candidate(
     mock_sdk._json.assert_called_once_with(
         "DELETE",
         "/artifacts/3H1q1vkf5A6gJlMlUyyghHj65i0/purge",
-        params={"namespace": "eric/command-chair/artifact"},
+        params={"namespace": "admin/command-chair/artifact"},
     )

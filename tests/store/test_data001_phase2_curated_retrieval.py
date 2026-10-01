@@ -34,7 +34,7 @@ from musubi.types.curated import CuratedKnowledge
 
 pytestmark = pytest.mark.integration
 
-_NS = "eric/data001p2cur/curated"
+_NS = "admin/data001p2cur/curated"
 _COLL = collection_for_plane("curated")
 
 

@@ -62,7 +62,7 @@ def _edge_app(order: list[str]) -> FastAPI:
 
     async def authz() -> dict[str, Any]:
         order.append(AUTHZ)
-        return {"principal": "eric/claude-code"}  # the validated AuthContext
+        return {"principal": "admin/claude-code"}  # the validated AuthContext
 
     async def idem(request: Request, ctx: dict[str, Any] = Depends(authz)) -> dict[str, Any]:
         order.append(IDEM)
@@ -112,7 +112,7 @@ def test_edge_passes_validated_principal_into_identity() -> None:
     captured: dict[str, Any] = {}
 
     async def authz() -> dict[str, Any]:
-        return {"principal": "eric/claude-code"}
+        return {"principal": "admin/claude-code"}
 
     async def idem(request: Request, ctx: dict[str, Any] = Depends(authz)) -> None:
         captured["principal"] = ctx["principal"]
@@ -122,6 +122,6 @@ def test_edge_passes_validated_principal_into_identity() -> None:
         return {}
 
     TestClient(app).post("/x")
-    assert captured["principal"] == "eric/claude-code", (
+    assert captured["principal"] == "admin/claude-code", (
         "the idempotency dependency must receive the validated principal via the edge"
     )

@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import FRESH_STATES, Fixture, Musubi, Store
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
-NS = "aoi/command-chair/episodic"
+NS = "sam/command-chair/episodic"
 
 musubi = Musubi(ENV)
 store = Store()

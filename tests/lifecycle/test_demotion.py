@@ -85,7 +85,7 @@ def _episodic(**kwargs: Any) -> EpisodicMemory:
     now = utc_now()
     d = {
         "object_id": generate_ksuid(),
-        "namespace": "eric/shared/episodic",
+        "namespace": "admin/shared/episodic",
         "content": "Test content",
         "state": "matured",
         "created_at": now - timedelta(days=61),
@@ -248,7 +248,7 @@ async def test_concept_demotion_selects_by_last_reinforced(deps: DemotionDeps) -
     now = utc_now()
     c = SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         title="Recently reinforced",
         content="C",
         synthesis_rationale="R",
@@ -299,7 +299,7 @@ async def test_concept_demotion_selects_when_never_reinforced_and_stale(
     now = utc_now()
     c = SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         title="Never reinforced",
         content="C",
         synthesis_rationale="R",
@@ -340,7 +340,7 @@ async def test_concept_demotion_emits_ops_thought(deps: DemotionDeps) -> None:
     now = utc_now()
     c = SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         title="T",
         content="C",
         synthesis_rationale="R",
@@ -374,7 +374,7 @@ async def test_concept_reinforcement_resets_demotion_clock(deps: DemotionDeps) -
     now = utc_now()
     c = SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         title="Stale then reinforced",
         content="C",
         synthesis_rationale="R",
@@ -429,7 +429,7 @@ async def test_artifact_archival_off_by_default(
     artifact_plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
     art = await artifact_plane.create(
         SourceArtifact(
-            namespace="eric/shared/artifact",
+            namespace="admin/shared/artifact",
             title="old unreferenced",
             filename="a.txt",
             sha256="a" * 64,
@@ -480,7 +480,7 @@ async def test_artifact_archival_respects_referenced_by(
     artifact_plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
     art = await artifact_plane.create(
         SourceArtifact(
-            namespace="eric/shared/artifact",
+            namespace="admin/shared/artifact",
             title="old but referenced",
             filename="b.txt",
             sha256="b" * 64,
@@ -497,7 +497,7 @@ async def test_artifact_archival_respects_referenced_by(
 
     # Episodic memory that cites this artifact in supported_by.
     memory = EpisodicMemory(
-        namespace="eric/shared/episodic",
+        namespace="admin/shared/episodic",
         content="cites the artifact",
         state="matured",
         supported_by=[ArtifactRef(artifact_id=art.object_id, chunk_id=generate_ksuid())],
@@ -536,7 +536,7 @@ async def test_artifact_archival_transitions_to_archived_keeps_blob(
     artifact_plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
     art = await artifact_plane.create(
         SourceArtifact(
-            namespace="eric/shared/artifact",
+            namespace="admin/shared/artifact",
             title="old unreferenced",
             filename="c.txt",
             sha256="c" * 64,
@@ -612,7 +612,7 @@ async def test_reinstate_resets_reinforced_clock(deps: DemotionDeps) -> None:
     now = utc_now()
     c = SynthesizedConcept(
         object_id=generate_ksuid(),
-        namespace="eric/shared/concept",
+        namespace="admin/shared/concept",
         title="Reinstated",
         content="C",
         synthesis_rationale="R",

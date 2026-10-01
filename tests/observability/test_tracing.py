@@ -96,7 +96,7 @@ class TestIsEnabled:
         assert tracing.is_enabled("   ") is False
 
     def test_enabled_when_endpoint_set(self) -> None:
-        assert tracing.is_enabled("http://shiori.mey.house:4317") is True
+        assert tracing.is_enabled("http://telemetry.example.net:4317") is True
 
 
 class TestInitTracing:
@@ -227,7 +227,7 @@ class TestGetTracer:
         # Surface contract: start_as_current_span returns a context
         # manager yielding something with set_attribute + is_recording.
         with t.start_as_current_span("retrieve.orchestration") as span:
-            span.set_attribute("musubi.namespace", "eric/x")  # must not raise
+            span.set_attribute("musubi.namespace", "admin/x")  # must not raise
             assert span.is_recording() is False
 
 

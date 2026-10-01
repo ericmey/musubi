@@ -30,7 +30,7 @@ from starlette.testclient import TestClient
 
 PUBLIC = "/v1/ops/health"  # no auth dependency
 PROTECTED = "/v1/episodic"  # require_auth route dependency
-_PROTECTED_QS = {"namespace": "eric/claude-code/episodic", "query": "x"}
+_PROTECTED_QS = {"namespace": "admin/claude-code/episodic", "query": "x"}
 _BAD = {"Authorization": "Bearer not-a-real-token"}
 
 
@@ -191,14 +191,14 @@ def test_valid_bearer_on_protected_route_validates_exactly_once(
     # not in its __all__, so a direct attribute reference trips no_implicit_reexport.
     monkeypatch.setattr("musubi.auth.middleware.validate_token", counting)
 
-    # Default mint_token scope is exactly `eric/claude-code/episodic:r`, the namespace
+    # Default mint_token scope is exactly `admin/claude-code/episodic:r`, the namespace
     # in _PROTECTED_QS — so this request genuinely SUCCEEDS.
     token = mint_token(api_settings)
     r = client.get(PROTECTED, params=_PROTECTED_QS, headers={"Authorization": f"Bearer {token}"})
 
     # EXACT 200, not "not 401". Yua on the first revision: `!= 401` passes on 403 or
     # 500, so it never proved an authenticated request completed — and it WAS passing
-    # on a 403, because the scope string used here originally (`eric/*:rw`) does not
+    # on a 403, because the scope string used here originally (`admin/*:rw`) does not
     # grant that namespace. A validation count only means something for a request that
     # actually reached the handler.
     assert r.status_code == 200, f"valid in-scope bearer did not succeed: {r.status_code} {r.text}"
@@ -217,7 +217,7 @@ def test_reused_context_still_enforces_the_route_requirement(
     be refused by the protected route. If the guard's context short-circuited the
     AuthRequirement, this would wrongly succeed.
     """
-    wrong = mint_token(api_settings, scopes=["eric/evil/episodic:rw"])
+    wrong = mint_token(api_settings, scopes=["admin/evil/episodic:rw"])
     r = client.get(PROTECTED, params=_PROTECTED_QS, headers={"Authorization": f"Bearer {wrong}"})
 
     # EXACT canonical scope denial, not "401 or 403". Yua on the first revision: a 401
@@ -231,7 +231,8 @@ def test_reused_context_still_enforces_the_route_requirement(
     error = r.json()["error"]
     assert error["code"] == "FORBIDDEN", error
     assert (
-        error["detail"] == "namespace 'eric/claude-code/episodic' not in token scope for 'r' access"
+        error["detail"]
+        == "namespace 'admin/claude-code/episodic' not in token scope for 'r' access"
     ), error
 
 

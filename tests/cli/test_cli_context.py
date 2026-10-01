@@ -38,12 +38,12 @@ def _context_reply() -> dict[str, object]:
                 "items": [
                     {
                         "object_id": "v053",
-                        "namespace": "yua/command-chair/episodic",
+                        "namespace": "alex/command-chair/episodic",
                         "plane": "episodic",
                         "kind": "project-stance",
                         "staleness": "durable",
                         "content": "V-053 promptsmith compiler route.",
-                        "evidence_handle": "yua/command-chair/episodic/v053",
+                        "evidence_handle": "alex/command-chair/episodic/v053",
                         "why_surfaced": "durable project-stance",
                         "score": 9.1,
                     }
@@ -72,7 +72,7 @@ def test_context_posts_to_api_and_renders_grouped_output(
         [
             "context",
             "--namespace",
-            "yua/command-chair",
+            "alex/command-chair",
             "--query",
             "Vice LoRA",
             "--planes",
@@ -87,7 +87,7 @@ def test_context_posts_to_api_and_renders_grouped_output(
     assert request is not None
     assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
     body = json.loads(request.read())
-    assert body["namespace"] == "yua/command-chair"
+    assert body["namespace"] == "alex/command-chair"
     assert body["query_text"] == "Vice LoRA"
     assert body["planes"] == ["episodic", "curated"]
     assert "Current-Project:" in result.output
@@ -104,7 +104,7 @@ def test_context_json_flag_emits_raw_response(
         [
             "context",
             "--namespace",
-            "yua/command-chair",
+            "alex/command-chair",
             "--query",
             "Vice LoRA",
             "--token",
@@ -141,7 +141,7 @@ def test_context_nonjson_renders_warnings(runner: CliRunner, httpx_mock: HTTPXMo
         [
             "context",
             "--namespace",
-            "yua/command-chair",
+            "alex/command-chair",
             "--query",
             "Vice LoRA",
             "--planes",
@@ -166,7 +166,7 @@ def test_context_json_preserves_warnings(runner: CliRunner, httpx_mock: HTTPXMoc
         [
             "context",
             "--namespace",
-            "yua/command-chair",
+            "alex/command-chair",
             "--query",
             "Vice LoRA",
             "--token",

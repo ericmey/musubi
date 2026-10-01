@@ -154,7 +154,7 @@ async def audit_receipt(
 ) -> ReceiptAuditResponse:
     """Confirm one exact principal-bound durable receipt for a two-seat audit."""
     # Both gates run before the store is resolved. Read authority establishes the
-    # namespace boundary; operator authority establishes the household audit trust
+    # namespace boundary; operator authority establishes the deployment audit trust
     # boundary. Neither one implies the other.
     authorize_namespace(request, body.namespace, settings=settings, access="r")
     require_operator_scope(request, settings=settings)

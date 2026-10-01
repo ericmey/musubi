@@ -71,14 +71,14 @@ def test_capture_returns_memory_model() -> None:
         assert request.method == "POST"
         assert request.url.path == "/v1/episodic"
         body = json.loads(request.content)
-        assert body["namespace"] == "eric/x/episodic"
+        assert body["namespace"] == "admin/x/episodic"
         return httpx.Response(
             202,
             json={"object_id": "k" * 27, "state": "provisional"},
         )
 
     client = _client(httpx.MockTransport(handler))
-    result = client.episodic.capture(namespace="eric/x/episodic", content="hello")
+    result = client.episodic.capture(namespace="admin/x/episodic", content="hello")
     assert result["object_id"] == "k" * 27
     assert result["state"] == "provisional"
 
@@ -113,7 +113,7 @@ def test_retrieve_returns_list_of_results() -> None:
         )
 
     client = _client(httpx.MockTransport(handler))
-    rows = client.retrieve(namespace="eric/x/episodic", query_text="hi")
+    rows = client.retrieve(namespace="admin/x/episodic", query_text="hi")
     assert len(rows["results"]) == 2
     assert rows["results"][0]["score"] == 0.9
 
@@ -127,7 +127,7 @@ def test_thoughts_send_returns_acknowledgement() -> None:
 
     client = _client(httpx.MockTransport(handler))
     ack = client.thoughts.send(
-        namespace="eric/x/thought",
+        namespace="admin/x/thought",
         from_presence="claude-code",
         to_presence="livekit",
         content="hi",
@@ -151,7 +151,7 @@ def test_capture_threads_created_at_override_to_body() -> None:
     client = _client(httpx.MockTransport(handler))
     ts = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
     client.episodic.capture(
-        namespace="eric/x/episodic",
+        namespace="admin/x/episodic",
         content="historical",
         created_at=ts,
     )
@@ -169,7 +169,7 @@ def test_capture_without_created_at_omits_field_from_body() -> None:
         return httpx.Response(202, json={"object_id": "z" * 27, "state": "provisional"})
 
     client = _client(httpx.MockTransport(handler))
-    client.episodic.capture(namespace="eric/x/episodic", content="normal")
+    client.episodic.capture(namespace="admin/x/episodic", content="normal")
     assert captured and "created_at" not in captured[0]
 
 
@@ -185,7 +185,7 @@ def test_batch_context_threads_per_item_created_at() -> None:
         return httpx.Response(202, json={"object_ids": ["a" * 27, "b" * 27, "c" * 27]})
 
     client = _client(httpx.MockTransport(handler))
-    with client.episodic.batch(namespace="eric/x/episodic") as batch:
+    with client.episodic.batch(namespace="admin/x/episodic") as batch:
         batch.capture(content="no-override")
         batch.capture(content="with-override", created_at=datetime(2023, 1, 1, tzinfo=UTC))
         batch.capture(content="also-no")
@@ -215,7 +215,7 @@ def test_batch_context_one_http_call() -> None:
         )
 
     client = _client(httpx.MockTransport(handler))
-    with client.episodic.batch(namespace="eric/x/episodic") as batch:
+    with client.episodic.batch(namespace="admin/x/episodic") as batch:
         batch.capture(content="one")
         batch.capture(content="two")
         batch.capture(content="three")
@@ -237,7 +237,7 @@ def test_stream_yields_per_ndjson_line() -> None:
         )
 
     client = _client(httpx.MockTransport(handler))
-    rows = list(client.retrieve_stream(namespace="eric/x/episodic", query_text="x"))
+    rows = list(client.retrieve_stream(namespace="admin/x/episodic", query_text="x"))
     assert len(rows) == 2
     assert rows[0]["object_id"] == "a"
     assert rows[1]["object_id"] == "b"
@@ -264,12 +264,12 @@ def test_403_raises_forbidden_with_detail() -> None:
     transport = httpx.MockTransport(
         lambda r: httpx.Response(
             403,
-            json=_err("FORBIDDEN", 403, "namespace 'eric/other/episodic' not in token scope"),
+            json=_err("FORBIDDEN", 403, "namespace 'admin/other/episodic' not in token scope"),
         )
     )
     client = _client(transport)
     with pytest.raises(Forbidden) as exc:
-        client.episodic.capture(namespace="eric/other/episodic", content="x")
+        client.episodic.capture(namespace="admin/other/episodic", content="x")
     assert "not in token scope" in exc.value.detail
 
 
@@ -287,7 +287,7 @@ def test_503_retries_then_raises_backend_unavailable() -> None:
         retry=RetryPolicy(max_attempts=3, base_backoff=0.0),
     )
     with pytest.raises(BackendUnavailable):
-        client.episodic.capture(namespace="eric/x/episodic", content="x")
+        client.episodic.capture(namespace="admin/x/episodic", content="x")
     assert attempts["n"] == 3
 
 
@@ -305,7 +305,7 @@ def test_network_error_retried() -> None:
         retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
     )
     with pytest.raises(NetworkError):
-        client.episodic.capture(namespace="eric/x/episodic", content="x")
+        client.episodic.capture(namespace="admin/x/episodic", content="x")
     assert attempts["n"] == 2
 
 
@@ -315,7 +315,7 @@ def test_result_api_mirrors_exception_api() -> None:
     ok_transport = httpx.MockTransport(
         lambda r: httpx.Response(202, json={"object_id": "o" * 27, "state": "provisional"})
     )
-    ok = _client(ok_transport).episodic.capture_result(namespace="eric/x/episodic", content="x")
+    ok = _client(ok_transport).episodic.capture_result(namespace="admin/x/episodic", content="x")
     assert isinstance(ok, SDKResult)
     assert ok.is_ok()
     assert ok.ok is not None
@@ -324,7 +324,7 @@ def test_result_api_mirrors_exception_api() -> None:
     err_transport = httpx.MockTransport(
         lambda r: httpx.Response(403, json=_err("FORBIDDEN", 403, "nope"))
     )
-    err = _client(err_transport).episodic.capture_result(namespace="eric/x/episodic", content="x")
+    err = _client(err_transport).episodic.capture_result(namespace="admin/x/episodic", content="x")
     assert err.is_err()
     assert err.err is not None
     assert err.err.code == "FORBIDDEN"
@@ -356,7 +356,7 @@ def test_retry_honors_retry_after_header() -> None:
         httpx.MockTransport(handler),
         retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
     )
-    client.episodic.capture(namespace="eric/x/episodic", content="x")
+    client.episodic.capture(namespace="admin/x/episodic", content="x")
     # We don't actually wait a full second in the test (retry honours
     # the header up to a cap); verify the policy CONSULTED the header
     # by checking that the retry happened.
@@ -376,7 +376,7 @@ def test_retry_exponential_backoff_respects_max_attempts() -> None:
         retry=RetryPolicy(max_attempts=4, base_backoff=0.0),
     )
     with pytest.raises(BackendUnavailable):
-        client.episodic.capture(namespace="eric/x/episodic", content="x")
+        client.episodic.capture(namespace="admin/x/episodic", content="x")
     assert attempts["n"] == 4
 
 
@@ -390,13 +390,13 @@ def test_idempotency_key_auto_generated_on_post() -> None:
         return httpx.Response(202, json={"object_id": "o" * 27, "state": "provisional"})
 
     client = _client(httpx.MockTransport(handler))
-    client.episodic.capture(namespace="eric/x/episodic", content="x")
+    client.episodic.capture(namespace="admin/x/episodic", content="x")
     assert seen_keys[0] is not None
     assert len(seen_keys[0]) >= 8
 
     # Caller-supplied wins.
     client.episodic.capture(
-        namespace="eric/x/episodic",
+        namespace="admin/x/episodic",
         content="y",
         idempotency_key="my-key-123",
     )
@@ -417,8 +417,8 @@ def test_connection_pool_reused_across_calls() -> None:
         )
     )
     first = client._http
-    client.retrieve(namespace="eric/x/episodic", query_text="a")
-    client.retrieve(namespace="eric/x/episodic", query_text="b")
+    client.retrieve(namespace="admin/x/episodic", query_text="a")
+    client.retrieve(namespace="admin/x/episodic", query_text="b")
     assert client._http is first
 
 
@@ -438,7 +438,7 @@ def test_async_client_context_manager_cleanup() -> None:
             retry=RetryPolicy(max_attempts=1, base_backoff=0.0),
             transport=transport,
         ) as client:
-            await client.retrieve(namespace="eric/x/episodic", query_text="hi")
+            await client.retrieve(namespace="admin/x/episodic", query_text="hi")
             inner = client._http
         return inner.is_closed
 
@@ -501,7 +501,7 @@ def test_request_id_propagated() -> None:
 
     client = _client(httpx.MockTransport(handler))
     client.retrieve(
-        namespace="eric/x/episodic",
+        namespace="admin/x/episodic",
         query_text="x",
         request_id="trace-abc-123",
     )
@@ -568,7 +568,7 @@ def test_fake_client_accepts_same_args_as_real() -> None:
             "limit": 10,
         },
     )
-    out = fake.retrieve(namespace="eric/x/episodic", query_text="probe")
+    out = fake.retrieve(namespace="admin/x/episodic", query_text="probe")
     assert out["results"][0]["object_id"] == "x" * 27
 
 
@@ -642,7 +642,7 @@ def test_async_capture_round_trip() -> None:
             transport=httpx.MockTransport(handler),
         )
         try:
-            return await client.episodic.capture(namespace="eric/x/episodic", content="async")
+            return await client.episodic.capture(namespace="admin/x/episodic", content="async")
         finally:
             await client.close()
 
@@ -658,7 +658,7 @@ def test_authorization_header_set() -> None:
         return httpx.Response(200, json={"results": [], "mode": "fast", "limit": 10})
 
     client = _client(httpx.MockTransport(handler))
-    client.retrieve(namespace="eric/x/episodic", query_text="x")
+    client.retrieve(namespace="admin/x/episodic", query_text="x")
     assert seen[0] == f"Bearer {_TOKEN}"
 
 
@@ -668,7 +668,7 @@ def test_thoughts_check_routes_to_check_endpoint() -> None:
         return httpx.Response(200, json={"items": []})
 
     client = _client(httpx.MockTransport(handler))
-    out = client.thoughts.check(namespace="eric/x/thought", presence="eric/claude-code")
+    out = client.thoughts.check(namespace="admin/x/thought", presence="admin/claude-code")
     assert out == {"items": []}
 
 
@@ -678,7 +678,7 @@ def test_curated_get_routes_to_curated_endpoint() -> None:
         return httpx.Response(200, json={"object_id": "c" * 27})
 
     client = _client(httpx.MockTransport(handler))
-    out = client.curated.get(namespace="eric/x/curated", object_id="c" * 27)
+    out = client.curated.get(namespace="admin/x/curated", object_id="c" * 27)
     assert out["object_id"] == "c" * 27
 
 
@@ -689,7 +689,7 @@ def test_artifact_blob_returns_raw_bytes() -> None:
         )
 
     client = _client(httpx.MockTransport(handler))
-    body = client.artifacts.blob(namespace="eric/x/artifact", object_id="a" * 27)
+    body = client.artifacts.blob(namespace="admin/x/artifact", object_id="a" * 27)
     assert body == b"<html>raw</html>"
 
 
@@ -730,7 +730,7 @@ def test_async_retrieve_round_trip() -> None:
 
     async def _run() -> dict[str, Any]:
         async with _async_client(handler) as c:
-            return await c.retrieve(namespace="eric/x/episodic", query_text="hi")
+            return await c.retrieve(namespace="admin/x/episodic", query_text="hi")
 
     out = asyncio.run(_run())
     assert out["results"][0]["object_id"] == "z" * 27
@@ -742,7 +742,7 @@ def test_async_capture_result_returns_sdkresult_on_error() -> None:
 
     async def _run() -> SDKResult[dict[str, Any]]:
         async with _async_client(handler) as c:
-            return await c.episodic.capture_result(namespace="eric/other/episodic", content="x")
+            return await c.episodic.capture_result(namespace="admin/other/episodic", content="x")
 
     res = asyncio.run(_run())
     assert res.is_err()
@@ -861,7 +861,7 @@ def test_async_capture_threads_created_at_override_to_body() -> None:
     async def _run() -> None:
         async with _async_client(handler) as c:
             await c.episodic.capture(
-                namespace="eric/x/episodic",
+                namespace="admin/x/episodic",
                 content="historical",
                 created_at=ts,
             )
@@ -882,7 +882,7 @@ def test_async_capture_without_created_at_omits_field() -> None:
 
     async def _run() -> None:
         async with _async_client(handler) as c:
-            await c.episodic.capture(namespace="eric/x/episodic", content="normal")
+            await c.episodic.capture(namespace="admin/x/episodic", content="normal")
 
     asyncio.run(_run())
     assert captured and "created_at" not in captured[0]
@@ -902,7 +902,7 @@ def test_async_batch_context_threads_per_item_created_at() -> None:
     async def _run() -> None:
         async with (
             _async_client(handler) as c,
-            c.episodic.batch(namespace="eric/x/episodic") as batch,
+            c.episodic.batch(namespace="admin/x/episodic") as batch,
         ):
             batch.capture(content="no-override")
             batch.capture(content="with-override", created_at=datetime(2023, 1, 1, tzinfo=UTC))

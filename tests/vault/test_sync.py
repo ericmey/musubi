@@ -41,7 +41,7 @@ class FakeCuratedPlane:
 def vault_root(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir()
-    (root / "eric" / "shared").mkdir(parents=True)
+    (root / "admin" / "shared").mkdir(parents=True)
     return root
 
 
@@ -81,11 +81,11 @@ def reconciler(vault_root: Path) -> VaultReconciler:
 
 @pytest.mark.asyncio
 async def test_on_created_indexes_new_file(vault_root: Path, watcher: VaultWatcher) -> None:
-    file_path = vault_root / "eric" / "shared" / "test.md"
+    file_path = vault_root / "admin" / "shared" / "test.md"
     ksuid = generate_ksuid()
     fm = {
         "object_id": ksuid,
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "title": "Test",
         "created": "2026-04-17T09:00:00Z",
         "updated": "2026-04-17T09:00:00Z",
@@ -103,11 +103,11 @@ async def test_on_created_indexes_new_file(vault_root: Path, watcher: VaultWatch
 
 @pytest.mark.asyncio
 async def test_on_modified_reindexes_body_change(vault_root: Path, watcher: VaultWatcher) -> None:
-    file_path = vault_root / "eric" / "shared" / "test.md"
+    file_path = vault_root / "admin" / "shared" / "test.md"
     ksuid = generate_ksuid()
     fm = {
         "object_id": ksuid,
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "title": "Test",
         "created": "2026-04-17T09:00:00Z",
         "updated": "2026-04-17T09:00:00Z",
@@ -133,12 +133,12 @@ def test_on_modified_frontmatter_only_no_reembed() -> None:
 
 @pytest.mark.asyncio
 async def test_on_moved_updates_vault_path(vault_root: Path, watcher: VaultWatcher) -> None:
-    src_path = vault_root / "eric" / "shared" / "old.md"
-    dest_path = vault_root / "eric" / "shared" / "new.md"
+    src_path = vault_root / "admin" / "shared" / "old.md"
+    dest_path = vault_root / "admin" / "shared" / "new.md"
     ksuid = generate_ksuid()
     fm = {
         "object_id": ksuid,
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "title": "Test",
         "created": "2026-04-17T09:00:00Z",
         "updated": "2026-04-17T09:00:00Z",
@@ -151,7 +151,7 @@ async def test_on_moved_updates_vault_path(vault_root: Path, watcher: VaultWatch
 
     plane = watcher.curated_plane
     assert len(plane.created) == 1  # type: ignore
-    assert plane.created[0].vault_path == "eric/shared/new.md"  # type: ignore
+    assert plane.created[0].vault_path == "admin/shared/new.md"  # type: ignore
 
 
 @pytest.mark.asyncio
@@ -178,12 +178,12 @@ async def test_underscore_dir_ignored(vault_root: Path, watcher: VaultWatcher) -
 async def test_debounce_multiple_rapid_writes_process_once(
     vault_root: Path, watcher: VaultWatcher
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "test.md"
+    file_path = vault_root / "admin" / "shared" / "test.md"
     ksuid = generate_ksuid()
     fm = {
         "object_id": ksuid,
         "title": "T",
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "created": "2026-04-17T09:00:00Z",
         "updated": "2026-04-17T09:00:00Z",
     }
@@ -210,12 +210,12 @@ async def test_debounce_multiple_rapid_writes_process_once(
 async def test_debounce_extends_on_new_event_during_window(
     vault_root: Path, watcher: VaultWatcher
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "test.md"
+    file_path = vault_root / "admin" / "shared" / "test.md"
     ksuid = generate_ksuid()
     fm = {
         "object_id": ksuid,
         "title": "T",
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "created": "2026-04-17T09:00:00Z",
         "updated": "2026-04-17T09:00:00Z",
     }
@@ -243,7 +243,7 @@ async def test_debounce_extends_on_new_event_during_window(
 async def test_invalid_yaml_emits_thought_and_skips(
     vault_root: Path, watcher: VaultWatcher, caplog: pytest.LogCaptureFixture
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "bad.md"
+    file_path = vault_root / "admin" / "shared" / "bad.md"
     file_path.write_text("---\ntitle: [unclosed list\n---\nBody", encoding="utf-8")
     await watcher._handle_event(str(file_path), FileCreatedEvent(str(file_path)))
     assert len(watcher.curated_plane.created) == 0  # type: ignore
@@ -253,7 +253,7 @@ async def test_invalid_yaml_emits_thought_and_skips(
 async def test_missing_required_field_emits_thought(
     vault_root: Path, watcher: VaultWatcher, caplog: pytest.LogCaptureFixture
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "bad.md"
+    file_path = vault_root / "admin" / "shared" / "bad.md"
     # Missing title which is required by the model.
     file_path.write_text("---\nobject_id: " + generate_ksuid() + "\n---\nBody", encoding="utf-8")
     await watcher._handle_event(str(file_path), FileCreatedEvent(str(file_path)))
@@ -269,7 +269,7 @@ def test_body_only_no_frontmatter_rejected() -> None:
 async def test_missing_object_id_gets_generated_and_written_back(
     vault_root: Path, watcher: VaultWatcher
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "new.md"
+    file_path = vault_root / "admin" / "shared" / "new.md"
     file_path.write_text("---\ntitle: New Note\n---\nBody", encoding="utf-8")
 
     await watcher._handle_event(str(file_path), FileCreatedEvent(str(file_path)))
@@ -277,19 +277,19 @@ async def test_missing_object_id_gets_generated_and_written_back(
     # Watcher should have bootstrapped ID and written back
     content = file_path.read_text(encoding="utf-8")
     assert "object_id: " in content
-    assert "namespace: eric/shared/curated" in content
+    assert "namespace: admin/shared/curated" in content
 
 
 @pytest.mark.asyncio
 async def test_writelog_matches_core_write_event_consumed(
     vault_root: Path, watcher: VaultWatcher, writer: VaultWriter
 ) -> None:
-    rel_path = "eric/shared/core.md"
+    rel_path = "admin/shared/core.md"
     ksuid = generate_ksuid()
     now = utc_now()
     fm = CuratedFrontmatter(
         object_id=ksuid,
-        namespace="eric/shared/curated",
+        namespace="admin/shared/curated",
         title="Core Write",
         created=now,
         updated=now,
@@ -310,7 +310,7 @@ async def test_writelog_matches_core_write_event_consumed(
 async def test_writelog_mismatch_body_hash_reindexes(
     vault_root: Path, watcher: VaultWatcher, write_log: WriteLog
 ) -> None:
-    rel_path = "eric/shared/mismatch.md"
+    rel_path = "admin/shared/mismatch.md"
     file_path = vault_root / rel_path
     write_log.record_write(rel_path, "wrong-hash")
 
@@ -318,7 +318,7 @@ async def test_writelog_mismatch_body_hash_reindexes(
     fm = {
         "object_id": ksuid,
         "title": "T",
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "created": "2026-04-17T09:00:00Z",
         "updated": "2026-04-17T09:00:00Z",
     }
@@ -373,7 +373,7 @@ async def test_oversize_markdown_skipped_with_warning(
 
     from musubi.vault.watcher import _MAX_VAULT_MD_BYTES
 
-    eric_dir = vault_root / "eric" / "shared"
+    eric_dir = vault_root / "admin" / "shared"
     eric_dir.mkdir(parents=True, exist_ok=True)
     file_path = eric_dir / "huge.md"
     # Sparse file 1 MB over the limit — reports the right st_size via
@@ -411,7 +411,7 @@ async def test_binary_extension_skipped_with_warning(
 
     from watchdog.events import FileCreatedEvent
 
-    eric_dir = vault_root / "eric" / "shared"
+    eric_dir = vault_root / "admin" / "shared"
     eric_dir.mkdir(parents=True, exist_ok=True)
     file_path = eric_dir / "sketch.png"
     file_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -437,12 +437,12 @@ async def test_reconciler_detects_orphan_point() -> None:
 async def test_reconciler_detects_orphan_file(
     vault_root: Path, reconciler: VaultReconciler
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "orphan.md"
+    file_path = vault_root / "admin" / "shared" / "orphan.md"
     ksuid = generate_ksuid()
     now = utc_now().isoformat()
     fm = {
         "object_id": ksuid,
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "title": "T",
         "created": now,
         "updated": now,
@@ -467,12 +467,12 @@ async def test_reconciler_reindexes_drifted_body_hash(
 async def test_reconciler_idempotent_on_second_run(
     vault_root: Path, reconciler: VaultReconciler
 ) -> None:
-    file_path = vault_root / "eric" / "shared" / "test.md"
+    file_path = vault_root / "admin" / "shared" / "test.md"
     ksuid = generate_ksuid()
     now = utc_now().isoformat()
     fm = {
         "object_id": ksuid,
-        "namespace": "eric/shared/curated",
+        "namespace": "admin/shared/curated",
         "title": "T",
         "created": now,
         "updated": now,
@@ -514,7 +514,7 @@ async def test_event_rate_limit_drops_with_warning(
     w._loop = asyncio.get_running_loop()
 
     caplog.set_level(logging.WARNING)
-    eric_dir = vault_root / "eric" / "shared"
+    eric_dir = vault_root / "admin" / "shared"
     eric_dir.mkdir(parents=True, exist_ok=True)
 
     # Burst of 5 distinct-path events; bucket caps at 1 ⇒ 1 accepted,
@@ -572,7 +572,7 @@ async def test_indexing_rate_limit_backpressure(
     )
     w._loop = asyncio.get_running_loop()
 
-    eric_dir = vault_root / "eric" / "shared"
+    eric_dir = vault_root / "admin" / "shared"
     eric_dir.mkdir(parents=True, exist_ok=True)
 
     started = time.monotonic()
@@ -582,7 +582,7 @@ async def test_indexing_rate_limit_backpressure(
         f = eric_dir / f"bp-{i}.md"
         fm = {
             "object_id": ksuid,
-            "namespace": "eric/shared/curated",
+            "namespace": "admin/shared/curated",
             "title": f"T{i}",
             "created": "2026-04-17T09:00:00Z",
             "updated": "2026-04-17T09:00:00Z",

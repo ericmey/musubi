@@ -17,7 +17,7 @@ from musubi.store.immutable_vectors import patch_non_embedding_payload
 from musubi.store.names import collection_for_plane
 from musubi.types.curated import CuratedKnowledge
 
-_NS = "eric/claude-code/curated"
+_NS = "admin/claude-code/curated"
 _COLLECTION = collection_for_plane("curated")
 
 
@@ -36,7 +36,7 @@ def _memory(
         "namespace": _NS,
         "title": title,
         "content": content,
-        "vault_path": "curated/eric/data001-patch-conflict.md",
+        "vault_path": "curated/admin/data001-patch-conflict.md",
         "body_hash": hashlib.sha256(content.encode()).hexdigest(),
         "tags": tags or ["existing", "remove-me"],
         "topics": ["old-topic"],

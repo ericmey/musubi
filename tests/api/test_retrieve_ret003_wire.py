@@ -123,7 +123,7 @@ def _raw_upsert(
             payload["summary"] = marker_in_content
     payload = dict(payload)
     payload.setdefault("object_id", object_id)
-    payload.setdefault("namespace", "eric/claude-code/episodic")
+    payload.setdefault("namespace", "admin/claude-code/episodic")
     # Recent-mode Qdrant scroll orders by `created_epoch` DESC; rows missing
     # this field are filtered out by the order_by path. Seed it explicitly
     # so recent-mode tests find the row.
@@ -183,7 +183,7 @@ def test_retrieve_ranked_top_level_state_present_required_nullable(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`state` key is present on every ranked row (may be `null` for legacy)."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -236,7 +236,7 @@ def test_retrieve_ranked_state_is_source_backed_not_fabricated(
     reads — scan/vault-path — remain fail-loud; that is unchanged.) Seeded via RAW qdrant.upsert to bypass
     typed validation; the corrupt point is asserted present at the store, then proven absent from results.
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     object_id = str(generate_ksuid())
 
     _raw_upsert(
@@ -280,7 +280,7 @@ def test_retrieve_ranked_top_level_importance_present_required_nullable(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`importance` key is present on every ranked row (may be `null` for legacy)."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -327,7 +327,7 @@ def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
     ranked candidate is skipped (fail closed), never 500-ing the whole retrieval. (Identity reads remain
     fail-loud.) Seeded via RAW qdrant.upsert to bypass typed validation.
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     object_id = str(generate_ksuid())
 
     _raw_upsert(
@@ -369,7 +369,7 @@ def test_retrieve_ranked_score_kind_is_ranked_combined(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`score_kind` is the literal string 'ranked_combined' for every ranked row."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -401,7 +401,7 @@ def test_retrieve_ranked_extra_score_components_has_five_keys(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """5 keys in extra.score_components; brief=true preserves state/importance."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -450,7 +450,7 @@ def test_retrieve_ranked_score_is_combined_from_components(
     """`score` equals weights.combine(**test-local public-to-internal mapping) (float tolerance)."""
     from musubi.retrieve.scoring import SCORE_WEIGHTS
 
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -500,7 +500,7 @@ def test_retrieve_ranked_reinforcement_uses_full_word(
     If the production code reverts to the singular internal name on the
     wire, this test will fail and the implementation must fix it.
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -541,7 +541,7 @@ def test_retrieve_recent_score_kind_is_created_epoch(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`score_kind` is the literal string 'created_epoch' for every recent row."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -573,7 +573,7 @@ def test_retrieve_recent_extra_score_components_is_empty_dict_typed(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`extra.score_components` is exactly `{}` typed RecentScoreComponents (never null)."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -610,7 +610,7 @@ def test_retrieve_recent_top_level_state_present(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`state` key is present on every recent row (may be null for legacy)."""
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -658,7 +658,7 @@ def test_retrieve_recent_top_level_importance_present(
     "importance key present" assertion, not at the row-selection
     boundary.
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -711,8 +711,8 @@ def test_retrieve_recent_provenance_score_http_exact(
     (c) curated + provisional → provenance_score is None (NOT 0.1 from a
         fabricated state; (curated, provisional) is NOT in `_PROVENANCE`)
     """
-    ns_episodic = "eric/claude-code/episodic"
-    ns_curated = "eric/claude-code/curated"
+    ns_episodic = "admin/claude-code/episodic"
+    ns_curated = "admin/claude-code/curated"
 
     marker_a = _marker()
     marker_c = _marker()
@@ -840,7 +840,7 @@ def test_wire_importance_audits_internal_default(
     Seeded via RAW qdrant.upsert with importance ABSENT (not the model default
     of 5) so the wire's `importance: null` reflects the actual source absence.
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -1107,7 +1107,7 @@ def test_retrieve_ranked_extra_score_components_exactly_five_and_values_in_unit_
     implementation must expose exactly the 5 public contributors and
     clamp every value to [0,1].
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -1203,7 +1203,7 @@ def test_extra_score_components_path_preserved_for_all_modes(
     3→5 keys; recent is a 3-key dict (currently fabricated but at the same
     path). Do NOT migrate `score_components` to top-level in v1.
     """
-    ns = "eric/claude-code/episodic"
+    ns = "admin/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
 
@@ -1421,7 +1421,7 @@ def test_runtime_vs_snapshot_parity_normalizer_preserves_other_info_fields() -> 
             "title": "Musubi Core API",
             "version": "0.1.0",
             "description": "The canonical HTTP surface over Musubi Core.",
-            "contact": {"name": "Tama", "email": "tama@harem-ops"},
+            "contact": {"name": "Alex", "email": "alex@example.com"},
             "license": {"name": "Apache-2.0"},
         },
         "openapi": "3.1.0",
@@ -1433,7 +1433,7 @@ def test_runtime_vs_snapshot_parity_normalizer_preserves_other_info_fields() -> 
     assert "version" not in info, "normalizer must strip info.version (permit set)"
     # All OTHER info fields are preserved EXACTLY.
     assert info["description"] == "The canonical HTTP surface over Musubi Core."
-    assert info["contact"] == {"name": "Tama", "email": "tama@harem-ops"}
+    assert info["contact"] == {"name": "Alex", "email": "alex@example.com"}
     assert info["license"] == {"name": "Apache-2.0"}
 
 
@@ -1485,7 +1485,7 @@ def test_musubi_wire_readiness_passthrough_shape() -> None:
     # state/importance/score_kind.
     ranked_row = RankedResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=0.875,
         content="snippet",
@@ -1521,7 +1521,7 @@ def test_musubi_wire_readiness_passthrough_shape() -> None:
     # provenance_score nullable, score_components exact {}.
     recent_row = RecentResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=1783957804.0,
         content="snippet",
@@ -1573,7 +1573,7 @@ def test_ranked_response_rejects_recent_row_mutation() -> None:
 
     recent_row = RecentResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=1783957804.0,
         content="snippet",
@@ -1606,7 +1606,7 @@ def test_recent_response_rejects_ranked_row_mutation() -> None:
 
     ranked_row = RankedResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=0.875,
         content="snippet",
@@ -1650,7 +1650,7 @@ def test_ranked_importance_rejects_str_coercion_mutation() -> None:
     with pytest.raises(ValidationError):
         RankedResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=0.875,
             content="snippet",
@@ -1672,7 +1672,7 @@ def test_ranked_importance_rejects_str_coercion_mutation() -> None:
     with pytest.raises(ValidationError):
         RankedResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=0.875,
             content="snippet",
@@ -1692,7 +1692,7 @@ def test_ranked_importance_rejects_str_coercion_mutation() -> None:
     # Reference: real int 7 passes.
     ref = RankedResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=0.875,
         content="snippet",
@@ -1762,7 +1762,7 @@ def test_recent_provenance_score_bounded_mutation() -> None:
     with pytest.raises(ValidationError):
         RecentResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=1783957804.0,
             content="snippet",
@@ -1776,7 +1776,7 @@ def test_recent_provenance_score_bounded_mutation() -> None:
     with pytest.raises(ValidationError):
         RecentResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=1783957804.0,
             content="snippet",
@@ -1790,7 +1790,7 @@ def test_recent_provenance_score_bounded_mutation() -> None:
     with pytest.raises(ValidationError):
         RecentResultRow(
             object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             score=1783957804.0,
             content="snippet",
@@ -1803,7 +1803,7 @@ def test_recent_provenance_score_bounded_mutation() -> None:
     # Reference: real float 0.5 passes.
     ref = RecentResultRow(
         object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         plane="episodic",
         score=1783957804.0,
         content="snippet",

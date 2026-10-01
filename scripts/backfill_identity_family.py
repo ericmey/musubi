@@ -3,10 +3,10 @@
 
 Background: as of musubi v1.5.5, every memory carries an `identity_family`
 payload field derived from the namespace's first path component (e.g.
-`aoi/command-chair/episodic` → `identity_family="aoi"`). The field is the
+`alex/assistant/episodic` → `identity_family="alex"`). The field is the
 load-bearing key for cross-substrate federation — retrieval, ranking, and
-synthesis filter on it so every presence under one identity (Aoi across
-voice / command-chair / shared / etc.) is treated as one continuous
+synthesis filter on it so every presence under one identity (Alex across
+voice / assistant / shared / etc.) is treated as one continuous
 memory stream rather than separate silos.
 
 New writes get the field automatically via the Pydantic validator on

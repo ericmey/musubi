@@ -33,8 +33,8 @@ from musubi.types.common import Ok, generate_ksuid
 
 pytestmark = pytest.mark.integration
 
-_NS_EP = "eric/data001p2hy/episodic"
-_NS_CUR = "eric/data001p2hy/curated"
+_NS_EP = "admin/data001p2hy/episodic"
+_NS_CUR = "admin/data001p2hy/curated"
 _EP = collection_for_plane("episodic")
 _CUR = collection_for_plane("curated")
 

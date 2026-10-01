@@ -18,7 +18,7 @@ import pytest
 
 from musubi.api.idempotency import CompletedResponse, IdempotencyLeaseCache
 
-ID = ("issuer", "subject", "presence", "POST", "/v1/episodic", "eric/claude-code/episodic", "k1")
+ID = ("issuer", "subject", "presence", "POST", "/v1/episodic", "admin/claude-code/episodic", "k1")
 DIGEST_A = b"A" * 32
 DIGEST_B = b"B" * 32
 _D = bytes(32)

@@ -16,8 +16,8 @@ from tests.api.conftest import mint_token
 
 pytestmark = pytest.mark.anyio
 
-_PRES_A = "eric/presalpha/episodic"
-_PRES_B = "eric/presbravo/episodic"
+_PRES_A = "admin/presalpha/episodic"
+_PRES_B = "admin/presbravo/episodic"
 _CONTENT = "identical streaming marker content stored verbatim by both presences"
 
 

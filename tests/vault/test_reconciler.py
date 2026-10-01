@@ -36,7 +36,7 @@ def _seed_md(
     object_id: str | None = None,
     body: str = "body content",
     title: str = "Title",
-    namespace: str = "aoi/shared/curated",
+    namespace: str = "sam/shared/curated",
 ) -> Path:
     """Write a markdown file with valid CuratedFrontmatter shape."""
     fm_lines = ["---"]

@@ -35,7 +35,7 @@ def test_h5_concept_promote_http_pending_is_typed_202(
         response = client.post(
             f"/v1/concepts/{generate_ksuid()}/promote",
             headers={"Authorization": f"Bearer {token}"},
-            params={"namespace": "eric/shared/concept"},
+            params={"namespace": "admin/shared/concept"},
             json={"promoted_to": generate_ksuid(), "reason": "h5"},
         )
     assert response.status_code == 202
@@ -51,7 +51,7 @@ def test_h5_concept_delete_http_pending_is_typed_202(
     api_settings: Any,
 ) -> None:
     app_factory.dependency_overrides[get_concept_plane] = _PendingConceptPlane
-    namespace = "eric/shared/concept"
+    namespace = "admin/shared/concept"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])
     with TestClient(app_factory) as client:
         response = client.delete(

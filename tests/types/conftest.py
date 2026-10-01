@@ -26,27 +26,27 @@ def fixed_now() -> datetime:
 
 @pytest.fixture
 def episodic_namespace() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 @pytest.fixture
 def curated_namespace() -> str:
-    return "eric/obsidian/curated"
+    return "admin/obsidian/curated"
 
 
 @pytest.fixture
 def concept_namespace() -> str:
-    return "eric/synth/concept"
+    return "admin/synth/concept"
 
 
 @pytest.fixture
 def artifact_namespace() -> str:
-    return "eric/uploads/artifact"
+    return "admin/uploads/artifact"
 
 
 @pytest.fixture
 def thought_namespace() -> str:
-    return "eric/yua/thought"
+    return "admin/alex/thought"
 
 
 @pytest.fixture
@@ -112,8 +112,8 @@ def sample_thought(thought_namespace: str) -> Thought:
     return Thought(
         namespace=thought_namespace,
         content="reminder: check GPU temps",
-        from_presence="yua",
-        to_presence="eric",
+        from_presence="alex",
+        to_presence="admin",
         channel="ops-alerts",
     )
 

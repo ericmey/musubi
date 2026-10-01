@@ -31,7 +31,7 @@ def _event(object_id: str) -> LifecycleEvent:
     return LifecycleEvent(
         object_id=object_id,
         object_type="episodic",
-        namespace="eric/claude-code/episodic",
+        namespace="admin/claude-code/episodic",
         from_state="provisional",
         to_state="matured",
         actor="maturation-worker",

@@ -346,7 +346,7 @@ def _synth_input(n: int = 3) -> object:
     now = utc_now()
     memories = [
         EpisodicMemory(
-            namespace="eric/ops/episodic",
+            namespace="admin/ops/episodic",
             content=f"memory {i} about shared theme",
             importance=5,
             tags=["smoke"],
@@ -426,14 +426,14 @@ async def test_check_contradiction_happy_path(httpx_mock: HTTPXMock) -> None:
     from musubi.types.concept import SynthesizedConcept
 
     concept_a = SynthesizedConcept(
-        namespace="eric/ops/concept",
+        namespace="admin/ops/concept",
         title="Prefers dark mode",
         content="The user strongly prefers dark mode.",
         synthesis_rationale="Multiple memories show dark-mode preference.",
         merged_from=[generate_ksuid(), generate_ksuid(), generate_ksuid()],
     )
     concept_b = SynthesizedConcept(
-        namespace="eric/ops/concept",
+        namespace="admin/ops/concept",
         title="Prefers light mode",
         content="The user strongly prefers light mode.",
         synthesis_rationale="Multiple memories show light-mode preference.",
@@ -460,7 +460,7 @@ async def test_check_contradiction_rejects_unknown_verdict(
     from musubi.types.concept import SynthesizedConcept
 
     concept = SynthesizedConcept(
-        namespace="eric/ops/concept",
+        namespace="admin/ops/concept",
         title="x",
         content="y",
         synthesis_rationale="stub",

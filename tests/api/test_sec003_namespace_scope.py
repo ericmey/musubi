@@ -31,7 +31,7 @@ UPLOAD = "/v1/artifacts"
 
 
 def _tenant_b(api_settings: Settings) -> str:
-    """A valid token that is authorized ONLY on mallory/evil — never on eric/*."""
+    """A valid token that is authorized ONLY on mallory/evil — never on admin/*."""
     return mint_token(api_settings, scopes=["mallory/evil/artifact:rw"], presence="mallory/evil")
 
 
@@ -50,7 +50,7 @@ def test_upload_cross_tenant_namespace_must_be_403(
     # tenant B's token uploads INTO tenant A's namespace via the Form field
     r = client.post(
         UPLOAD,
-        files=_multipart("eric/claude-code/artifact"),
+        files=_multipart("admin/claude-code/artifact"),
         headers={"Authorization": f"Bearer {_tenant_b(api_settings)}"},
     )
     assert r.status_code == 403, (
@@ -76,7 +76,7 @@ def test_upload_own_namespace_still_succeeds(client: TestClient, api_settings: S
 
 
 def test_upload_no_token_must_be_401(client: TestClient) -> None:
-    r = client.post(UPLOAD, files=_multipart("eric/claude-code/artifact"))
+    r = client.post(UPLOAD, files=_multipart("admin/claude-code/artifact"))
     assert r.status_code == 401, f"unauthenticated upload returned {r.status_code}"
 
 
@@ -85,7 +85,7 @@ def test_namespace_stats_cross_tenant_must_be_403(
 ) -> None:
     # tenant B reads stats for tenant A's namespace; the value is a PATH param, so the
     # namespace_qs_param="namespace_path" query lookup is empty and auth checks nothing.
-    path = "eric%2Fclaude-code%2Fepisodic"
+    path = "admin%2Fclaude-code%2Fepisodic"
     r = client.get(
         f"/v1/namespaces/{path}/stats",
         headers={"Authorization": f"Bearer {_tenant_b(api_settings)}"},
@@ -116,6 +116,6 @@ def test_namespace_stats_own_namespace_still_succeeds(
 
 
 def test_namespace_stats_no_token_must_be_401(client: TestClient) -> None:
-    path = "eric%2Fclaude-code%2Fepisodic"
+    path = "admin%2Fclaude-code%2Fepisodic"
     r = client.get(f"/v1/namespaces/{path}/stats")
     assert r.status_code == 401, f"unauthenticated stats returned {r.status_code}"

@@ -23,7 +23,7 @@ from musubi.types.common import Ok
 
 pytestmark = pytest.mark.anyio
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 
 
 def _access_count(qdrant: QdrantClient, object_id: str) -> int:

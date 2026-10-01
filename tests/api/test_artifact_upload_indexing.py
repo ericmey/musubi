@@ -17,7 +17,7 @@ from musubi.settings import Settings
 from musubi.types.common import generate_ksuid
 from tests.api.conftest import mint_token
 
-_NS = "eric/claude-code/artifact"
+_NS = "admin/claude-code/artifact"
 
 
 def _upload(client: TestClient, token: str, content: bytes = b"# A\ncontent here\n") -> Response:

@@ -12,7 +12,7 @@ different tenants. That inconsistency must be rejected at token validation.
 Reds run against the REAL validator `musubi.auth.tokens.validate_token` (a pure function):
 
   observed today:
-    presence="eric/claude-code" + scope=["mallory/evil/episodic:rw"]  -> Ok (ACCEPTED)  [the hole]
+    presence="admin/claude-code" + scope=["mallory/evil/episodic:rw"]  -> Ok (ACCEPTED)  [the hole]
     wrong issuer                                                        -> Err (rejected)  [holds]
 
 The rejection cases are the executable contract for Issue #412. Synthetic tokens only, no live
@@ -47,7 +47,7 @@ def test_inconsistent_presence_vs_scope_must_be_rejected(api_settings: Settings)
     token = mint_token(
         api_settings,
         scopes=["mallory/evil/episodic:rw"],  # authorizes mallory/evil
-        presence="eric/claude-code",  # but claims to be eric/claude-code
+        presence="admin/claude-code",  # but claims to be admin/claude-code
     )
     result = validate_token(token, settings=api_settings)
     assert not _is_ok(result), (
@@ -64,10 +64,10 @@ def test_cross_tenant_scope_among_matching_scopes_must_be_rejected(
     token = mint_token(
         api_settings,
         scopes=[
-            "eric/claude-code/episodic:rw",
+            "admin/claude-code/episodic:rw",
             "mallory/evil/curated:r",
         ],
-        presence="eric/claude-code",
+        presence="admin/claude-code",
     )
     assert not _is_ok(validate_token(token, settings=api_settings))
 
@@ -75,20 +75,20 @@ def test_cross_tenant_scope_among_matching_scopes_must_be_rejected(
 @pytest.mark.parametrize(
     "presence",
     [
-        "eric",
-        "eric/",
+        "admin",
+        "admin/",
         "/claude-code",
-        "eric/claude-code/extra",
+        "admin/claude-code/extra",
         "*/claude-code",
-        "eric*/claude-code",
-        "eric/claude*",
+        "admin*/claude-code",
+        "admin/claude*",
     ],
 )
 def test_presence_must_be_a_two_segment_identity(
     api_settings: Settings,
     presence: str,
 ) -> None:
-    scope_tenant = presence.split("/", 1)[0] or "eric"
+    scope_tenant = presence.split("/", 1)[0] or "admin"
     token = mint_token(
         api_settings,
         scopes=[f"{scope_tenant}/probe/episodic:r"],
@@ -100,8 +100,8 @@ def test_presence_must_be_a_two_segment_identity(
 def test_subject_must_match_declared_presence(api_settings: Settings) -> None:
     token = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:r"],
-        presence="eric/claude-code",
+        scopes=["admin/claude-code/episodic:r"],
+        presence="admin/claude-code",
         subject="mallory-evil",
     )
     assert not _is_ok(validate_token(token, settings=api_settings))
@@ -111,9 +111,9 @@ def test_hyphen_encoded_subject_has_no_compatibility_grace(api_settings: Setting
     """The recovery is exact: the invented slash-to-hyphen form stays invalid."""
     token = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:r"],
-        presence="eric/claude-code",
-        subject="eric-claude-code",
+        scopes=["admin/claude-code/episodic:r"],
+        presence="admin/claude-code",
+        subject="admin-claude-code",
     )
     assert not _is_ok(validate_token(token, settings=api_settings))
 
@@ -123,20 +123,20 @@ def test_consistent_presence_and_scope_is_accepted(api_settings: Settings) -> No
     before and after the fix — the fix must reject only the INCONSISTENT case."""
     token = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:rw"],
-        presence="eric/claude-code",
+        scopes=["admin/claude-code/episodic:rw"],
+        presence="admin/claude-code",
     )
     result = validate_token(token, settings=api_settings)
     assert _is_ok(result), f"a consistent token must validate, got {result}"
     assert result.value.subject == result.value.presence
-    assert result.value.presence == "eric/claude-code"
+    assert result.value.presence == "admin/claude-code"
 
 
 def test_same_tenant_shared_scope_is_accepted(api_settings: Settings) -> None:
     token = mint_token(
         api_settings,
-        scopes=["eric/_shared/curated:r"],
-        presence="eric/claude-code",
+        scopes=["admin/_shared/curated:r"],
+        presence="admin/claude-code",
     )
     assert _is_ok(validate_token(token, settings=api_settings))
 
@@ -145,7 +145,7 @@ def test_operator_and_global_scopes_remain_valid(api_settings: Settings) -> None
     token = mint_token(
         api_settings,
         scopes=["operator", "**:r", "*/*/episodic:r"],
-        presence="eric/claude-code",
+        presence="admin/claude-code",
     )
     assert _is_ok(validate_token(token, settings=api_settings))
 
@@ -156,10 +156,10 @@ def test_wrong_issuer_is_rejected(api_settings: Settings) -> None:
     forged = jwt.encode(
         {
             "iss": "https://evil.example/",
-            "sub": "eric/claude-code",
+            "sub": "admin/claude-code",
             "aud": "musubi",
-            "presence": "eric/claude-code",
-            "scope": "eric/claude-code/episodic:r",
+            "presence": "admin/claude-code",
+            "scope": "admin/claude-code/episodic:r",
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(hours=1)).timestamp()),
         },
@@ -177,9 +177,9 @@ def test_missing_presence_is_rejected(api_settings: Settings) -> None:
     no_presence = jwt.encode(
         {
             "iss": _TEST_ISSUER,
-            "sub": "eric/claude-code",
+            "sub": "admin/claude-code",
             "aud": "musubi",
-            "scope": "eric/claude-code/episodic:r",
+            "scope": "admin/claude-code/episodic:r",
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(hours=1)).timestamp()),
         },
@@ -199,14 +199,14 @@ def test_d6_identity_is_issuer_subject_presence_not_jti(api_settings: Settings) 
     the tuple the replay cache must key on (req 9 will consume it), and that jti is excluded."""
     t1 = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:rw"],
-        presence="eric/claude-code",
+        scopes=["admin/claude-code/episodic:rw"],
+        presence="admin/claude-code",
         token_id="req7-token-one",
     )
     t2 = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:rw"],
-        presence="eric/claude-code",
+        scopes=["admin/claude-code/episodic:rw"],
+        presence="admin/claude-code",
         token_id="req7-token-two",
     )
     c1 = validate_token(t1, settings=api_settings)

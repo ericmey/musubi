@@ -52,7 +52,7 @@ from musubi.types.thought import Thought
 
 pytestmark = pytest.mark.asyncio
 
-_ROOT = "eric/claude-code"
+_ROOT = "admin/claude-code"
 
 
 class _FakeReranker:
@@ -269,7 +269,7 @@ async def test_non_accountable_plane_delivery_is_noop(
     else:
         ns = f"{_ROOT}/thought"
         row = await ThoughtsPlane(client=qdrant, embedder=embedder).send(
-            Thought(namespace=ns, content="thought marker", from_presence="aoi", to_presence="yua")
+            Thought(namespace=ns, content="thought marker", from_presence="sam", to_presence="alex")
         )
     await account_delivered(
         qdrant, [SimpleNamespace(plane=plane, object_id=row.object_id, namespace=ns)]
@@ -292,7 +292,7 @@ async def test_account_delivered_scopes_to_exact_namespace_object_id_pair(
     # Same object_id, WRONG namespace → must not bump the real point.
     await account_delivered(
         qdrant,
-        [SimpleNamespace(plane="episodic", object_id=oid, namespace="eric/imposter/episodic")],
+        [SimpleNamespace(plane="episodic", object_id=oid, namespace="admin/imposter/episodic")],
     )
     assert _ac(qdrant, "episodic", ns_real, oid) == 0, (
         "mismatched-namespace delivery bumped the row"

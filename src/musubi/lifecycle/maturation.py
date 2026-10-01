@@ -204,10 +204,9 @@ def default_ollama_client() -> OllamaClient:
     ``lifecycle_llm_api="openai"`` plus the ``lifecycle_llm_*``
     overrides points every lifecycle LLM task (importance, topics,
     synthesis, contradiction) at an OpenAI-compatible endpoint —
-    LiteLLM ``house/backup`` in this deployment, chosen because the
-    lifecycle workload is serial nightly batch (its concurrency
-    penalty never applies) and the synthesis prompt needs more context
-    and capability than the co-located 4B provides.
+    for example, a larger model behind LiteLLM. The lifecycle workload
+    is a serial batch, and the synthesis prompt may need more context
+    and capability than a small co-located model provides.
 
     Falls back to :class:`_NotConfiguredOllama` (fail-loud) if settings
     are unavailable — tests and CI that don't set the env vars will

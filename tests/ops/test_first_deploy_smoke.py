@@ -160,7 +160,7 @@ class _MockMusubi(http.server.BaseHTTPRequestHandler):
                             "score": 1.0,
                             "plane": "episodic",
                             "content": content,
-                            "namespace": body.get("namespace", "eric/ops/episodic"),
+                            "namespace": body.get("namespace", "admin/ops/episodic"),
                         }
                     ],
                     "mode": "fast",
@@ -180,7 +180,7 @@ class _MockMusubi(http.server.BaseHTTPRequestHandler):
                         {
                             "object_id": "t" * 27,
                             "content": self.server.last_thought,
-                            "from_presence": "eric/ops-smoke",
+                            "from_presence": "admin/ops-smoke",
                         }
                     ]
                 },
@@ -228,9 +228,9 @@ def _run_script(script: str, base_url: str, *extra_args: str) -> subprocess.Comp
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "MUSUBI_BASE_URL": base_url,
             "MUSUBI_TOKEN": "test-token",
-            "MUSUBI_NAMESPACE": "eric/ops/episodic",
-            "MUSUBI_THOUGHT_NAMESPACE": "eric/ops/thought",
-            "MUSUBI_PRESENCE": "eric/ops-smoke",
+            "MUSUBI_NAMESPACE": "admin/ops/episodic",
+            "MUSUBI_THOUGHT_NAMESPACE": "admin/ops/thought",
+            "MUSUBI_PRESENCE": "admin/ops-smoke",
         },
         capture_output=True,
         text=True,

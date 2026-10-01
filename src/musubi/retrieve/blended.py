@@ -93,7 +93,7 @@ async def run_blended_retrieve(
     """Execute blended retrieval across planes."""
     # The public API treats tenant/blended as a literal presence. This older
     # internal scope means cross-presence expansion only when the caller
-    # explicitly supplies the presences; no household list is assumed.
+    # explicitly supplies the presences; no fixed cohort list is assumed.
     legacy_scope = query.namespace.endswith("/blended")
     if legacy_scope and not query.presences:
         return Err(

@@ -20,7 +20,7 @@ def test_context_candidate_uses_typed_state_and_importance_without_payload() -> 
     candidate = _candidate_from_hit(
         RetrievalResult(
             object_id="typed-hit",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             snippet="typed lifecycle fields survive brief projection",
             score=1.0,
@@ -43,7 +43,7 @@ def test_recent_context_candidate_uses_recent_score_as_created_epoch_without_pay
     candidate = _candidate_from_hit(
         RetrievalResult(
             object_id="recent-hit",
-            namespace="eric/claude-code/episodic",
+            namespace="admin/claude-code/episodic",
             plane="episodic",
             snippet="chronological recent row",
             score=1_721_234_567.0,
@@ -97,7 +97,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
                     results=[
                         RetrievalResult(
                             object_id="recent-prov-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="A brand new provisional thought without any query token match",
                             score=1.0,
@@ -109,7 +109,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
                         ),
                         RetrievalResult(
                             object_id="overlap-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="Old recent snippet",
                             score=1.0,
@@ -133,7 +133,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
                         ),
                         RetrievalResult(
                             object_id="suppress-history",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="This is a superseded memory that should be suppressed if include_history=False",
                             score=1.0,
@@ -153,7 +153,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
                     results=[
                         RetrievalResult(
                             object_id="overlap-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending Ranked duplicate has DIFFERENT and richer content",
                             score=0.95,
@@ -170,7 +170,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
                         ),
                         RetrievalResult(
                             object_id="ranked-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending Old but extremely relevant established memory",
                             score=0.85,
@@ -187,7 +187,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
                         ),
                         RetrievalResult(
                             object_id="same-id-diff-namespace-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending I am from THIS namespace",
                             score=0.85,
@@ -221,7 +221,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["episodic"],
             "query_text": "test blending",
             "mode": "startup",
@@ -274,7 +274,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
     composite_identities = {(i["namespace"], i["plane"]) for i in composite_items}
     assert composite_identities == {
         ("other/namespace/episodic", "episodic"),
-        ("eric/claude-code/episodic", "episodic"),
+        ("admin/claude-code/episodic", "episodic"),
     }
 
     assert data["warnings"] == ["TEI_DENSE_UNAVAILABLE", "OLLAMA_TIMEOUT"]
@@ -304,7 +304,7 @@ def test_context_endpoint_max_items_mix_quota(
                     results=[
                         RetrievalResult(
                             object_id="recent-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="recent first",
                             score=1.0,
@@ -317,7 +317,7 @@ def test_context_endpoint_max_items_mix_quota(
                         ),
                         RetrievalResult(
                             object_id="recent-2",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="recent second",
                             score=1.0,
@@ -338,7 +338,7 @@ def test_context_endpoint_max_items_mix_quota(
                     results=[
                         RetrievalResult(
                             object_id="ranked-1",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending highly ranked",
                             score=0.95,
@@ -355,7 +355,7 @@ def test_context_endpoint_max_items_mix_quota(
                         ),
                         RetrievalResult(
                             object_id="ranked-2",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending second ranked",
                             score=0.90,
@@ -386,7 +386,7 @@ def test_context_endpoint_max_items_mix_quota(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["episodic"],
             "query_text": "test blending",
             "mode": "startup",
@@ -428,7 +428,7 @@ def test_context_endpoint_max_chars_mix_quota(
                     results=[
                         RetrievalResult(
                             object_id="long-recent",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="A" * 1000,
                             score=1.0,
@@ -448,7 +448,7 @@ def test_context_endpoint_max_chars_mix_quota(
                     results=[
                         RetrievalResult(
                             object_id="short-ranked",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending highly ranked",
                             score=0.95,
@@ -479,7 +479,7 @@ def test_context_endpoint_max_chars_mix_quota(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["episodic"],
             "query_text": "test blending",
             "mode": "startup",
@@ -533,7 +533,7 @@ def test_context_endpoint_single_lane_empty_cases(
                     results=[
                         RetrievalResult(
                             object_id="recent-only",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="A brand new provisional thought",
                             score=1.0,
@@ -553,7 +553,7 @@ def test_context_endpoint_single_lane_empty_cases(
                     results=[
                         RetrievalResult(
                             object_id="ranked-only",
-                            namespace="eric/claude-code/episodic",
+                            namespace="admin/claude-code/episodic",
                             plane="episodic",
                             snippet="test blending highly ranked",
                             score=0.95,
@@ -584,7 +584,7 @@ def test_context_endpoint_single_lane_empty_cases(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["episodic"],
             "query_text": "test blending",
             "mode": "startup",
@@ -636,7 +636,7 @@ def test_context_endpoint_custom_state_filter_applies_to_both_lanes(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["episodic"],
             "query_text": "test blending",
             "mode": "startup",
@@ -675,7 +675,7 @@ def test_context_endpoint_preserves_explicit_empty_state_filter(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "planes": ["episodic"],
             "query_text": "explicit empty filter",
             "state_filter": [],
@@ -691,7 +691,7 @@ def test_context_endpoint_returns_grouped_server_ranked_pack(
     valid_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> None:
         await episodic.create(
@@ -720,7 +720,7 @@ def test_context_endpoint_returns_grouped_server_ranked_pack(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "query_text": "Vice LoRA promptsmith compiler route",
             "planes": ["episodic"],
             "max_items": 3,
@@ -745,7 +745,7 @@ def test_context_endpoint_can_include_history_when_explicitly_requested(
     valid_token: str,
     episodic: EpisodicPlane,
 ) -> None:
-    namespace = "eric/claude-code/episodic"
+    namespace = "admin/claude-code/episodic"
 
     async def _seed() -> None:
         await episodic.create(
@@ -763,7 +763,7 @@ def test_context_endpoint_can_include_history_when_explicitly_requested(
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "query_text": "agent-msg adoption-day audit",
             "include_history": True,
             "planes": ["episodic"],
@@ -782,7 +782,7 @@ def test_capture_rejects_unknown_typed_kind_tag(client: TestClient, valid_token:
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "content": "bad typed write",
             "tags": ["kind:whatever"],
         },
@@ -797,7 +797,7 @@ def test_capture_allows_legacy_untyped_tags(client: TestClient, valid_token: str
         "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code/episodic",
+            "namespace": "admin/claude-code/episodic",
             "content": "legacy gist-style write",
             "tags": ["old-note", "vice"],
         },
@@ -845,7 +845,7 @@ def _post_context(client: TestClient, valid_token: str) -> Any:
         "/v1/context",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
-            "namespace": "eric/claude-code",
+            "namespace": "admin/claude-code",
             "query_text": "Vice LoRA promptsmith compiler route",
             "planes": ["episodic"],
             "max_items": 3,

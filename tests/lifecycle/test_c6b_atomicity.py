@@ -1667,7 +1667,7 @@ def test_g3_rule_discriminates_result_consumed() -> None:
 # stays absent (the xfail reds still import the real, unbuilt coordinator and fail for their own reasons).
 # ============================================================================
 
-_NS = "eric/claude-code/episodic"
+_NS = "admin/claude-code/episodic"
 
 
 @dataclass
@@ -7752,11 +7752,13 @@ def _r21_settings(tmp_path: Path) -> Settings:
     )
 
 
-def _r21_token(settings: Settings, *, scopes: list[str], presence: str = "eric/claude-code") -> str:
+def _r21_token(
+    settings: Settings, *, scopes: list[str], presence: str = "admin/claude-code"
+) -> str:
     now = datetime.now(UTC)
     payload = {
         "iss": _R21_ISSUER,
-        "sub": "eric/claude-code",
+        "sub": "admin/claude-code",
         "aud": "musubi",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),
@@ -7896,7 +7898,7 @@ def _drive_route(
     """Seed a real row, patch the route's ``transition`` seam to return ``outcome``, invoke the REAL
     authed handler, and return ``(status_code, body)``."""
     if route == "lifecycle":
-        ns = "eric/claude-code/episodic"
+        ns = "admin/claude-code/episodic"
         oid = _seed_episodic_row(env, ns, "r21-transition-target")
         _patch_transition(monkeypatch, "musubi.api.routers.writes_lifecycle.transition", outcome)
         token = _r21_token(env.settings, scopes=["operator"])
@@ -7907,7 +7909,7 @@ def _drive_route(
         )
         return r.status_code, _safe_json(r)
     if route == "artifact":
-        ns = "eric/claude-code/artifact"
+        ns = "admin/claude-code/artifact"
         oid = _seed_artifact_row(env, ns)
         _patch_transition(monkeypatch, "musubi.api.routers.writes_artifact.transition", outcome)
         token = _r21_token(env.settings, scopes=[f"{ns}:rw"])
@@ -7918,7 +7920,7 @@ def _drive_route(
         )
         return r.status_code, _safe_json(r)
     if route == "curated":
-        ns = "eric/claude-code/curated"
+        ns = "admin/claude-code/curated"
         oid = _seed_curated_row(env, ns)
         _patch_transition(monkeypatch, "musubi.api.routers.writes_curated.transition", outcome)
         token = _r21_token(env.settings, scopes=[f"{ns}:rw"])
@@ -7929,7 +7931,7 @@ def _drive_route(
         )
         return r.status_code, _safe_json(r)
     if route == "episodic":
-        ns = "eric/claude-code/episodic"
+        ns = "admin/claude-code/episodic"
         oid = _seed_episodic_row(env, ns, "r21-soft-delete-target")
         _patch_transition(monkeypatch, "musubi.api.routers.writes_episodic.transition", outcome)
         token = _r21_token(env.settings, scopes=[f"{ns}:rw"])
@@ -8460,7 +8462,7 @@ async def test_r21_maturation_episodic_defers_pending(
     qc, sink, cursor = _mat_env(tmp_path)
     try:
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
-        ns = "eric/claude-code/episodic"
+        ns = "admin/claude-code/episodic"
         await _seed_provisional_episodic(plane, qc, ns, "plain provisional row", age_seconds=7200)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
@@ -8484,7 +8486,7 @@ async def test_r21_maturation_supersession_backlink_not_run_on_pending(
     qc, sink, cursor = _mat_env(tmp_path)
     try:
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
-        ns = "eric/claude-code/episodic"
+        ns = "admin/claude-code/episodic"
         # A matured predecessor whose content matches the correction row's needle, so
         # _find_supersession_candidate resolves it and the back-link path is reached.
         await _seed_matured_episodic(
@@ -8524,7 +8526,7 @@ async def test_r21_maturation_provisional_ttl_defers_pending(
     qc, sink, _cursor = _mat_env(tmp_path)
     try:
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
-        ns = "eric/claude-code/episodic"
+        ns = "admin/claude-code/episodic"
         await _seed_provisional_episodic(plane, qc, ns, "ttl row", age_seconds=8 * 86400)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
@@ -8543,7 +8545,7 @@ async def test_r21_maturation_episodic_demotion_defers_pending(
     qc, sink, _cursor = _mat_env(tmp_path)
     try:
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
-        ns = "eric/claude-code/episodic"
+        ns = "admin/claude-code/episodic"
         await _seed_matured_episodic(
             plane,
             qc,
@@ -8569,7 +8571,7 @@ async def test_r21_maturation_concept_defers_pending(
     qc, sink, _cursor = _mat_env(tmp_path)
     try:
         plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
-        ns = "eric/claude-code/concept"
+        ns = "admin/claude-code/concept"
         await _seed_synthesized_concept(plane, qc, ns, reinforce=3, age_seconds=2 * 86400)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
@@ -8588,7 +8590,7 @@ async def test_r21_maturation_concept_demotion_defers_pending(
     qc, sink, _cursor = _mat_env(tmp_path)
     try:
         plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
-        ns = "eric/claude-code/concept"
+        ns = "admin/claude-code/concept"
         await _seed_matured_concept(
             plane,
             qc,

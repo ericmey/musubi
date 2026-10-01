@@ -115,7 +115,7 @@ def _final(result: object) -> TransitionResult:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/curated"
+    return "admin/claude-code/curated"
 
 
 def _hash(body: str) -> str:
@@ -128,7 +128,7 @@ def _make(
     namespace: str,
     title: str = "CUDA 13 setup notes",
     content: str = "Install nvidia driver 575 and the CUDA 13 toolchain.",
-    vault_path: str = "curated/eric/projects/musubi.md",
+    vault_path: str = "curated/admin/projects/musubi.md",
     topics: list[str] | None = None,
     body_hash: str | None = None,
     **extra: Any,
@@ -166,7 +166,7 @@ async def test_read_from_qdrant_returns_indexed_fields(plane: CuratedPlane, ns: 
     assert fetched.object_id == saved.object_id
     assert fetched.namespace == ns
     assert fetched.title == "CUDA 13 setup notes"
-    assert fetched.vault_path == "curated/eric/projects/musubi.md"
+    assert fetched.vault_path == "curated/admin/projects/musubi.md"
     assert fetched.body_hash == saved.body_hash
     assert set(fetched.topics) == {"infrastructure/gpu", "projects/musubi"}
     assert set(fetched.tags) == {"cuda", "ubuntu-noble"}
@@ -211,7 +211,7 @@ async def test_bitemporal_valid_until_excludes_from_default_query(
             namespace=ns,
             title="GPU-driver pin: nvidia 470",
             content="Pinning to nvidia driver 470 for legacy CUDA workloads.",
-            vault_path="curated/eric/infra/gpu-driver-pin.md",
+            vault_path="curated/admin/infra/gpu-driver-pin.md",
             valid_from=now - timedelta(days=30),
             valid_until=now - timedelta(days=1),
         )
@@ -221,7 +221,7 @@ async def test_bitemporal_valid_until_excludes_from_default_query(
             namespace=ns,
             title="GPU-driver pin: nvidia 575",
             content="Pinning to nvidia driver 575 for CUDA 13 workloads.",
-            vault_path="curated/eric/infra/gpu-driver-current.md",
+            vault_path="curated/admin/infra/gpu-driver-current.md",
             valid_from=now - timedelta(days=1),
         )
     )
@@ -272,13 +272,13 @@ async def test_supersession_chain_read_returns_latest(plane: CuratedPlane, ns: s
 
 
 async def test_isolation_read_enforcement(plane: CuratedPlane) -> None:
-    a_ns = "eric/claude-code/curated"
-    b_ns = "yua/livekit/curated"
+    a_ns = "admin/claude-code/curated"
+    b_ns = "alex/livekit/curated"
     a = await plane.create(
-        _make(namespace=a_ns, vault_path="curated/eric/a.md", content="only-in-a")
+        _make(namespace=a_ns, vault_path="curated/admin/a.md", content="only-in-a")
     )
     b = await plane.create(
-        _make(namespace=b_ns, vault_path="curated/yua/b.md", content="only-in-b")
+        _make(namespace=b_ns, vault_path="curated/alex/b.md", content="only-in-b")
     )
     # Querying A's namespace never returns B.
     results_a = await plane.query(namespace=a_ns, query="only", limit=10)
@@ -448,7 +448,7 @@ async def test_transition_to_archived_keeps_record_but_filters_default_reads(
     plane: CuratedPlane, ns: str
 ) -> None:
     saved = await plane.create(
-        _make(namespace=ns, content="archive-me", vault_path="curated/eric/old.md")
+        _make(namespace=ns, content="archive-me", vault_path="curated/admin/old.md")
     )
     await plane.transition(
         namespace=ns,
@@ -494,8 +494,8 @@ async def test_transition_unknown_object_raises_lookup_error(plane: CuratedPlane
 
 
 async def test_isolation_write_enforcement(plane: CuratedPlane) -> None:
-    a_ns = "eric/claude-code/curated"
-    b_ns = "yua/livekit/curated"
+    a_ns = "admin/claude-code/curated"
+    b_ns = "alex/livekit/curated"
     a = await plane.create(_make(namespace=a_ns, content="write-iso-a"))
     result = await plane.transition(
         namespace=b_ns,
@@ -559,7 +559,7 @@ async def test_create_same_object_id_new_body_updates_in_place(
     `supersedes=[]` and an incremented version. Locks in the contract.
     """
     first = await plane.create(
-        _make(namespace=ns, content="original body", vault_path="curated/eric/note.md")
+        _make(namespace=ns, content="original body", vault_path="curated/admin/note.md")
     )
 
     # Reconciler-style: same file (same object_id, same vault_path),
@@ -567,7 +567,7 @@ async def test_create_same_object_id_new_body_updates_in_place(
     edited = _make(
         namespace=ns,
         content="edited body",
-        vault_path="curated/eric/note.md",
+        vault_path="curated/admin/note.md",
         object_id=first.object_id,
     )
     updated = await plane.create(edited)
@@ -608,7 +608,7 @@ async def test_create_same_object_id_update_propagates_frontmatter_fields(
         _make(
             namespace=ns,
             content="original body",
-            vault_path="curated/eric/dated.md",
+            vault_path="curated/admin/dated.md",
             valid_from=now - timedelta(days=30),
             valid_until=now + timedelta(days=30),
             musubi_managed=True,
@@ -618,7 +618,7 @@ async def test_create_same_object_id_update_propagates_frontmatter_fields(
     edited = _make(
         namespace=ns,
         content="edited body",
-        vault_path="curated/eric/dated.md",
+        vault_path="curated/admin/dated.md",
         object_id=first.object_id,
         # Frontmatter edits the operator might make:
         valid_from=now - timedelta(days=15),  # narrowed
@@ -657,7 +657,7 @@ async def test_same_id_update_inherits_state_lineage_access_from_fresh(
     lineage_promoted = str(generate_ksuid())
     promoted_at_iso = datetime.now(UTC).isoformat()
     first = await plane.create(
-        _make(namespace=ns, title="T1", content="body one", vault_path="curated/eric/inh.md")
+        _make(namespace=ns, title="T1", content="body one", vault_path="curated/admin/inh.md")
     )
     # a concurrent transition-owned STATE + lineage + lease-owned-access change lands on the identity
     # row (a real state transition, not just lineage — so we prove the EXACT state survives).
@@ -686,7 +686,7 @@ async def test_same_id_update_inherits_state_lineage_access_from_fresh(
             namespace=ns,
             title="T2-edited",
             content="a longer edited body two",
-            vault_path="curated/eric/inh.md",
+            vault_path="curated/admin/inh.md",
             object_id=first.object_id,
             state="archived",
         )
@@ -715,7 +715,7 @@ async def test_patch_metadata_preserves_concurrent_state_access_bumps_version_on
     from musubi.types.common import generate_ksuid
 
     first = await plane.create(
-        _make(namespace=ns, title="T", content="body", vault_path="curated/eric/patch.md")
+        _make(namespace=ns, title="T", content="body", vault_path="curated/admin/patch.md")
     )
     # a concurrent transition + access bump lands on the (v1) identity row.
     superseded_by = str(generate_ksuid())
@@ -753,14 +753,14 @@ async def test_patch_curated_router_refuses_dangling_pointer_without_mutation(
 
     # first create is v1; a same-id body update promotes it to v2 (anchor + content), then dangle it.
     first = await plane.create(
-        _make(namespace=ns, title="T", content="c1", vault_path="curated/eric/dg.md")
+        _make(namespace=ns, title="T", content="c1", vault_path="curated/admin/dg.md")
     )
     await plane.create(
         _make(
             namespace=ns,
             title="T",
             content="c2-is-longer",
-            vault_path="curated/eric/dg.md",
+            vault_path="curated/admin/dg.md",
             object_id=first.object_id,
         )
     )
@@ -788,7 +788,7 @@ async def test_patch_curated_router_refuses_dangling_pointer_without_mutation(
 
 async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(
-        _make(namespace=ns, content="hidden-me", vault_path="curated/eric/hidden.md")
+        _make(namespace=ns, content="hidden-me", vault_path="curated/admin/hidden.md")
     )
     await plane.transition(
         namespace=ns,
@@ -808,7 +808,7 @@ async def test_query_respects_limit(plane: CuratedPlane, ns: str) -> None:
             _make(
                 namespace=ns,
                 content=f"limit-fixture-{i}",
-                vault_path=f"curated/eric/limit-{i}.md",
+                vault_path=f"curated/admin/limit-{i}.md",
             )
         )
     results = await plane.query(namespace=ns, query="limit-fixture", limit=3)

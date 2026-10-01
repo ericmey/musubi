@@ -118,7 +118,7 @@ def service(
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 def _req(namespace: str, **kw: object) -> CaptureRequest:
@@ -267,8 +267,8 @@ def test_dedup_keeps_longer_content(plane: EpisodicPlane, ns: str) -> None:
     reinforce path with non-identical content. We probe the merge rule
     directly by feeding ``_reinforce`` two rows with differing content
     lengths."""
-    long_content = "Eric said the alpha build of the telemetry harness went live at 03:12"
-    short_content = "Eric said the alpha build went live."
+    long_content = "Admin said the alpha build of the telemetry harness went live at 03:12"
+    short_content = "Admin said the alpha build went live."
 
     async def _probe(long_first: bool) -> EpisodicMemory:
         first_text = long_content if long_first else short_content
@@ -302,8 +302,8 @@ def test_reinforce_replace_strategy_preserves_new_content(plane: EpisodicPlane, 
     """Explicit ``merge_strategy=replace`` must keep the new text even
     when it's shorter — preserves the pre-spec behaviour for callers
     that genuinely want always-new-wins (migration / replay)."""
-    long_content = "Eric said the alpha build of the telemetry harness went live at 03:12"
-    short_content = "Eric said the alpha build went live."
+    long_content = "Admin said the alpha build of the telemetry harness went live at 03:12"
+    short_content = "Admin said the alpha build went live."
 
     async def _run() -> EpisodicMemory:
         existing = await plane.create(EpisodicMemory(namespace=ns, content=long_content))
@@ -684,7 +684,7 @@ def test_capture_request_validates_content_length() -> None:
 
     # 16001 chars — over the spec's 16000 ceiling.
     with pytest.raises(ValidationError):
-        CaptureRequest(namespace="eric/x/episodic", content="a" * 16001)
+        CaptureRequest(namespace="admin/x/episodic", content="a" * 16001)
 
 
 def test_capture_no_idempotency_key_path(service: CaptureService, ns: str) -> None:

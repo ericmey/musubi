@@ -68,7 +68,7 @@ async def test_merge_flattens_per_plane_lists() -> None:
         mock_deep.side_effect = fake_deep
 
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["curated", "episodic"]
+            namespace="admin/claude-code", query_text="Q", planes=["curated", "episodic"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -115,7 +115,7 @@ async def test_content_dedup_hash_exact() -> None:
         mock_deep.side_effect = fake_deep
 
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["curated", "episodic"]
+            namespace="admin/claude-code", query_text="Q", planes=["curated", "episodic"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -167,7 +167,7 @@ async def test_content_dedup_jaccard_plus_cosine_deep_only() -> None:
         mock_deep.side_effect = fake_deep
 
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code",
+            namespace="admin/claude-code",
             query_text="Q",
             planes=["curated", "episodic"],
             mode="deep",
@@ -262,7 +262,7 @@ async def test_concept_dropped_when_promoted_curated_present() -> None:
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["curated", "concept"]
+            namespace="admin/claude-code", query_text="Q", planes=["curated", "concept"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -293,7 +293,7 @@ async def test_concept_kept_when_promoted_curated_absent() -> None:
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["curated", "concept"]
+            namespace="admin/claude-code", query_text="Q", planes=["curated", "concept"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -333,7 +333,7 @@ async def test_superseded_dropped_when_superseder_present() -> None:
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["episodic"]
+            namespace="admin/claude-code", query_text="Q", planes=["episodic"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -358,7 +358,7 @@ async def test_superseded_kept_when_superseder_absent() -> None:
         return_value=Ok(value=DeepResult(hits=[hit_old])),
     ):
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["episodic"]
+            namespace="admin/claude-code", query_text="Q", planes=["episodic"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -369,7 +369,7 @@ async def test_superseded_kept_when_superseder_absent() -> None:
 # Scope
 async def test_default_planes_cover_curated_concept_episodic() -> None:
     """Bullet 9"""
-    query = BlendedRetrievalQuery(namespace="eric/claude-code", query_text="Q")
+    query = BlendedRetrievalQuery(namespace="admin/claude-code", query_text="Q")
     assert list(query.planes) == ["curated", "concept", "episodic"]
 
 
@@ -388,7 +388,7 @@ async def test_artifact_opted_in_surfaces_chunks() -> None:
         return_value=Ok(value=DeepResult(hits=[hit_art])),
     ):
         query = BlendedRetrievalQuery(
-            namespace="eric/claude-code", query_text="Q", planes=["artifact"]
+            namespace="admin/claude-code", query_text="Q", planes=["artifact"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -396,8 +396,8 @@ async def test_artifact_opted_in_surfaces_chunks() -> None:
         assert len(res.unwrap().results) == 1
 
 
-async def test_legacy_blended_namespace_fails_instead_of_using_house_presences() -> None:
-    """The old /blended scope cannot silently substitute a house-specific list."""
+async def test_legacy_blended_namespace_requires_explicit_presences() -> None:
+    """The old /blended scope cannot silently substitute a fixed cohort list."""
     hit1 = ScoredHit(
         object_id="1",
         plane="episodic",
@@ -409,7 +409,7 @@ async def test_legacy_blended_namespace_fails_instead_of_using_house_presences()
 
     with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
         mock_deep.return_value = Ok(value=DeepResult(hits=[hit1]))
-        query = BlendedRetrievalQuery(namespace="eric/blended", query_text="Q")
+        query = BlendedRetrievalQuery(namespace="admin/blended", query_text="Q")
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
         )
@@ -418,7 +418,7 @@ async def test_legacy_blended_namespace_fails_instead_of_using_house_presences()
         assert "wildcard" in res.error.detail
         mock_deep.assert_not_called()
 
-        empty_query = BlendedRetrievalQuery(namespace="eric/blended", query_text="Q", presences=[])
+        empty_query = BlendedRetrievalQuery(namespace="admin/blended", query_text="Q", presences=[])
         empty_res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), empty_query
         )
@@ -440,16 +440,16 @@ async def test_legacy_blended_namespace_uses_only_explicit_presences() -> None:
     with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
         mock_deep.return_value = Ok(value=DeepResult(hits=[hit]))
         query = BlendedRetrievalQuery(
-            namespace="eric/blended", query_text="Q", presences=["voice", "cli"]
+            namespace="admin/blended", query_text="Q", presences=["voice", "cli"]
         )
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
         )
         assert res.is_ok()
         called = [call.args[3].namespace for call in mock_deep.call_args_list]
-        assert "eric/voice/episodic" in called
-        assert "eric/cli/episodic" in called
-        assert "eric/claude-code/episodic" not in called
+        assert "admin/voice/episodic" in called
+        assert "admin/cli/episodic" in called
+        assert "admin/claude-code/episodic" not in called
 
 
 @pytest.mark.parametrize("presence", ["", "*", "x/../y", "Voice"])
@@ -459,7 +459,7 @@ async def test_legacy_blended_namespace_rejects_invalid_explicit_presence(
     """No malformed or wildcard presence can become an internal query target."""
     with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
         query = BlendedRetrievalQuery(
-            namespace="eric/blended",
+            namespace="admin/blended",
             query_text="Q",
             presences=["voice", presence],
         )
@@ -509,7 +509,7 @@ async def test_one_plane_empty_merge_succeeds() -> None:
             return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
-        query = BlendedRetrievalQuery(namespace="eric/claude-code", query_text="Q")
+        query = BlendedRetrievalQuery(namespace="admin/claude-code", query_text="Q")
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
         )
@@ -521,7 +521,7 @@ async def test_all_planes_empty_returns_empty_warning() -> None:
     with patch(
         "musubi.retrieve.blended.run_deep_retrieve", return_value=Ok(value=DeepResult(hits=[]))
     ):
-        query = BlendedRetrievalQuery(namespace="eric/claude-code", query_text="Q")
+        query = BlendedRetrievalQuery(namespace="admin/claude-code", query_text="Q")
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
         )

@@ -24,7 +24,7 @@ from musubi.retrieve.recent import (
 )
 from musubi.types.common import Err, Ok
 
-NAMESPACE = "aoi/command-chair/episodic"
+NAMESPACE = "sam/command-chair/episodic"
 COLLECTION = "musubi_episodic"
 
 

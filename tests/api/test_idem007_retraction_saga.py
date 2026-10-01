@@ -25,8 +25,8 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory, RetractionEvidence
 from tests.support.identity_seed import seed_v2_identity_via_migration
 
-_NS = "eric/claude-code/episodic"
-_ARTIFACT_NS = "eric/claude-code/artifact"
+_NS = "admin/claude-code/episodic"
+_ARTIFACT_NS = "admin/claude-code/artifact"
 _ORIGINAL = "The bridge is closed tonight. This is false."
 
 
@@ -301,8 +301,8 @@ def test_both_namespace_authorizations_finish_before_first_stored_state_read(
     memory = _seed(episodic)
     token = _mint(
         api_settings,
-        subject="eric/claude-code",
-        presence="eric/claude-code",
+        subject="admin/claude-code",
+        presence="admin/claude-code",
         scopes=[f"{_NS}:rw"],
     )
     events: list[str] = []
@@ -688,8 +688,8 @@ def test_same_key_and_digest_under_different_principal_conflicts_never_adopts(
     landed = _layout(qdrant, memory.object_id)
     other = _mint(
         api_settings,
-        subject="eric/other-principal",
-        presence="eric/other-principal",
+        subject="admin/other-principal",
+        presence="admin/other-principal",
         scopes=[f"{_NS}:rw", f"{_ARTIFACT_NS}:rw"],
     )
     second = client.post(

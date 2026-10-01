@@ -112,7 +112,7 @@ def _final(result: object) -> TransitionResult:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/episodic"
+    return "admin/claude-code/episodic"
 
 
 def _make(content: str, namespace: str, **extra: object) -> EpisodicMemory:
@@ -369,8 +369,8 @@ async def test_transition_to_archived_removes_from_default_queries(
 
 
 async def test_isolation_read_enforcement(plane: EpisodicPlane) -> None:
-    a_ns = "eric/claude-code/episodic"
-    b_ns = "eric/livekit/episodic"
+    a_ns = "admin/claude-code/episodic"
+    b_ns = "admin/livekit/episodic"
     a = await plane.create(_make("only-in-a", a_ns))
     b = await plane.create(_make("only-in-b", b_ns))
     # Querying A never returns B's object.
@@ -382,8 +382,8 @@ async def test_isolation_read_enforcement(plane: EpisodicPlane) -> None:
 
 
 async def test_isolation_write_enforcement(plane: EpisodicPlane) -> None:
-    a_ns = "eric/claude-code/episodic"
-    b_ns = "eric/livekit/episodic"
+    a_ns = "admin/claude-code/episodic"
+    b_ns = "admin/livekit/episodic"
     a = await plane.create(_make("write-isolation", a_ns))
     # Transitioning with the wrong namespace must fail rather than mutate A.
     result = await plane.transition(
@@ -809,11 +809,11 @@ async def test_semantic_dedup_rejects_participants_change(
 ) -> None:
     # In addition to normal participant changes in text, verify structured participants metadata differences
     base_obj = _make("Meeting finished", ns)
-    base_obj.participants = ["aoi"]
+    base_obj.participants = ["sam"]
     base = await plane.create(base_obj)
 
     candidate = _make("Meeting finished", ns)
-    candidate.participants = ["yua"]
+    candidate.participants = ["alex"]
 
     low_plane = EpisodicPlane(
         client=plane._client,
@@ -888,8 +888,8 @@ async def test_semantic_dedup_rejects_participant_change(
     plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
 ) -> None:
     # 5. Participant change
-    base = await plane.create(_make("Aoi reviewed the PR.", ns))
-    candidate = _make("Yua reviewed the PR.", ns)
+    base = await plane.create(_make("Sam reviewed the PR.", ns))
+    candidate = _make("Alex reviewed the PR.", ns)
 
     low_plane = EpisodicPlane(
         client=plane._client,
@@ -1066,8 +1066,8 @@ async def test_batch_create_intra_batch_rejects_factual_incompatibility(
 async def test_batch_create_cross_namespace_isolation(
     plane: EpisodicPlane, qdrant: QdrantClient
 ) -> None:
-    ns1 = "eric/ops/episodic"
-    ns2 = "yua/ops/episodic"
+    ns1 = "admin/ops/episodic"
+    ns2 = "alex/ops/episodic"
 
     m1 = _make("Cross namespace match", ns1)
     m2 = _make("Cross namespace match", ns2)
@@ -1261,7 +1261,7 @@ async def test_batch_vs_sequential_multiple_clusters(
     plane: EpisodicPlane, qdrant: QdrantClient
 ) -> None:
     # Batch of 4 items: 2 near A, 2 near B.
-    ns_batch = "eric/ops/episodic"
+    ns_batch = "admin/ops/episodic"
     m_a1 = _make("Cluster A text is this one", ns_batch)
     m_a2 = _make("Cluster A text is this one", ns_batch)
     m_b1 = _make("Cluster B content is here", ns_batch)
@@ -1269,7 +1269,7 @@ async def test_batch_vs_sequential_multiple_clusters(
 
     res_batch = await plane.batch_create([m_a1, m_a2, m_b1, m_b2])
 
-    ns_seq = "yua/ops/episodic"
+    ns_seq = "alex/ops/episodic"
     s_a1 = _make("Cluster A text is this one", ns_seq)
     s_a2 = _make("Cluster A text is this one", ns_seq)
     s_b1 = _make("Cluster B content is here", ns_seq)
@@ -1353,8 +1353,8 @@ async def test_batch_vs_sequential_permuted_order(
         return out
 
     for i, perm in enumerate(perms):
-        ns_batch = f"eric/batch_perm_{i}/episodic"
-        ns_seq = f"yua/seq_perm_{i}/episodic"
+        ns_batch = f"admin/batch_perm_{i}/episodic"
+        ns_seq = f"alex/seq_perm_{i}/episodic"
 
         # Ensure the test namespaces are isolated and start empty
         assert (

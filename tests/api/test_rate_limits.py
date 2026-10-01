@@ -21,14 +21,14 @@ def test_capture_rate_limit_returns_429_on_over_limit(client: TestClient, valid_
     for _ in range(_CAPTURE_EXHAUST):
         resp = client.post(
             "/v1/episodic",
-            json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+            json={"namespace": "admin/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
         pass
 
     resp = client.post(
         "/v1/episodic",
-        json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+        json={"namespace": "admin/claude-code/episodic", "content": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )
     assert resp.status_code == 429
@@ -41,12 +41,12 @@ def test_capture_rate_limit_resets_after_window(client: TestClient, valid_token:
     for _ in range(_CAPTURE_EXHAUST):
         client.post(
             "/v1/episodic",
-            json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+            json={"namespace": "admin/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
     resp = client.post(
         "/v1/episodic",
-        json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+        json={"namespace": "admin/claude-code/episodic", "content": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )
     assert resp.status_code == 429
@@ -54,7 +54,7 @@ def test_capture_rate_limit_resets_after_window(client: TestClient, valid_token:
     with patch("time.time", return_value=time.time() + 61):
         resp = client.post(
             "/v1/episodic",
-            json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+            json={"namespace": "admin/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
         pass
@@ -68,13 +68,13 @@ def test_retrieve_rate_limit_separate_bucket_from_capture(
     for _ in range(_CAPTURE_EXHAUST):
         client.post(
             "/v1/episodic",
-            json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+            json={"namespace": "admin/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
     # capture is exhausted
     resp = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/claude-code/episodic", "query_text": "hit"},
+        json={"namespace": "admin/claude-code/episodic", "query_text": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )
     assert resp.status_code == 200
@@ -86,12 +86,12 @@ def test_retry_after_header_present_on_429(client: TestClient, valid_token: str)
     for _ in range(_CAPTURE_EXHAUST):
         client.post(
             "/v1/episodic",
-            json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+            json={"namespace": "admin/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
     resp = client.post(
         "/v1/episodic",
-        json={"namespace": "eric/claude-code/episodic", "content": "hit"},
+        json={"namespace": "admin/claude-code/episodic", "content": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )
     assert resp.status_code == 429

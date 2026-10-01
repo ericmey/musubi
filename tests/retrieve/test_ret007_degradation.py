@@ -35,7 +35,7 @@ def _valid_v1_payload() -> dict[str, Any]:
     from musubi.types.episodic import EpisodicMemory
 
     return EpisodicMemory(
-        namespace="aoi/ret007/episodic", content="ret007 hit body", state="matured"
+        namespace="sam/ret007/episodic", content="ret007 hit body", state="matured"
     ).model_dump(mode="json")
 
 

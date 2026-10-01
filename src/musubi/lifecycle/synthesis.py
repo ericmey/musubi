@@ -466,7 +466,7 @@ class SynthesisReport:
     """Results of a single synthesis run.
 
     The `namespace` field carries the identity family in the v1.5.5+
-    flow (e.g. "aoi"), not a full tenant/presence/plane namespace.
+    flow (e.g. "alex"), not a full tenant/presence/plane namespace.
     Renamed semantically but kept its name for backward-compat with any
     log scrapers / dashboards that parse it.
     """
@@ -493,9 +493,8 @@ class SynthesisReport:
 _FAMILY_SYNTHESIS_PRESENCE = "shared"
 """Convention: family-level synthesis writes concepts to
 ``<family>/shared/concept``. The `shared` presence already means
-"identity-level, not substrate-specific" (see e.g. aoi/shared/episodic
-which carries Aoi's joy entry, visual identity, codeword authority
-— all identity-wide things)."""
+"identity-level, not substrate-specific" (see e.g. alex/shared/episodic
+for memories shared across one agent's presences)."""
 
 
 async def synthesis_run(

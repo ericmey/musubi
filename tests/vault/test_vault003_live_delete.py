@@ -112,14 +112,14 @@ def plane(qdrant: QdrantClient) -> CuratedPlane:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/claude-code/curated"
+    return "admin/claude-code/curated"
 
 
 @pytest.fixture
 def vault_root(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir()
-    (root / "eric" / "shared").mkdir(parents=True)
+    (root / "admin" / "shared").mkdir(parents=True)
     return root
 
 
@@ -184,11 +184,11 @@ async def test_delete_archives_matching_row_via_canonical_transition(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/deleted-target.md",
+            vault_path="admin/shared/deleted-target.md",
             content="This file's vault_path will be deleted.",
         )
     )
-    rel_path = "eric/shared/deleted-target.md"
+    rel_path = "admin/shared/deleted-target.md"
     await watcher._handle_event(
         str(watcher.vault_root / rel_path),
         FileDeletedEvent(str(watcher.vault_root / rel_path)),
@@ -221,11 +221,11 @@ async def test_archived_row_excluded_from_default_retrieval(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/default-excluded.md",
+            vault_path="admin/shared/default-excluded.md",
             content="Default retrieval should not surface this row after archive.",
         )
     )
-    rel_path = "eric/shared/default-excluded.md"
+    rel_path = "admin/shared/default-excluded.md"
     await watcher._handle_event(
         str(watcher.vault_root / rel_path),
         FileDeletedEvent(str(watcher.vault_root / rel_path)),
@@ -266,11 +266,11 @@ async def test_audit_and_history_retain_archived_row(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/audit-target.md",
+            vault_path="admin/shared/audit-target.md",
             content="This row's delete should produce a lifecycle_events row.",
         )
     )
-    rel_path = "eric/shared/audit-target.md"
+    rel_path = "admin/shared/audit-target.md"
     await watcher._handle_event(
         str(watcher.vault_root / rel_path),
         FileDeletedEvent(str(watcher.vault_root / rel_path)),
@@ -304,11 +304,11 @@ async def test_repeat_delete_is_idempotent(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/idempotent.md",
+            vault_path="admin/shared/idempotent.md",
             content="Repeat delete should not log a warning or re-archive.",
         )
     )
-    rel_path = "eric/shared/idempotent.md"
+    rel_path = "admin/shared/idempotent.md"
     abs_path = str(watcher.vault_root / rel_path)
     # First delete: archives.
     await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
@@ -421,7 +421,7 @@ async def test_missing_row_is_observable_noop(
 ) -> None:
     """Bullet 7: delete a path with no curated row; an ``info``-level log
     records the path; no mutation, no error, no warning."""
-    rel_path = "eric/shared/never-existed.md"
+    rel_path = "admin/shared/never-existed.md"
     abs_path = str(watcher.vault_root / rel_path)
     with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
         await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
@@ -465,7 +465,7 @@ async def test_delete_broken_or_unknown_code_warns_and_refuses(
 
     from musubi.planes.curated.plane import FindByVaultPathError
 
-    rel_path = "eric/shared/broken-identity.md"
+    rel_path = "admin/shared/broken-identity.md"
     abs_path = str(watcher.vault_root / rel_path)
 
     err = Err(
@@ -520,7 +520,7 @@ async def test_transition_failure_remains_visible(
         saved = await plane.create(
             _make_curated(
                 namespace=ns,
-                vault_path="eric/shared/fenced.md",
+                vault_path="admin/shared/fenced.md",
                 content="This row's transition will fail.",
             )
         )
@@ -533,7 +533,7 @@ async def test_transition_failure_remains_visible(
         )
         w._loop = asyncio.get_running_loop()
 
-        rel_path = "eric/shared/fenced.md"
+        rel_path = "admin/shared/fenced.md"
         abs_path = str(vault_root / rel_path)
 
         with caplog.at_level(logging.WARNING, logger="musubi.vault.watcher"):
@@ -570,7 +570,7 @@ async def test_on_created_indexes_new_file(
     """GREEN guard 9: the on-created path is unaffected by the seam."""
     from datetime import UTC, datetime
 
-    file_path = vault_root / "eric" / "shared" / "test.md"
+    file_path = vault_root / "admin" / "shared" / "test.md"
     file_path.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(UTC)
     fm = CuratedFrontmatter.model_validate(
@@ -737,7 +737,7 @@ async def test_superseded_row_delete_emits_visible_warning(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/wrong-state.md",
+            vault_path="admin/shared/wrong-state.md",
             content="Row whose transition will be rejected.",
         )
     )
@@ -763,7 +763,7 @@ async def test_superseded_row_delete_emits_visible_warning(
 
     plane.transition = _rejecting_transition  # type: ignore[method-assign]
     try:
-        rel_path = "eric/shared/wrong-state.md"
+        rel_path = "admin/shared/wrong-state.md"
         abs_path = str(watcher.vault_root / rel_path)
 
         with caplog.at_level(logging.WARNING, logger="musubi.vault.watcher"):
@@ -821,7 +821,7 @@ async def test_concurrent_archive_race_is_idempotent_not_warned(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/race-archived.md",
+            vault_path="admin/shared/race-archived.md",
             content="Row archived by a concurrent actor mid-delete.",
         )
     )
@@ -844,7 +844,7 @@ async def test_concurrent_archive_race_is_idempotent_not_warned(
 
     plane.transition = _archived_race_transition  # type: ignore[method-assign]
     try:
-        rel_path = "eric/shared/race-archived.md"
+        rel_path = "admin/shared/race-archived.md"
         abs_path = str(watcher.vault_root / rel_path)
         with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
             await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
@@ -892,7 +892,7 @@ async def test_delete_success_log_distinguishes_pending_from_finalized(
 
     # --- Case A: durable-accept pending (simulated seam result) ---
     await plane.create(
-        _make_curated(namespace=ns, vault_path="eric/shared/pending.md", content="pending row")
+        _make_curated(namespace=ns, vault_path="admin/shared/pending.md", content="pending row")
     )
 
     async def _pending_transition(*args: Any, **kwargs: Any) -> Any:
@@ -903,7 +903,7 @@ async def test_delete_success_log_distinguishes_pending_from_finalized(
     real_transition = plane.transition
     plane.transition = _pending_transition  # type: ignore[method-assign]
     try:
-        rel = "eric/shared/pending.md"
+        rel = "admin/shared/pending.md"
         with caplog.at_level(logging.INFO, logger="musubi.vault.watcher"):
             await watcher._handle_event(
                 str(watcher.vault_root / rel), FileDeletedEvent(str(watcher.vault_root / rel))
@@ -923,9 +923,9 @@ async def test_delete_success_log_distinguishes_pending_from_finalized(
 
     # --- Case B: real finalized archive (through the live coordinator) ---
     saved = await plane.create(
-        _make_curated(namespace=ns, vault_path="eric/shared/finalized.md", content="finalized row")
+        _make_curated(namespace=ns, vault_path="admin/shared/finalized.md", content="finalized row")
     )
-    rel2 = "eric/shared/finalized.md"
+    rel2 = "admin/shared/finalized.md"
     with caplog.at_level(logging.INFO, logger="musubi.vault.watcher"):
         await watcher._handle_event(
             str(watcher.vault_root / rel2), FileDeletedEvent(str(watcher.vault_root / rel2))
@@ -1221,7 +1221,7 @@ def test_runtime_factory_wires_curated_plane_with_immutable_publisher(
     assert INTENT_KIND in runtime.coordinator._intent_handlers, (
         "the vault runtime must register the immutable-vector dispatcher"
     )
-    rt_ns = "eric/vault-runtime/curated"
+    rt_ns = "admin/vault-runtime/curated"
     first = asyncio.run(
         runtime.curated_plane.create(
             CuratedKnowledge(
@@ -1278,7 +1278,7 @@ async def test_find_by_vault_path_uses_limit_two_for_fail_closed(
     await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/limit-two.md",
+            vault_path="admin/shared/limit-two.md",
             content="Row whose lookup must scroll bounded at limit=2.",
         )
     )
@@ -1295,7 +1295,7 @@ async def test_find_by_vault_path_uses_limit_two_for_fail_closed(
 
     plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
     try:
-        result = await plane.find_by_vault_path("eric/shared/limit-two.md")
+        result = await plane.find_by_vault_path("admin/shared/limit-two.md")
     finally:
         plane._client.scroll = real_scroll  # type: ignore[method-assign]
 
@@ -1320,7 +1320,7 @@ async def test_find_by_vault_path_scroll_requests_payload_only(
     await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="eric/shared/payload-only.md",
+            vault_path="admin/shared/payload-only.md",
             content="Row whose lookup must not pull vectors back.",
         )
     )
@@ -1337,7 +1337,7 @@ async def test_find_by_vault_path_scroll_requests_payload_only(
 
     plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
     try:
-        result = await plane.find_by_vault_path("eric/shared/payload-only.md")
+        result = await plane.find_by_vault_path("admin/shared/payload-only.md")
     finally:
         plane._client.scroll = real_scroll  # type: ignore[method-assign]
 

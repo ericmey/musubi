@@ -78,7 +78,7 @@ class DefectStillPresent(Exception):
 def _ev(
     marker: str,
     object_id: str = "0" * 27,
-    namespace: str = "eric/claude-code/episodic",
+    namespace: str = "admin/claude-code/episodic",
 ) -> LifecycleEvent:
     return LifecycleEvent(
         object_id=object_id,
@@ -292,7 +292,7 @@ def test_only_ok_accepted_events_survive_abrupt_crash(tmp_path: Path) -> None:
         oks = 0
         for i in range(3):
             r = s.record(LifecycleEvent(object_id="0"*27, object_type="episodic",
-                namespace="eric/claude-code/episodic", from_state="provisional",
+                namespace="admin/claude-code/episodic", from_state="provisional",
                 to_state="matured", actor="t", reason=f"ok{{i}}"))
             if isinstance(r, Ok):
                 oks += 1
@@ -383,7 +383,7 @@ def test_sustained_failures_all_err_zero_rows_no_growth(tmp_path: Path) -> None:
         errs = 0
         for i in range(1000):
             r = s.record(LifecycleEvent(object_id="0"*27, object_type="episodic",
-                namespace="eric/claude-code/episodic", from_state="provisional",
+                namespace="admin/claude-code/episodic", from_state="provisional",
                 to_state="matured", actor="t", reason=f"x{{i}}"))
             if isinstance(r, Err):
                 errs += 1
