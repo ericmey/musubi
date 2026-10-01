@@ -16,7 +16,7 @@ import pytest
 from musubi.embedding.base import EmbeddingError
 from musubi.embedding.fake import FakeEmbedder
 from musubi.retrieve.deep import DeepResult
-from musubi.retrieve.fast import FastHit, FastRetrieveResult
+from musubi.retrieve.fast import FastHit, FastRetrieveResult, FastTiming
 from musubi.retrieve.hybrid import HybridHit, HybridSearchResult
 from musubi.retrieve.orchestration import (
     NamespaceTarget,
@@ -416,6 +416,34 @@ async def test_whole_call_timeout_fast_400ms(monkeypatch: pytest.MonkeyPatch) ->
     result = await _retrieve(mode="fast", reranker=_TrackingReranker())
     assert isinstance(result, Err)
     assert result.error.kind == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_fast_timing_override_reaches_pipeline_and_whole_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remote inference deployment can raise all three fast budgets together."""
+    seen: dict[str, float] = {}
+
+    async def slow_fast(*args: Any, **kwargs: Any) -> Any:
+        seen["encoding"] = kwargs["encoding_timeout_s"]
+        seen["search"] = kwargs["plane_timeout_s"]
+        await asyncio.sleep(0.45)
+        return Ok(value=FastRetrieveResult(results=[], warnings=()))
+
+    monkeypatch.setattr("musubi.retrieve.orchestration.run_fast_retrieve", slow_fast)
+    query = RetrievalQuery(
+        namespace="eric/test/episodic", query_text="gpu", mode="fast", planes=["episodic"]
+    )
+    result = await retrieve(
+        client=cast(Any, _MockQdrant()),
+        embedder=FakeEmbedder(),
+        query=query,
+        account_access=False,
+        fast_timing=FastTiming(encoding_timeout_s=0.75, plane_timeout_s=0.35, whole_timeout_s=1.2),
+    )
+    assert isinstance(result, Ok)
+    assert seen == {"encoding": 0.75, "search": 0.35}
 
 
 @pytest.mark.asyncio

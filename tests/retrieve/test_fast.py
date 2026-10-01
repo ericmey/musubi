@@ -248,6 +248,36 @@ async def test_fast_path_encodes_once_before_per_plane_timeout(
 
 
 @pytest.mark.asyncio
+async def test_fast_path_uses_independent_encoding_and_search_deadlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow remote encoder may finish without consuming the search budget."""
+
+    class SlowEncoder(_CountingEmbedder):
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            await asyncio.sleep(0.08)
+            return await super().embed_dense(texts)
+
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        await asyncio.sleep(0.04)
+        return Ok(value=HybridSearchResult(hits=[_hybrid_hit("found", score=0.9)]))
+
+    monkeypatch.setattr("musubi.retrieve.fast.hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        _client(),
+        SlowEncoder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+        encoding_timeout_s=0.1,
+        plane_timeout_s=0.06,
+    )
+    assert isinstance(result, Ok)
+    assert [hit.object_id for hit in result.value.results] == ["found"]
+
+
+@pytest.mark.asyncio
 async def test_fast_path_shares_encoding_with_real_hybrid_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
