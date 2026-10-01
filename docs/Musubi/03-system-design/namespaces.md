@@ -4,7 +4,7 @@ section: 03-system-design
 tags: [architecture, isolation, namespaces, section/system-design, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-24
+updated: 2026-10-01
 up: "[[03-system-design/index]]"
 reviewed: false
 implements: ["src/musubi/api/", "tests/api/"]
@@ -17,13 +17,13 @@ How Musubi partitions its data so that agents, channels, and system services coe
 
 Every piece of memory lives in a namespace: `{tenant}/{presence}/{plane}`.
 
-- **tenant** — the agent persona that owns the memory (the continuous "who" across channels). Examples: `alice`, `support-bot`, `research-agent`. Also reserved: `system` (lifecycle worker, scheduler).
-- **presence** — the channel / client the agent is speaking through. Examples: `voice` (LiveKit), `discord`, `openclaw` (browser plugin), `mcp` (MCP adapter).
-- **plane** — one of `episodic`, `curated`, `artifact`, `concept`, `thought`.
+- **tenant** — the agent persona that owns the memory (the continuous "who" across channels). Examples: `alex`, `sam`.
+- **presence** — the channel / client the agent is speaking through. Examples: `voice` (LiveKit), `discord`, `openclaw` (browser plugin), `claude-code`, `shared` (knowledge shared across the agent's channels).
+- **plane** — one of `episodic`, `curated`, `concept`, `artifact`, `thought`, `lifecycle` (`src/musubi/types/common.py:49-53`).
 
 Stored as a flat string on every object: `namespace: "alex/voice/episodic"`.
 
-> Historical note: pre-v1.0, an earlier convention used the human operator as the tenant (`admin/alex/episodic`). That was flipped to agent-as-tenant in [[13-decisions/0030-agent-as-tenant|ADR 0030]] before v1.0. Example namespaces elsewhere in the vault may still show the old shape; treat this page as the source of truth until the sweep lands.
+> Historical note: pre-v1.0, an earlier convention used the human operator as the tenant (`admin/alex/episodic`). That was flipped to agent-as-tenant in [[13-decisions/0030-agent-as-tenant|ADR 0030]] before v1.0.
 
 ## How namespaces affect storage
 
@@ -31,63 +31,61 @@ Stored as a flat string on every object: `namespace: "alex/voice/episodic"`.
 
 We use **one collection per plane**, with a `namespace` payload field indexed as KEYWORD. Scopes are enforced at *query time* via filter, not at *collection level*.
 
-Collections:
+Collections (`src/musubi/store/names.py`):
 - `musubi_episodic`
 - `musubi_curated`
-- `musubi_artifact_chunks`
 - `musubi_concept`
+- `musubi_artifact` (artifact metadata) and `musubi_artifact_chunks` (indexed chunks)
 - `musubi_thought`
+- `musubi_lifecycle_events` (declared; the lifecycle-event mirror is not populated yet)
 
 Why one-collection-per-plane instead of one-per-agent?
 - Agent creation is a config edit (mint a token, add to the fleet), not a Qdrant operation.
-- Qdrant payload filtering on an indexed KEYWORD field is O(log n); at our scale (≤ 10M points per plane) this is negligible.
+- Filtering on an indexed KEYWORD field is cheap at small-team scale.
 - Snapshot/restore of a shared collection captures all agents atomically.
-
-**If we outgrow this** (say, > 50M points in a plane): we split the largest collection by agent via a zero-downtime migration using Qdrant aliases. See `scaling`.
 
 ### Filter on every query
 
-Every retrieval function adds an implicit filter:
+The retrieve route first resolves the request into concrete `(namespace, plane)` targets, checks scope on each one ([[10-security/auth]]), and then queries each target with an exact namespace filter:
 
 ```python
 Filter(
     must=[
-        FieldCondition(key="namespace", match=MatchValue(value=ns_expr))
+        FieldCondition(key="namespace", match=MatchValue(value="alex/voice/episodic"))
     ]
 )
 ```
 
-where `ns_expr` is one of:
+The request's `namespace` can be:
 - Exact: `"alex/voice/episodic"` — single-namespace query.
-- 2-segment: `"alex/voice"` — cross-plane fan (all planes Alex has written on the voice channel). See [[13-decisions/0028-retrieve-2seg-namespace-crossplane|ADR 0028]].
-- Plane-wide via scope glob: tokens with `*/episodic:r` can read every agent's episodic rows; used by cross-agent survey tools (see [[07-interfaces/canonical-api]]).
+- 2-segment: `"alex/voice"` — cross-plane fan (one target per requested plane). See [[13-decisions/0028-retrieve-2seg-namespace-crossplane|ADR 0028]].
+- A wildcard pattern such as `"alex/*/episodic"` — expanded against the stored namespaces; see [§Wildcard reads](#wildcard-reads).
+- Omitted — recall across the caller's own tenant: Core enumerates the stored namespaces for the token's tenant and keeps the ones the token can read.
 
-Qdrant doesn't support prefix match on KEYWORD directly, so plane-wide queries use `should` with enumerated namespaces at the router layer. Enumeration is cheap because the agent registry is ~12 entries.
+Reading another agent's rows needs a scope that covers them, such as `*/*/episodic:r` (every agent's episodic plane). Scope globs match segment by segment, so they must have as many segments as the namespace.
 
 ### The vault
 
-Curated knowledge is partitioned under the vault filesystem, one top-level directory per agent tenant:
+Curated knowledge is plain Markdown under the vault. When the lifecycle engine promotes a concept, it writes the file at
+`curated/<tenant>/<presence>/<topic>/<slug>.md` (`src/musubi/lifecycle/promotion.py:133-159`):
 
 ```
 vault/
-├── curated/
-│   ├── alex/                # agent tenant directory
-│   │   ├── projects/        # topic directories
-│   │   │   ├── musubi.md
-│   │   │   └── openclaw.md
-│   │   └── personal/
-│   │       └── preferences.md
-│   ├── sam/
-│   │   └── technical/
-│   │       └── gpu-ops.md
-│   └── _shared/             # cross-agent shared knowledge (cross-agent read scope required)
-│       └── calendar.md
-├── artifacts/               # artifact files (namespace-tagged in frontmatter, not path-partitioned)
-├── _archive/                # soft-deleted files
-└── _inbox/                  # untriaged human input (see 04-data-model/vault-schema)
+└── curated/
+    ├── alex/                  # tenant
+    │   ├── shared/            # presence
+    │   │   └── projects/      # topic
+    │   │       └── musubi.md
+    │   └── voice/
+    │       └── personal/
+    │           └── preferences.md
+    └── sam/
+        └── discord/
+            └── technical/
+                └── gpu-ops.md
 ```
 
-The frontmatter in each file declares its namespace explicitly (`tenant: alex, presence: curated, plane: curated`). The filesystem structure is a convenience for humans (easy nav in Obsidian) — the namespace of record is in the frontmatter, so moving a file across agent folders requires a frontmatter edit too.
+The frontmatter in each file declares its namespace explicitly as one field, `namespace: alex/shared/curated`. The directory layout is a convenience for humans; the namespace of record is the frontmatter, so moving a file to another agent's folder requires a frontmatter edit too.
 
 ## Authorization maps to namespace
 
@@ -95,31 +93,30 @@ A bearer token carries claims:
 
 ```json
 {
-  "sub": "openclaw-livekit-alex",
+  "sub": "alex/voice",
   "presence": "alex/voice",
-  "scope": "alex/*:rw */episodic:r */curated:r",
+  "scope": "alex/*/*:rw */*/episodic:r */*/curated:r",
   "aud": "musubi",
   "iss": "..."
 }
 ```
 
-The auth middleware resolves scope globs against the request's namespace claim. A token scoped `alex/*:rw` can write and read anywhere under the `alex/` tenant; a token with additional `*/episodic:r` can survey every agent's episodic plane.
+`sub` must equal `presence` (`src/musubi/auth/tokens.py:225-226`), and every scope that names a concrete tenant must name the presence's tenant. Scope globs match segment by segment and must have the same number of segments as the namespace (`src/musubi/auth/scopes.py:220-232`): `alex/*/*:rw` reads and writes every 3-segment namespace under `alex/`; `*/*/episodic:r` reads every agent's episodic plane. Neither covers a 2-segment namespace such as `alex/voice`; add `alex/*:r` for that.
 
 See [[10-security/auth]] for the full token model.
 
 ## Special namespaces
 
-- **`system/lifecycle-worker/*`** — the lifecycle worker writes audit events and system-authored synthesized concepts here. Not readable to non-system tokens.
-- **`system/scheduler/*`** — scheduled-task-triggered thoughts and reflections.
-- **`<agent>/_shared/*`** — shared across all of an agent's channels (e.g., Alex's canonical preferences, readable whether she's on voice or discord).
-- **`_shared/<plane>`** is not a valid namespace — use `<agent>/_shared/<plane>` for per-agent cross-channel, or grant `_shared/*:r` scope for a dedicated shared-knowledge tenant.
+- **There is no `system` tenant.** Background jobs write under ordinary namespaces. The reflection job writes its curated reflections to `lifecycle-worker/ops/curated` (`src/musubi/lifecycle/runner.py:693`), and the worker sends thoughts as the presence `lifecycle-worker`. Nothing reserves these names; read access follows the normal scope rules.
+- **`<agent>/shared/<plane>`** — knowledge shared across all of an agent's channels (e.g. Alex's canonical preferences in `alex/shared/curated`, readable whether she's on voice or discord). `shared` is an ordinary presence name, not a special case in code.
+- **A segment cannot start with `_` or `-`.** `alex/_shared/curated` fails namespace validation; use `alex/shared/curated`.
 
 ## Namespace rules
 
-1. **No defaulting.** Every API call must resolve a namespace. Missing namespace is a 400, not a "use current agent's."
-2. **No wildcards in write paths.** Reads can query wildcards (see [§Wildcard reads](#wildcard-reads)); writes must be fully qualified — the canonical regex (`^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*/<plane>$`) rejects `*`.
-3. **Cross-namespace relationships are allowed but logged.** A curated file in `alex/` may cite an artifact in `sam/`. The audit log records the cross-namespace link.
-4. **Namespace strings are case-sensitive, ASCII, kebab-case.**
+1. **Writes always name a namespace.** Every capture, patch and delete carries a fully qualified namespace; there is no "use the token's presence" default. The one read-side exception is `POST /v1/retrieve` without a namespace, which recalls across the caller's own tenant, filtered by scope.
+2. **No wildcards in write paths.** Reads can query wildcards (see [§Wildcard reads](#wildcard-reads)); writes must be fully qualified — the canonical regex (`^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*/(episodic|curated|concept|artifact|thought|lifecycle)$`) rejects `*`.
+3. **Cross-namespace relationships are allowed.** A curated file in `alex/` may cite an artifact in `sam/`.
+4. **Namespace strings are lowercase ASCII.** Each segment starts with a letter or digit; `-` and `_` are allowed after that.
 5. **Namespace cannot be changed after write.** Moving a memory across namespaces is a delete + insert with new lineage.
 
 ## Wildcard reads
@@ -138,11 +135,11 @@ every row.
 | `alex/*/*` + planes  | Alex cross-channel × cross-plane                                 |
 | `*/voice/episodic`   | Every agent's voice episodic                                     |
 
-`**` is not introduced — segment-count discipline is preserved. A
+`**` is not accepted as a retrieve namespace — segment-count discipline is preserved. A
 wildcard segment matches any single non-empty segment in the same
 position; literal segments must be exactly equal. The server expands
-patterns against the live Qdrant payload, then runs the existing
-strict-scope fanout (per ADR 0028) over the resolved targets.
+patterns against the live Qdrant payload, then runs the strict per-target
+scope check (per ADR 0028) over the resolved targets.
 
 ## Multi-instance note
 
@@ -150,13 +147,17 @@ When a second human operator runs their own Musubi instance, we disambiguate by 
 
 ## Test Contract
 
-Every plane's module-level tests must include:
+Every plane's module-level tests include:
 
-- `test_isolation_read_enforcement` — a token for agent `alex` cannot read `sam` data at any plane.
-- `test_isolation_write_enforcement` — a token for agent `alex` cannot write with `namespace: sam/...` in payload.
-- `test_cross_agent_read_ok` — a token with `alex/*:rw` plus `*/episodic:r` can read both its own and every other agent's episodic.
+- `test_isolation_read_enforcement` — a query or `get` in one namespace never returns an object stored in another (episodic, curated, concept).
+- `test_isolation_write_enforcement` — a mutation that names the wrong namespace fails instead of changing the object (episodic, curated, concept).
+
+Token-level isolation (an `alex` token cannot read or write `sam` data) is covered by the scope tests in `tests/auth/test_auth.py`.
+
+Not yet written (the contract is open):
+
+- `test_cross_agent_read_ok` — a token with `alex/*/*:rw` plus `*/*/episodic:r` can read both its own and every other agent's episodic.
 - `test_prefix_query_correctness` — 2-seg queries match all enumerated plane children and nothing else.
-- `test_system_namespace_not_readable_from_agent_token` — an agent token cannot read `system/*`.
 
 See [[10-security/auth]] for the full auth test contract.
 

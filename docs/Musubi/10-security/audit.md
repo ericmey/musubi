@@ -4,133 +4,158 @@ section: 10-security
 tags: [audit, logs, section/security, security, status/research-needed, type/spec]
 type: spec
 status: research-needed
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[10-security/index]]"
 reviewed: false
 ---
 # Audit
 
-What we log, how we find it, how long we keep it.
+What Musubi records about access and change, and where to find it.
 
 ## Two audit tracks
 
 ### Auth / access audit
 
-Every authorization decision — allow or deny. Lives in `/var/log/musubi/auth.log` (separate from app log so it has its own retention + access control).
+Every scope decision, allow or deny, is one structured log record
+(`src/musubi/auth/scopes.py:239-257`). There is no separate audit file: the records
+go to the process's standard log stream as JSON lines, alongside every other log
+line, on the logger `musubi.auth.scopes`.
 
-Format:
+Allow:
 
 ```json
 {
-  "ts": "2026-04-17T10:21:34.512Z",
-  "event": "auth.allow",
+  "ts": "2026-10-01T10:21:34.512Z",
+  "level": "info",
+  "service": "musubi.auth.scopes",
+  "msg": "auth.allow",
   "request_id": "abc-123",
-  "sub": "alex-claude-code",
-  "client_id": "musubi-mcp",
-  "presence": "alex/claude-code",
-  "endpoint": "POST /v1/episodic",
+  "event": "auth.allow",
+  "sub": "alex/claude-code",
   "namespace": "alex/claude-code/episodic",
-  "scope_used": "alex/claude-code/episodic:rw",
-  "source_ip": "10.0.0.5"
+  "access": "w",
+  "scope_used": "alex/claude-code/episodic:rw"
 }
 ```
 
-Deny example:
+Deny:
 
 ```json
 {
   "ts": "...",
-  "event": "auth.deny",
+  "level": "info",
+  "service": "musubi.auth.scopes",
+  "msg": "auth.deny",
   "request_id": "...",
-  "sub": "alex-mcp",
-  "endpoint": "POST /v1/episodic",
-  "namespace_requested": "alex/other/episodic",
-  "reason": "scope_mismatch",
-  "scope_available": ["alex/claude-code/episodic:rw"]
+  "event": "auth.deny",
+  "sub": "alex/claude-code",
+  "namespace": "alex/voice/episodic",
+  "access": "w",
+  "scope_used": null,
+  "reason": "namespace 'alex/voice/episodic' not in token scope for 'w' access"
 }
 ```
 
+The audit fields are `event`, `sub`, `namespace`, `access`, `scope_used` and, on
+denials, `reason`. `ts`, `level`, `service`, `msg` and `request_id` come from the
+JSON log formatter (`src/musubi/observability/logging_setup.py`). Operator checks log
+`namespace: "operator"`. Token validation failures (401s) are not audit events.
+Retrieval without a namespace drops unreadable candidates without logging a denial
+for each one ([[10-security/auth]]).
+
 ### Data-change audit
 
-Every mutation of canonical data → a `LifecycleEvent` row in the `lifecycle_events` table (see [[06-ingestion/lifecycle-engine]]). That's our data audit log.
+State changes made through the lifecycle engine's `transition()` record a
+`LifecycleEvent` (`src/musubi/types/lifecycle_event.py`) in the `lifecycle_events`
+table of the lifecycle SQLite ledger (`lifecycle/work.sqlite`; see
+[[06-ingestion/lifecycle-engine]]). That table is the data audit log for those
+changes: API deletes, maturation, demotion, promotion, synthesis and operator
+transitions.
 
 Each event captures:
 
-- `object_id` affected.
+- `event_id`, `object_id`, `object_type`, `namespace`.
 - `from_state`, `to_state`.
-- `actor` (`user`, `system:maturation`, `operator`, etc.).
-- `reason` (string, free-form).
-- `timestamp`, `request_id`, `job_id`.
-- Links to related objects (e.g., promotion links concept_id → curated_id).
+- `actor`: the presence or system identifier that triggered the transition.
+- `reason` (free-form string).
+- `occurred_at` / `occurred_epoch`.
+- `correlation_id` (the request id; empty for background jobs).
+- `lineage_changes`, e.g. the links a promotion adds.
 
-Because nothing mutates silently (by design), this table is a complete audit trail. Replaying it reconstructs the timeline of any row.
+**Known gap: not every state change is in this table.** When the vault watcher sees
+a curated file with a new `object_id` at an existing path, it marks the older curated
+row `superseded` directly through `owned_update`, with no `transition()` call and no
+event (`src/musubi/planes/curated/plane.py:298-350`). Watcher upserts that change
+content record no event either; only archive-on-delete does. For curated rows the
+table is therefore an incomplete timeline. The intended invariant, an event for
+every state change, is not yet met on that path.
 
 ## Retention
 
+Core does not rotate or expire either track.
+
 | Log | Retention |
 |---|---|
-| `auth.log` | 90 days |
-| App log | 30 days |
-| Access log (Kong) | 30 days |
-| `lifecycle_events` | 180 days (configurable per-deploy; can be indefinite) |
-
-Auth log kept longer because investigations may lag. Shorter than lifecycle because it's much higher volume.
+| Auth audit events | Whatever the operator's log pipeline keeps (container log driver, Loki, …) |
+| Reverse-proxy access log (if any) | Whatever the proxy is configured for |
+| `lifecycle_events` | Kept until the operator prunes it; included in the SQLite backup |
 
 ## Access to audit logs
 
-- Auth log: readable only by operator (file permissions `0640 musubi:ops`).
-- Lifecycle events: operator-only endpoint `GET /v1/lifecycle/events` (with filters).
-- App log: same as auth.
+- Auth audit events: whoever can read the container logs on the host or in the log
+  pipeline. Restrict that the same way you restrict host access.
+- Lifecycle events: `GET /v1/lifecycle/events?namespace=<ns>` requires the `operator`
+  scope (`src/musubi/api/routers/lifecycle.py:32-60`). It reads the Qdrant mirror
+  collection `musubi_lifecycle_events`, which is declared but **not populated yet**,
+  so today it returns an empty list. Without a `namespace` it always returns an
+  empty list. `GET /v1/lifecycle/events/{object_id}` is a stub that returns an empty
+  list (`lifecycle.py:65-73`). Until the mirror lands, query the `lifecycle_events`
+  table in the SQLite ledger directly.
 
-No user-facing audit API — small-team scope; operator reads on demand.
+No user-facing audit API: small-team scope; the operator reads on demand.
 
 ## Tamper resistance
 
-For v1, file-level integrity. If we need stronger guarantees:
-
-- Logs flush to off-host immediately (syslog over TLS to a separate box).
-- Immutable storage: append-only S3 bucket or object-lock.
-
-Not in v1.
+None beyond host file permissions. If you need stronger guarantees, ship logs off the
+host as they are written (to a separate log store) and keep backups of the ledger on
+immutable storage. Not in v1.
 
 ## Audit queries
 
-Common queries the operator runs:
+```bash
+# All denials (container logs, JSON lines):
+docker compose logs core --no-log-prefix \
+  | jq -c 'select(.event? == "auth.deny")'
 
-```
-# Who captured to namespace X in the last day?
-grep '"namespace": "alex/claude-code/episodic"' /var/log/musubi/auth.log \
-  | jq 'select(.event == "auth.allow" and .endpoint | startswith("POST"))'
+# Writes allowed into one namespace:
+docker compose logs core --no-log-prefix \
+  | jq -c 'select(.event? == "auth.allow" and .namespace == "alex/claude-code/episodic" and .access == "w")'
 
-# All denies in last 24h:
-grep '"event": "auth.deny"' /var/log/musubi/auth.log \
-  | jq 'select(.ts > "2026-04-16T10:00")' | head -100
-
-# What happened to concept X?
-curl -H "Authorization: Bearer $OP_TOKEN" \
-  "http://localhost:8100/v1/lifecycle/events/<concept-id>" | jq .
+# What happened to object X? (read the ledger directly)
+sqlite3 /path/to/lifecycle/work.sqlite \
+  "SELECT payload FROM lifecycle_events WHERE object_id = '<object-id>' ORDER BY occurred_epoch"
 ```
 
 ## Privacy of audit logs
 
-Audit logs contain:
+Audit records contain:
 
 - Namespaces (not content).
 - Object IDs (not content).
 - Subjects / presences.
-- IPs.
 - Reasons.
 
-They don't contain captured content. This is deliberate — audit logs are less sensitive than the data itself, so retention + exposure can be more permissive without leaking personal data.
+They don't contain captured content or tokens. This is deliberate: audit logs are
+less sensitive than the data itself, so retention and exposure can be more permissive
+without leaking personal data.
 
 ## Test contract
 
-**Module under test:** audit paths in `musubi/auth/*` + `musubi/lifecycle/*`
+**Module under test:** audit paths in `src/musubi/auth/*` + `src/musubi/lifecycle/*`
 
-1. `test_every_auth_decision_emits_one_audit_line`
+1. `test_every_auth_decision_emits_audit_line` (in `tests/auth/test_auth.py`)
 2. `test_audit_line_structured_json`
 3. `test_audit_never_contains_content_or_token`
 4. `test_lifecycle_event_per_state_transition`
 5. `test_no_state_transition_without_event` (invariant check)
-6. `test_audit_retention_sweep_after_ttl`
-7. `test_operator_endpoint_returns_events_with_filters`
+6. `test_operator_endpoint_returns_events_with_filters` (blocked until the Qdrant mirror is populated)

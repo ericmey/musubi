@@ -79,4 +79,4 @@ Trade-offs:
 - [[07-interfaces/canonical-api]]
 - [[07-interfaces/index]]
 - [[07-interfaces/contract-tests]]
-- [[12-roadmap/ownership-matrix]]
+- `CONTRIBUTING.md` (Repositories)

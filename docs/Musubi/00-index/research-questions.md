@@ -79,9 +79,9 @@ group by folder
 
 ### 12 — Roadmap (v2/v3)
 
-- [R] Multi-host conflict resolution strategy (both operators edit the same curated doc). Source: [[12-roadmap/phased-plan]].
-- [R] Multi-host discovery (how does one presence find another Musubi). Source: [[12-roadmap/phased-plan]].
-- [R] Multi-host trust model (prevent a malicious peer from reading unauthorized namespaces). Source: [[12-roadmap/phased-plan]].
+- [R] Multi-host conflict resolution strategy (both operators edit the same curated doc). Source: [[12-roadmap/index]] (Federation).
+- [R] Multi-host discovery (how does one presence find another Musubi). Source: [[12-roadmap/index]] (Federation).
+- [R] Multi-host trust model (prevent a malicious peer from reading unauthorized namespaces). Source: [[12-roadmap/index]] (Federation).
 
 ## Resolution path
 

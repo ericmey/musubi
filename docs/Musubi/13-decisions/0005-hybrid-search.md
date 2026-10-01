@@ -63,7 +63,7 @@ The stack is pipelined: ANN → RRF → rerank → return. Users choose "fast" (
 
 - Two embedding models + a reranker to deploy ([[08-deployment/gpu-inference-topology]]). VRAM budget includes all three.
 - Named-vector schema from day one; re-embedding path ([[11-migration/re-embedding]]) works uniformly for future model swaps.
-- Retrieval latency target: fast-mode p95 < 400ms, deep-mode p95 < 5s ([[12-roadmap/phased-plan#v1-target-metrics]]).
+- Retrieval latency target: fast-mode p95 < 400ms, deep-mode p95 < 5s (the v1 latency targets).
 - Eval suite must include recall@k AND rerank quality (MRR, nDCG).
 
 Trade-offs:

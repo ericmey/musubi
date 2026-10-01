@@ -12,3 +12,12 @@ covers how to use it.
 Musubi is one HTTP service (`/v1`) backed by Qdrant, local embedding models
 and a local LLM. Every agent integration is a separate package that talks
 to that API.
+
+## Planned pages
+
+Not written yet: an API reference generated from `openapi.yaml`, a
+configuration / environment-variable reference, an FAQ, a glossary, and link
+checking for this guide in CI (CI already checks the architecture docs'
+wikilinks). Until then, the
+[canonical API](../Musubi/07-interfaces/canonical-api.md) and the root
+`openapi.yaml` are the reference.
