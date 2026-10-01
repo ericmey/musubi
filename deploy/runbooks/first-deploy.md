@@ -226,11 +226,16 @@ internal CA is not ready, leave Kong route config staged but do not go live.
 ```bash
 MUSUBI_BASE_URL=https://<musubi-host> \
 MUSUBI_TOKEN=<operator-token> \
+MUSUBI_NAMESPACE=<tenant>/<smoke-presence>/episodic \
+MUSUBI_THOUGHT_NAMESPACE=<tenant>/<smoke-presence>/thought \
+MUSUBI_PRESENCE=<tenant>/<smoke-presence> \
 deploy/smoke/verify.sh
 ```
 
 **Expected output:** every smoke script emits `[PASS]`; the aggregate script
-exits `0`.
+exits `0`. Use a presence that the token can write and read. The capture and
+thought checks refuse to run without explicit namespaces, so they cannot write
+into another operator's default namespace.
 
 **Failure modes:** `[FAIL] component ...` means readiness is degraded. Capture,
 thoughts, or metrics failures identify the surface to inspect next.

@@ -238,6 +238,28 @@ def _run_script(script: str, base_url: str, *extra_args: str) -> subprocess.Comp
     )
 
 
+def test_write_smoke_refuses_missing_operator_namespace() -> None:
+    with _mock_musubi() as base_url:
+        for script, missing_var in (
+            ("check_capture.sh", "MUSUBI_NAMESPACE"),
+            ("check_thoughts.sh", "MUSUBI_THOUGHT_NAMESPACE"),
+        ):
+            result = subprocess.run(
+                ["bash", str(SMOKE / script)],
+                cwd=ROOT,
+                env={
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "MUSUBI_BASE_URL": base_url,
+                    "MUSUBI_TOKEN": "test-token",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert result.returncode != 0
+            assert missing_var in result.stderr
+
+
 def test_runbook_has_all_10_sections() -> None:
     text = _read(RUNBOOK)
     for index, heading in enumerate(RUNBOOK_SECTIONS, start=1):

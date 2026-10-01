@@ -38,6 +38,22 @@
           internal Docker alias matches the certificate without publishing live
           topology in this repository.
 
+    - name: Validate bounded SSH and Core ingress sources before firewall changes
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/validate_ingress.py"
+        stdin: >-
+          {{ {
+            'musubi_admin_ssh_cidr': musubi_admin_ssh_cidr | default(''),
+            'musubi_kong_ip': musubi_kong_ip | default(''),
+            'musubi_vlan_cidr': musubi_vlan_cidr | default('')
+          } | to_json }}
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+
     # ---- Prereqs for adding third-party apt sources ---------------------
     - name: Install prerequisites for adding third-party apt repos
       ansible.builtin.apt:
@@ -174,12 +190,13 @@
         policy: deny
         direction: incoming
 
-    - name: Allow SSH from admin network placeholder
+    - name: Allow SSH from the operator's admin network
       community.general.ufw:
         rule: allow
         port: "22"
         proto: tcp
-        comment: "replace with admin subnet in vault vars before first deploy"
+        from_ip: "{{ musubi_admin_ssh_cidr }}"
+        comment: "operator admin network"
 
     - name: Allow Musubi Core from Kong only
       community.general.ufw:
@@ -195,7 +212,7 @@
         rule: allow
         port: "{{ musubi_core_port }}"
         proto: tcp
-        from_ip: "{{ musubi_vlan_cidr | default('10.0.0.0/24') }}"
+        from_ip: "{{ musubi_vlan_cidr }}"
         comment: "VLAN-internal access — remove when Kong fronts Musubi (ADR 0024)"
       when: musubi_kong_ip | default('') | length == 0
 

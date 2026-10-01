@@ -3,9 +3,17 @@ set -euo pipefail
 
 MUSUBI_BASE_URL="${MUSUBI_BASE_URL:-http://127.0.0.1:8100}"
 MUSUBI_TOKEN="${MUSUBI_TOKEN:-}"
-MUSUBI_NAMESPACE="${MUSUBI_NAMESPACE:-eric/ops/episodic}"
-MUSUBI_THOUGHT_NAMESPACE="${MUSUBI_THOUGHT_NAMESPACE:-eric/ops/thought}"
-MUSUBI_PRESENCE="${MUSUBI_PRESENCE:-eric/ops-smoke}"
+
+require_capture_namespace() {
+  : "${MUSUBI_NAMESPACE:?Set MUSUBI_NAMESPACE to a smoke episodic namespace}"
+  export MUSUBI_NAMESPACE
+}
+
+require_thought_namespace() {
+  : "${MUSUBI_THOUGHT_NAMESPACE:?Set MUSUBI_THOUGHT_NAMESPACE to a smoke thought namespace}"
+  : "${MUSUBI_PRESENCE:?Set MUSUBI_PRESENCE to the smoke token presence}"
+  export MUSUBI_THOUGHT_NAMESPACE MUSUBI_PRESENCE
+}
 
 AUTH_ARGS=()
 if [[ -n "$MUSUBI_TOKEN" ]]; then

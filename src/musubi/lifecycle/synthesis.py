@@ -292,8 +292,8 @@ class SynthesisCursor:
         inputs without a separator because the public contract is
         "give me a namespace, get back the family"; this wrapper
         exists because cursor callers legitimately pass either form
-        (e.g. the scheduler passes "aoi" while legacy callers pass
-        "aoi/command-chair"). Centralising on the public helper for
+        (e.g. the scheduler passes "alex" while legacy callers pass
+        "alex/assistant"). Centralising on the public helper for
         the namespace case keeps the two implementations from drifting.
         """
         if "/" not in value:
@@ -512,7 +512,7 @@ async def synthesis_run(
     """Run the synthesis loop for one identity family.
 
     The ``namespace`` parameter accepts either a bare identity family
-    ("aoi") or a legacy namespace ("aoi/command-chair"); both reduce
+    ("alex") or a legacy namespace ("alex/assistant"); both reduce
     to the same family via the cursor helper. Synthesis scopes to
     every matured episodic with `identity_family=<family>`,
     regardless of which substrate captured it.

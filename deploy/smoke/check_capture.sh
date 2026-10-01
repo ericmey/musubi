@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
+require_capture_namespace
 
 content="musubi first-deploy smoke capture"
 capture_payload="$(
@@ -11,7 +12,7 @@ import json
 import os
 
 print(json.dumps({
-    "namespace": os.environ.get("MUSUBI_NAMESPACE", "eric/ops/episodic"),
+    "namespace": os.environ["MUSUBI_NAMESPACE"],
     "content": os.environ["CONTENT"],
     "tags": ["smoke", "first-deploy"],
     "importance": 5,
@@ -26,7 +27,7 @@ import json
 import os
 
 print(json.dumps({
-    "namespace": os.environ.get("MUSUBI_NAMESPACE", "eric/ops/episodic"),
+    "namespace": os.environ["MUSUBI_NAMESPACE"],
     "query_text": os.environ["CONTENT"],
     "mode": "fast",
     "limit": 1,
