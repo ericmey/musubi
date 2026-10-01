@@ -29,7 +29,7 @@ receivers:
       - url: "https://ntfy.sh/musubi-alerts"
   - name: email
     email_configs:
-      - to: eric@example.com
+      - to: admin@example.com
         from: alertmanager@musubi.example.local
         smarthost: smtp.example.com:587
         require_tls: true
