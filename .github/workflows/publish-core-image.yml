@@ -2,20 +2,19 @@ name: Publish Musubi Core image
 
 # Publishes ghcr.io/<repository owner>/musubi-core, replacing the one-shot
 # `docker save | ssh | docker load` transfer used for the first
-# deploy. See the original slice-ops-core-image-publish spec (archived) and
-# `deploy/runbooks/upgrade-image.md`.
+# deploy. The public Compose pin is updated by auto-digest-bump.yml.
 #
 # Triggers (rationale in the slice spec):
 #
 #   push tag `v*`   — authoritative release. Publishes `:v<version>`
 #                     + `@sha256:<digest>`. The digest becomes the
-#                     value operators paste into group_vars/all.yml.
+#                     value auto-digest-bump proposes for docker-compose.yml.
 #   push branch main — bleeding-edge. Publishes `:main` (floating) and
 #                     captures the digest as a build artefact.
 #   workflow_dispatch — manual one-off (operator chooses tags).
 #
-# The workflow NEVER writes to `group_vars/all.yml`. The digest bump
-# is a separate, human-reviewed PR per the slice spec — keeps the
+# The workflow NEVER writes to `docker-compose.yml`. The digest bump
+# is a separate, human-reviewed PR — keeping the
 # "publish" and "deploy" decisions distinct.
 
 on:
@@ -56,7 +55,7 @@ jobs:
       # fingerprinting — without it the step fails with "Resource not
       # accessible by integration" even when SARIF itself is valid.
       # `contents: write` lets softprops/action-gh-release append the
-      # digest + ansible-pin snippet to the release body (it calls the
+      # digest + Compose-pin snippet to the release body (it calls the
       # "Update a release" REST endpoint).
       contents: write
       packages: write
@@ -254,25 +253,27 @@ jobs:
 
       - name: Summarise digest
         # Surface the digest at the top of the workflow run page so an
-        # operator can copy it into `group_vars/all.yml` without hunting
+        # operator can check it against the proposed Compose pin without hunting
         # through step logs.
         run: |
-          echo "### Published ${IMAGE}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Tags:**" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Digest:**" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pin in \`deploy/ansible/group_vars/all.yml\` as:" >> "$GITHUB_STEP_SUMMARY"
-          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
-          echo "musubi_core_image: \"${IMAGE}@${{ steps.build.outputs.digest }}\"" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Published ${IMAGE}"
+            echo ""
+            echo "**Tags:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "**Digest:**"
+            echo '```'
+            echo "${{ steps.build.outputs.digest }}"
+            echo '```'
+            echo ""
+            echo "Proposed for docker-compose.yml and quickstart/docker-compose.yml:"
+            echo '```text'
+            echo "${IMAGE}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attach digest as release asset
         # Only on tag pushes — branch pushes don't create releases.
@@ -287,10 +288,10 @@ jobs:
 
             **Digest:** `${{ steps.build.outputs.digest }}`
 
-            Pin in `deploy/ansible/group_vars/all.yml`:
+            Proposed for `docker-compose.yml` and `quickstart/docker-compose.yml`:
 
-            ```yaml
-            musubi_core_image: "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+            ```text
+            ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
             ```
           append_body: true
           fail_on_unmatched_files: false

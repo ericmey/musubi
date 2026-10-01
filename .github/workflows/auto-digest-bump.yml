@@ -3,13 +3,13 @@ name: Auto digest bump
 # Tier-3 automation of the manual step that shipped v0.3.0: after a
 # signed image lands on GHCR, this workflow opens (or keeps updated)
 # a PR titled `chore(deploy): pin musubi-core to <tag> signed digest`
-# that edits `deploy/ansible/group_vars/all.yml::musubi_core_image` to
-# the new `@sha256:<digest>`.
+# that updates the public Compose Core image/version anchors and the CPU
+# quickstart Core pin together.
 #
 # The pin PR deliberately requires a human merge. Its generated body
-# carries the exact candidate-image preflight command, which must pass
-# on the credential-bearing controller before the digest may land on
-# `main`. Deployment remains a separate human decision after merge.
+# carries signature verification and a Compose canary checklist.
+# Private fleet credential preflight stays in the operator's deployment
+# process. Deployment remains a separate human decision after merge.
 #
 # ## Triggers
 #
@@ -146,82 +146,23 @@ jobs:
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "Resolved digest: ${DIGEST}"
 
-      - name: Patch group_vars
+      - name: Patch public Compose pins
         id: patch
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
           DIGEST: ${{ steps.resolve.outputs.digest }}
-          FILE: deploy/ansible/group_vars/all.yml
-          # The quickstart promises the same Core digest as group_vars (#836),
-          # so the pin bump moves both or fails.
+          FILE: docker-compose.yml
           QUICKSTART: quickstart/docker-compose.yml
           NEW_IMAGE: ghcr.io/${{ env.IMAGE_REPO }}@${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
-
-          # Patch both `musubi_core_image:` (digest pin) and
-          # `musubi_core_version:` (human-readable tag) so spans + dashboards
-          # carry the release tag alongside the immutable digest. Both lines
-          # use double-quoted strings. Each substitution is required — a
-          # mismatch means the file shape drifted and the patch should fail
-          # loudly rather than silently no-op one of the two fields.
-          #
-          # FILE/NEW_IMAGE/TAG arrive via the step-level `env:` block above so
-          # the Python subprocess sees them in `os.environ` (shell-only
-          # assignments would not be exported into the heredoc's process).
-          python3 - <<'PY'
-          import os, pathlib, re
-
-          p = pathlib.Path(os.environ["FILE"])
-          tag = os.environ["TAG"]
-          new_image = os.environ["NEW_IMAGE"]
-          text = p.read_text()
-
-          updated, n_image = re.subn(
-              r'(musubi_core_image:\s*)(["\x27])[^"\x27]+\2',
-              rf'\g<1>"{new_image}"',
-              text,
-              count=1,
-          )
-          if n_image == 0:
-              raise SystemExit("musubi_core_image line not found in " + str(p))
-
-          updated, n_version = re.subn(
-              r'(musubi_core_version:\s*)(["\x27])[^"\x27]+\2',
-              rf'\g<1>"{tag}"',
-              updated,
-              count=1,
-          )
-          if n_version == 0:
-              raise SystemExit("musubi_core_version line not found in " + str(p))
-
-          p.write_text(updated)
-
-          q = pathlib.Path(os.environ["QUICKSTART"])
-          qtext = q.read_text()
-          qtext, n_qimage = re.subn(
-              r'(?m)^(\s*image:\s*)ghcr\.io/[a-z0-9-]+/musubi-core@sha256:[0-9a-f]{64}[ \t]*$',
-              rf'\g<1>{new_image}',
-              qtext,
-          )
-          if n_qimage != 1:
-              raise SystemExit(f"quickstart core image pin: expected 1 in {q}, found {n_qimage}")
-          qtext, n_qtag = re.subn(
-              r'(?m)^(\s*#\s*)v[^\s,]+(, cosign-signed by publish-core-image\.yml)',
-              rf'\g<1>{tag}\g<2>',
-              qtext,
-          )
-          if n_qtag != 1:
-              raise SystemExit(f"quickstart version comment: expected 1 in {q}, found {n_qtag}")
-          q.write_text(qtext)
-          PY
-
+          python3 .github/scripts/bump_compose_pin.py
           if git diff --quiet "$FILE" "$QUICKSTART"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Already pinned to ${NEW_IMAGE} @ ${TAG}; nothing to do."
+            echo "Already pinned to $NEW_IMAGE @ $TAG; nothing to do."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Patched ${FILE} (image=${NEW_IMAGE}, version=${TAG})."
+            echo "Patched $FILE and $QUICKSTART to $NEW_IMAGE @ $TAG."
           fi
 
       - name: Open or update PR
@@ -242,19 +183,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git switch -c "${BRANCH}"
-          git add deploy/ansible/group_vars/all.yml quickstart/docker-compose.yml
+          git add docker-compose.yml quickstart/docker-compose.yml
           git commit -m "${TITLE}
 
           Automated by .github/workflows/auto-digest-bump.yml in response
-          to the ${TAG} release. The image has been cosign-signed,
-          SBOM-attested, and Trivy-scanned by publish-core-image.yml —
-          verify its signature before merging. The PR body carries the
-          required live-credential preflight command:
-
-              cosign verify \\
-                --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$' \\
-                --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
-                ghcr.io/${IMAGE_REPO}@${DIGEST}
+          to the ${TAG} release. The signed, scanned image is pinned in
+          both public Compose entry points; deployment remains manual.
 
           No tracking Issue: auto-generated release digest pin."
 
@@ -269,60 +203,20 @@ jobs:
           BODY=$(cat <<EOF
           ${TITLE}
 
-          Automated by \`.github/workflows/auto-digest-bump.yml\` in response to the [${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG}) release.
+          Automated by .github/workflows/auto-digest-bump.yml after the [${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG}) image passed its publish gate.
 
-          ## Supply-chain attestations
-          - cosign keyless signature via GitHub OIDC
-          - CycloneDX SBOM attached as a cosign attestation
-          - Trivy vulnerability scan — 0 CRITICAL (gate in \`publish-core-image.yml\`)
+          ## What changed
+          - The root public Compose Core image/version anchor and CPU quickstart Core pin move together to ghcr.io/${IMAGE_REPO}@${DIGEST}.
+          - The image was cosign-signed, SBOM-attested and scanned with 0 CRITICAL findings by publish-core-image.yml.
 
-          ## Before merge — required candidate credential gate
-
-          Run this on the credential-bearing Ansible controller. Do not merge
-          until both signature verification and the candidate-image preflight pass.
-
-          \`\`\`bash
-          cd ~/musubi
-          git pull --ff-only origin main
-          export CANDIDATE_IMAGE=ghcr.io/${IMAGE_REPO}@${DIGEST}
-          export MUSUBI_CREDENTIAL_DIR=~/.musubi
-          export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
-          export MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json
-
-          cosign verify \\
-            --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$' \\
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
-            \${CANDIDATE_IMAGE}
-          docker pull \${CANDIDATE_IMAGE}
-          docker run --rm \\
-            --user "\$(id -u):\$(id -g)" \\
-            --entrypoint python \\
-            --mount "type=bind,src=\${MUSUBI_PREFLIGHT_AUTHORITY_ENV},dst=/preflight/authority.env,readonly" \\
-            --mount "type=bind,src=\${MUSUBI_CREDENTIAL_DIR},dst=/credentials,readonly" \\
-            --mount "type=bind,src=\${MUSUBI_PREFLIGHT_MANIFEST},dst=/preflight/manifest.json,readonly" \\
-            \${CANDIDATE_IMAGE} \\
-            -m musubi.auth.credential_preflight \\
-            --manifest /preflight/manifest.json \\
-            --credential-dir /credentials \\
-            --authority-env /preflight/authority.env
-          \`\`\`
+          ## Before merge
+          - Verify the candidate signature against the tag workflow identity:
+            cosign verify --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-core-image.yml@refs/tags/${TAG}" --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/${IMAGE_REPO}@${DIGEST}
+          - Review the two changed Compose files and run docker compose --env-file .env config --quiet with your private settings. Run any deployment-specific credential preflight in your own environment.
+          - Merge only after required CI and a separate approval. Merging does not deploy.
 
           ## After merge
-
-          \`\`\`bash
-          # From the ansible control host:
-          cd ~/musubi
-          git pull origin main
-          # ANSIBLE_VAULT_PASSWORD_FILE must already be exported (deploy/ansible/README.md).
-          MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \\
-          MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json \\
-            ansible-playbook \\
-              -i deploy/ansible/inventory.yml \\
-              -e @~/.musubi-secrets/inventory-vars.yml \\
-              -e @~/.musubi-secrets/vault.yml \\
-              -e '{"changed_services":["core","lifecycle-worker"]}' \\
-              deploy/ansible/update.yml
-          \`\`\`
+          Follow docs/guide/operate.md: pull the reviewed pin, verify its signature, recreate Core and lifecycle-worker with docker compose up -d --wait, run an authorized capture/retrieve canary, and roll back to the prior pin if it fails.
 
           No tracking Issue: auto-generated release digest pin.
           EOF
