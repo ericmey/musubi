@@ -210,6 +210,106 @@ async def test_fast_path_runs_planes_concurrently(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+async def test_fast_path_encodes_once_before_per_plane_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cold encoding must not consume each collection's query budget."""
+
+    class SlowEncoder(_CountingEmbedder):
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            await asyncio.sleep(0.08)
+            return await super().embed_dense(texts)
+
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        if kwargs.get("encoding") is None:
+            await args[1].embed_dense([kwargs["query"]])
+            await args[1].embed_sparse([kwargs["query"]])
+        await asyncio.sleep(0.05)
+        return Ok(value=HybridSearchResult(hits=[_hybrid_hit(kwargs["collection"], score=0.9)]))
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    embedder = SlowEncoder()
+    result = await run_fast_retrieve(
+        [_client(), _client()],
+        embedder,
+        namespace=NAMESPACE,
+        query="gpu",
+        collections=[COLLECTION, "musubi_curated"],
+        now=NOW,
+        plane_timeout_s=0.1,
+    )
+
+    assert isinstance(result, Ok)
+    assert len(result.value.results) == 2
+    assert embedder.dense_calls == 1
+    assert embedder.sparse_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fast_path_shares_encoding_with_real_hybrid_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import musubi.retrieve.hybrid as hybrid
+
+    async def fake_query_points(*args: Any, **kwargs: Any) -> object:
+        return object()
+
+    async def fake_resolve_hits(*args: Any, **kwargs: Any) -> list[HybridHit]:
+        return []
+
+    monkeypatch.setattr(hybrid, "_query_points", fake_query_points)
+    monkeypatch.setattr(hybrid, "_resolve_hits_async", fake_resolve_hits)
+    embedder = _CountingEmbedder()
+    result = await run_fast_retrieve(
+        [_client(), _client()],
+        embedder,
+        namespace=NAMESPACE,
+        query="gpu",
+        collections=[COLLECTION, "musubi_curated"],
+        now=NOW,
+    )
+
+    assert isinstance(result, Ok)
+    assert embedder.dense_calls == 1
+    assert embedder.sparse_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fast_path_bounds_cold_encoding_before_fanout() -> None:
+    class SlowEncoder(_CountingEmbedder):
+        sparse_cancelled = False
+
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            await asyncio.sleep(0.05)
+            return await super().embed_dense(texts)
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            try:
+                await asyncio.sleep(0.05)
+                return await super().embed_sparse(texts)
+            except asyncio.CancelledError:
+                self.sparse_cancelled = True
+                raise
+
+    embedder = SlowEncoder()
+    result = await run_fast_retrieve(
+        _client(),
+        embedder,
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+        plane_timeout_s=0.005,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "embeddings_unavailable"
+    assert embedder.sparse_cancelled is True
+
+
+@pytest.mark.asyncio
 async def test_fast_path_timeout_on_one_plane_returns_partial_with_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
