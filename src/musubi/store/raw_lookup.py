@@ -95,7 +95,8 @@ def raw_payload(
     both conflated "absent" with "present but corrupt", so ``EpisodicPlane.delete()`` raised
     ``LookupError`` on an empty-payload row and refused to remove it. That is the same class
     of bug this whole module exists to kill — a corruption shape that makes a memory
-    *undeletable because it is broken*. Callers must test ``is None``, never truthiness.
+    *undeletable because it is broken*. Callers must test ``is None``, never truthiness
+    (PR #398).
 
     Subject to the same payload-filter reachability limit as :func:`point_exists`.
 

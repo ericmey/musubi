@@ -192,7 +192,7 @@ class _CuratedContentPoint(_EpisodicContentPoint):
 # The partial codes sit above the broken cap on purpose. `broken-partial` must NOT collapse
 # into an ordinary fully-scanned broken count: "I found 2 bad rows and saw everything" and
 # "I found 2 bad rows but skipped a collection" are different facts, and a CI gate reading
-# only the exit code must not confuse them.
+# only the exit code must not confuse them (PR #398).
 EXIT_CLEAN = 0
 _MAX_BROKEN_EXIT = 250
 EXIT_INCOMPLETE = 251
@@ -680,7 +680,8 @@ def validate_rows(
     # `--plane episodic` used to reduce `planes` to one entry, and coverage was then computed
     # over that list — so scanning 1 of 7 canonical collections yielded coverage=full,
     # complete=true, verdict=clean, exit 0: **the exact machine signal of a full clean
-    # production sweep.** And `test_single_plane_filter` asserted exit 0, locking it in.
+    # production sweep.** And `test_single_plane_filter` asserted exit 0, locking it in
+    # (PR #398).
     #
     # That is the same coverage-denominator defect as accepted absence, wearing a scope flag.
     # "Full relative to what I selected" is not "full relative to production."

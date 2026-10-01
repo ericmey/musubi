@@ -22,7 +22,7 @@ Two distinct gaps have now been found, and the second one is why this module exi
    ``str | None`` while the persisted ``MemoryObject.content`` is ``Field(min_length=1)``.
    So ``{"content": ""}`` passed the allowlist, passed the request model, persisted — and
    then failed the read with ``string_too_short``. **The fix for (1) had introduced a
-   fresh way to do exactly what (1) did.**
+   fresh way to do exactly what (1) did.** (PR #398)
 
 ## Why this is a guard and not a set of matching constraints
 
@@ -97,7 +97,7 @@ def assert_readable_after_patch(
     remove an unknown key; nothing in the write path can. Repairing an existing corrupt
     row needs a separate raw operator path (or a hard delete). The honest statement is:
     a clean row can never be broken through here, and a broken row cannot be healed
-    through here either. (The old doc promised more than the code could deliver.)
+    through here either. (PR #398: the old doc promised more than the code could deliver.)
 
     Raises ``APIError(400)`` if the merged row would not satisfy ``model``. Writes nothing
     either way; the caller only reaches ``set_payload`` if this returns.

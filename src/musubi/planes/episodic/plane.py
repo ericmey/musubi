@@ -851,7 +851,7 @@ class EpisodicPlane:
         # model-validates — so a row carrying an unmodeled payload key raised here,
         # and the delete never ran. That made a corrupted row undeletable through the
         # SDK exactly as it was through the API, and the router-level fix does not
-        # protect direct callers.
+        # protect direct callers (PR #398).
         #
         # We still need the prior state for the lifecycle event's `from_state`, so we
         # cannot skip the read — but we must not let the MODEL decide whether a delete
@@ -860,7 +860,7 @@ class EpisodicPlane:
         # Address the point DIRECTLY, not through a payload filter. `raw_payload()` finds a
         # row by its `namespace`/`object_id` PAYLOAD fields — so a row that has lost or
         # malformed those very keys is invisible to it, and would once again be
-        # undeletable-because-broken. The point ID is derived deterministically from the
+        # undeletable-because-broken (PR #398). The point ID is derived deterministically from the
         # object_id, so it addresses the row no matter what the payload says.
         #
         # DATA-001 P2: the identity row lives in ONE of two deterministic id spaces — the legacy
