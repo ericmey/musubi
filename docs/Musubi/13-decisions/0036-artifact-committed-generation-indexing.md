@@ -12,7 +12,6 @@ reviewed: false
 
 **Status:** accepted
 **Date:** 2026-07-15
-**Deciders:** Admin, Maintainers (proposal validated 2026-07-14; see Issue #451, spikes #452/#453/#454)
 
 ## Context
 

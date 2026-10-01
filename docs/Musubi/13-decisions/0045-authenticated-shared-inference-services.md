@@ -5,7 +5,6 @@ type: adr
 status: accepted
 date: 2026-09-19
 updated: 2026-09-20
-deciders: [Admin]
 tags: [architecture, inference, security, deployment, type/adr, status/accepted]
 supersedes: "[[13-decisions/0012-local-inference]] (TEI service ownership only)"
 superseded-by: ""
@@ -15,7 +14,6 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-09-19
-- **Decider:** Admin
 
 ## Context
 

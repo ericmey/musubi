@@ -13,7 +13,6 @@ superseded-by: "[[13-decisions/0015-monorepo-supersedes-multi-repo]] (repo-layou
 
 **Status:** partially superseded — interface discipline stands; repo layout superseded by [[13-decisions/0015-monorepo-supersedes-multi-repo]] on 2026-04-17.
 **Date:** 2026-03-19
-**Deciders:** Admin
 
 > **Note (2026-04-17):** The **interface decision** (canonical HTTP/gRPC API, adapters talk only to that API via the SDK, adapters never touch storage directly) remains in force. The **repository-layout prescription** below (8 separate repos) is **superseded** by [[13-decisions/0015-monorepo-supersedes-multi-repo]] — all components now live in a single monorepo with import-lint enforcing the same discipline. Read this ADR for the *why* of the interface; read 0015 for the current repo layout.
 

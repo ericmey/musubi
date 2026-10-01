@@ -5,7 +5,6 @@ type: adr
 status: accepted
 date: 2026-08-14
 updated: 2026-08-14
-deciders: [Admin]
 tags: [architecture, lifecycle, llm, deployment, type/adr, status/accepted]
 supersedes: "[[13-decisions/0019-qwen-on-musubi-gpu-phase-1]]; [[13-decisions/0012-local-inference]] (lifecycle LLM placement only)"
 superseded-by: ""
@@ -15,7 +14,6 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
-- **Decider:** Admin (model-lane selection)
 
 ## Context
 

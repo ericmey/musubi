@@ -5,7 +5,6 @@ tags: [adr, api, area:retrieval, wire-contract, architecture, section/decisions,
 type: adr
 status: partially-superseded
 date: 2026-07-13
-deciders: [Admin]
 updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
@@ -16,7 +15,6 @@ superseded-by: "[[13-decisions/data001-phase2-immutable-vectors]] (corrupt-sourc
 
 **Status:** accepted, partially superseded (proposed 2026-07-13; status updated 2026-10-01 from implementation evidence)
 **Date:** 2026-07-13
-**Deciders:** Admin
 
 > **Note (2026-10-01):** implemented in `src/musubi/api/responses.py` (`RankedRetrieveResponse` / `RecentRetrieveResponse`), tested by `tests/api/test_retrieve_ret003_wire.py`. The corrupt-source → 500 rule is superseded for ranked reads by [[13-decisions/data001-phase2-immutable-vectors]]; see §DATA-001 P2 supersession below.
 

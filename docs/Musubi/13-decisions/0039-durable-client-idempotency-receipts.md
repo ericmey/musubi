@@ -6,7 +6,6 @@ type: adr
 status: accepted
 date: 2026-07-17
 updated: 2026-07-17
-deciders: [Admin, Maintainers]
 ---
 
 # 0039: Durable Client Idempotency Receipts

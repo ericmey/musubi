@@ -27,7 +27,6 @@ tags: [adr, scoring, weights]
 
 **Status:** accepted
 **Date:** YYYY-MM-DD
-**Deciders:** Admin (+ anyone else)
 
 ## Context
 

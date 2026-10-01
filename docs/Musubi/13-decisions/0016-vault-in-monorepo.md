@@ -4,7 +4,6 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-18
-deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, monorepo, vault, agents]
 updated: 2026-04-18
 up: "[[13-decisions/index]]"
@@ -17,7 +16,6 @@ superseded-by: ""
 
 **Status:** accepted
 **Date:** 2026-04-18
-**Deciders:** Admin
 
 ## Context
 

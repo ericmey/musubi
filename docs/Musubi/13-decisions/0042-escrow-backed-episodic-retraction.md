@@ -5,7 +5,6 @@ type: adr
 status: accepted
 date: 2026-08-03
 updated: 2026-08-03
-deciders: [Admin]
 tags: [architecture, api, artifacts, idempotency, data-001, type/adr, status/accepted]
 supersedes: ""
 superseded-by: ""
@@ -15,7 +14,6 @@ superseded-by: ""
 
 **Status:** accepted
 **Date:** 2026-08-03
-**Decider:** Admin
 
 ## Context
 

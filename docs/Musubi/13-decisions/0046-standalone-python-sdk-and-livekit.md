@@ -5,7 +5,6 @@ type: adr
 status: accepted
 date: 2026-09-30
 updated: 2026-09-30
-deciders: [Admin]
 tags: [architecture, sdk, adapters, livekit, type/adr, status/accepted]
 supersedes: "ADR 0015 and ADR 0022 on Python SDK and LiveKit source location and distribution"
 superseded-by: ""
@@ -15,7 +14,6 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
-- **Decider:** Admin
 
 ## Context
 

@@ -4,7 +4,6 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-19
-deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, monorepo, ecosystem, adapters, extensions, packaging]
 updated: 2026-04-19
 up: "[[13-decisions/index]]"
@@ -17,7 +16,6 @@ superseded-by: "[[13-decisions/0046-standalone-python-sdk-and-livekit]] (Python 
 
 **Status:** accepted
 **Date:** 2026-04-19
-**Deciders:** Admin
 
 **Partial supersession (2026-09-30):** [[13-decisions/0046-standalone-python-sdk-and-livekit]]
 places the Python SDK and LiveKit adapter in sibling repositories. The naming
