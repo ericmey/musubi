@@ -20,11 +20,10 @@ scripts/perf/
 ## Prerequisites
 
 1. **Operator token scoped to `perf-test/harness/*`** (or whichever
-   two-segment prefix you override to) — *never* use `eric/*`. The
-   scope list must include `operator`, per-plane `<prefix>/<plane>:rw`,
-   and `thoughts:send`. See [.agent-context.local.md](../../.agent-context.local.md)
-   for how to mint a scoped token against the running stack's
-   `JWT_SIGNING_KEY`.
+   dedicated two-segment test prefix you override to). The scope list
+   must include `operator`, per-plane `<prefix>/<plane>:rw`, and
+   `thoughts:send`. Mint it with the deployment's token authority and
+   keep its access limited to the test prefix.
 2. **k6 installed** on whatever host runs the scenarios
    (`brew install k6` on macOS, apt package on Ubuntu).
 3. **jq** (telemetry summarizer uses it).
@@ -61,10 +60,10 @@ Produces `~/perf-runs/rebaseline-<date>/` with k6 summary + telemetry rollup.
 ### Gate 2 — load
 
 ```bash
-# Default: 10 VUs (3× realistic concurrency — probes the GPU wall)
+# Default: 10 VUs (probes the GPU wall)
 make perf-load LABEL=load-$(date +%Y%m%d)
 
-# Realistic-concurrency confirmation (matches 2 browser + 1 voice agents)
+# Lower-concurrency comparison
 LOAD_VUS=3 make perf-load LABEL=load-3vu-$(date +%Y%m%d)
 ```
 
@@ -124,11 +123,11 @@ Every Makefile target writes to `~/perf-runs/<LABEL>/`:
 
 ## Safety
 
-- **Never point scenarios at `eric/*` namespaces.** The seed script
-  + k6 scenarios all default to `perf-test/*` and error if
-  `MUSUBI_V2_TOKEN` is unset. If the token grants access to
-  `eric/*` you're one config-flag away from corrupting live data.
-  Mint the token with the narrow scope.
+- **Use a dedicated test namespace.** The seed script and k6 scenarios
+  default to `perf-test/harness/*` and error if `MUSUBI_V2_TOKEN` is
+  unset. A token that grants access to production namespaces could
+  write load-test rows there if the prefix is changed. Mint a narrowly
+  scoped token for the test prefix.
 - **Have a rollback point.** Take a labeled snapshot before each
   gate per [manual-recovery.md](../../deploy/runbooks/manual-recovery.md).
 - **Watch GPU VRAM.** The RTX 3080 has 10 GiB shared between

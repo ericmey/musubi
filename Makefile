@@ -104,8 +104,8 @@ test-integration:
 # --------------------------------------------------------------------------
 # Perf harness — scripts/perf/. Every perf target expects these env vars:
 #
-#   MUSUBI_V2_BASE_URL=https://musubi.mey.house/v1
-#   MUSUBI_V2_TOKEN=mbi_perf_...       # scoped to perf-test/* — NEVER eric/*
+#   MUSUBI_V2_BASE_URL=https://musubi.example.com/v1
+#   MUSUBI_V2_TOKEN=your-perf-token   # scoped to the dedicated perf-test tenant
 #
 # Outputs land under ~/perf-runs/$(LABEL)/. See scripts/perf/README.md for
 # the full harness + safety notes.

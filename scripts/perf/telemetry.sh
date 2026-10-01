@@ -36,7 +36,7 @@ PID_FILE="/tmp/musubi-perf-telemetry.pid"
 # local-only sampling (useful on a single-box dev setup).
 #
 # Usage:
-#   REMOTE_HOST=eric@musubi.mey.house scripts/perf/telemetry.sh start <label>
+#   REMOTE_HOST=<ssh-user>@<musubi-host> scripts/perf/telemetry.sh start <label>
 #
 # SSH is expected to be key-based and non-interactive. We fail fast
 # on connection errors during `start` so you notice at setup-time

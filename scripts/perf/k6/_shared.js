@@ -20,7 +20,7 @@ const NS_PREFIX = __ENV.MUSUBI_V2_NAMESPACE_PREFIX || 'perf-test/harness';
 if (!BASE_URL || !TOKEN) {
   throw new Error(
     'MUSUBI_V2_BASE_URL and MUSUBI_V2_TOKEN must be set. The token ' +
-    'must scope to ' + NS_PREFIX + '/* — never to eric/*.'
+    'must scope to ' + NS_PREFIX + '/* — never to a production tenant.'
   );
 }
 
@@ -50,7 +50,7 @@ export const QUERIES = [
   'dentist appointment Tuesday',
   'how does musubi promote concepts',
   'LiveKit voice capture pipeline',
-  'what did Aoi say about the deploy',
+  'what did Sam say about the deploy',
   'thought stream SSE rules',
 ];
 
@@ -74,7 +74,7 @@ export function capture() {
     `${BASE_URL}/memories`,
     JSON.stringify({
       namespace: `${NS_PREFIX}/episodic`,
-      content: `perf-capture ${marker}: Eric asked about the deploy status.`,
+      content: `perf-capture ${marker}: Admin asked about the deploy status.`,
       tags: ['perf', 'synthetic'],
       importance: 5,
     }),
