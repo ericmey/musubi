@@ -133,8 +133,9 @@ quickstart's, after each release.
 ### Secrets and settings
 
 [`.env.example`](../../.env.example) lists the settings a Compose deployment
-needs; Core reads a few more advanced ones, documented in its settings
-reference. Two secrets are mandatory:
+needs. Core reads a few more advanced ones; they are defined, with their
+defaults, in [`src/musubi/settings.py`](../../src/musubi/settings.py). Two
+secrets are mandatory:
 
 - `JWT_SIGNING_KEY`: signs and verifies agent tokens (see
   [Connect](connect.md)). Use a long random value; a key that looks like a PEM
