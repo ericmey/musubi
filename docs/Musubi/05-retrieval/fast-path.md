@@ -53,6 +53,10 @@ For each plane in the query (default: `[curated, concept, episodic]`):
 - `limit = K_pre` where `K_pre = max(20, query.limit * 2)` so we have headroom for merge/dedup.
 - Timeout: 250ms per-collection.
 
+The query is encoded once before the plane fan-out. The 250ms per-collection
+timer covers that collection's search and hydration, while the 400ms whole-call
+timer still covers encoding and all plane work together.
+
 All plane queries run **concurrently** via `asyncio.gather(return_exceptions=True)`. A failed or slow plane doesn't block others.
 
 Budget: 70ms (concurrent; dominated by slowest plane). Failure: if all planes return empty/error, 200 with empty results + a soft warning in the response.
@@ -172,3 +176,8 @@ Integration:
 
 18. `integration: LiveKit Fast-Talker scenario: voice-like queries p95 ≤ 400ms`
 19. `integration: degradation scenario — kill sparse TEI mid-request, response still returns with warnings`
+
+Cold-query budget:
+
+20. `test_fast_path_encodes_once_before_per_plane_timeout`
+21. `test_fast_path_shares_encoding_with_real_hybrid_search`
