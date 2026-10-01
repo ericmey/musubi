@@ -4,7 +4,7 @@ section: 00-index
 type: index
 status: complete
 tags: [section/index, status/complete, type/index]
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: false
 ---
@@ -46,7 +46,7 @@ group by folder
 - [R] Audio artifacts: do we ship a speech-to-text pipeline, or keep it adapter-owned? Source: [[04-data-model/source-artifact]].
 - [R] Multi-part artifacts (PDF + spreadsheet) — introduce artifact collections, or keep `derived_from` links? Source: [[04-data-model/source-artifact]].
 - [R] Should humans create `SynthesizedConcept` objects directly? Current answer: no. Lock decision into ADR. Source: [[04-data-model/synthesized-concept]].
-- [R] Vault frontmatter identity-field behavior when a human edits `id` or `promoted-from`. Source: [[04-data-model/vault-schema]].
+- [R] Vault frontmatter identity-field behavior when a human edits `object_id` or `promoted_from`. Source: [[04-data-model/vault-schema]].
 
 ### 05 — Retrieval
 
@@ -54,7 +54,7 @@ group by folder
 - [R] RAGAS integration — which metrics (precision, recall, faithfulness) graduate from "computed" to "gating"? Source: [[05-retrieval/evals]].
 - [R] A/B test harness for shadow evals — standalone process or part of the Lifecycle Engine? Source: [[05-retrieval/evals]].
 - [R] Clustering algorithm for concept synthesis — HDBSCAN vs agglomerative vs ad-hoc similarity threshold? Source: [[06-ingestion/concept-synthesis]].
-- [R] Fact-extraction prompt template — Qwen2.5-7B vs a smaller model? Evaluate on a gold set. Source: [[06-ingestion/concept-synthesis]].
+- [R] Fact-extraction prompt template — is the default `LLM_MODEL` (`qwen3:4b` in `.env.example`) enough, or does it need a larger model? Evaluate on a gold set. Source: [[06-ingestion/concept-synthesis]].
 
 ### 06 — Ingestion
 
@@ -75,11 +75,11 @@ group by folder
 
 ### 11 — Migration
 
-- [R] Pydantic migration playbook — per-collection or big-bang? Source: `phase-1-schema`.
+- [R] Pydantic migration playbook — per-collection or big-bang?
 
 ### 12 — Roadmap (v2/v3)
 
-- [R] Multi-host conflict resolution strategy (both operators edit the same curated doc). Source: [[12-roadmap/index]] (Federation).
+- [R] Multi-host conflict resolution strategy (a second operator or instance edits the same curated doc). Source: [[12-roadmap/index]] (Federation).
 - [R] Multi-host discovery (how does one presence find another Musubi). Source: [[12-roadmap/index]] (Federation).
 - [R] Multi-host trust model (prevent a malicious peer from reading unauthorized namespaces). Source: [[12-roadmap/index]] (Federation).
 

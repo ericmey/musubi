@@ -1,9 +1,9 @@
 ---
-title: "Musubi — Coding Agent Entry Point"
+title: "Musubi docs: agent entry point"
 type: vault-readme
 status: living-document
 tags: [type/vault-readme, status/living-document, agents]
-updated: 2026-09-30
+updated: 2026-10-01
 reviewed: true
 ---
 

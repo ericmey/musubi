@@ -4,26 +4,25 @@ status: living-document
 type: vault-readme
 vault-root: true
 maintainer: eric@sourceblender.com
-last-reviewed: 2026-04-17
-updated: 2026-04-17
+last-reviewed: 2026-10-01
+updated: 2026-10-01
 tags: [type/vault-readme, status/living-document]
 reviewed: false
 ---
 # Musubi Architecture Vault
 
-This is the architectural specification for **Musubi (結び)** — the shared memory and knowledge plane for a small-team AI agent fleet. It is designed to be opened as an Obsidian vault.
+This is the architectural specification for **Musubi (結び)** — the shared memory and knowledge plane for a small team of AI agents. It is designed to be opened as an Obsidian vault.
 
-Open `musubi/docs/Musubi/` as a vault in Obsidian. Start at [[00-index/index|Root Index]].
+Open `docs/Musubi/` as a vault in Obsidian. Start at [[00-index/index|Root Index]].
 
 ## What this vault is
 
-A hybrid **architecture + test-driven design specification**, grounded in April 2026 capabilities, deep enough to hand to a fleet of coding agents (or human engineers) with clear guardrails so they can ship independent slices in parallel without stepping on each other.
+A hybrid **architecture + test-driven design specification**, deep enough to hand to coding agents (or human engineers) with clear guardrails so they can ship independent changes in parallel without stepping on each other.
 
 Every document in this vault is either a **specification** (the target system), a **test contract** (what success looks like), a **decision record** (why we chose it), or an **operational playbook** (how to run it). See [[13-decisions/index|Decisions]] for the trail of reasoning, and [[00-index/agent-guardrails|Agent Guardrails]] for the rules a coding agent must follow when working in this repo.
 
 ## What this vault is *not*
 
-- Not a reflection of the current Musubi POC. See Current State for an honest gap analysis.
 - Not a product roadmap. See [[12-roadmap/index|Roadmap]] for sequencing.
 - Not a marketing document. Nothing here is aspirational — every claim is either implementable or flagged as a research question.
 
@@ -32,7 +31,7 @@ Every document in this vault is either a **specification** (the target system), 
 | If you are… | Start here |
 |---|---|
 | Opening the vault for the first time | [[00-index/reading-tour]] |
-| A coding agent picking up work | [[00-index/agent-guardrails]] → your assigned issue |
+| A coding agent picking up work | [[CLAUDE]] → [[00-index/agent-guardrails]] → your assigned issue |
 | A human reviewer | [[00-index/executive-summary]] |
 | Doing deployment | [[08-deployment/index]] |
 | Implementing a retrieval path | [[05-retrieval/scoring-model]] |
@@ -45,20 +44,20 @@ Every document in this vault is either a **specification** (the target system), 
 ```
 00-index/           navigation, glossary, conventions
 01-overview/        mission, personas, three planes
-02-current-state/   POC inventory + gap analysis
 03-system-design/   components, topology, failure modes
 04-data-model/      object schemas + lifecycle
 05-retrieval/       scoring, hybrid, fast/deep
 06-ingestion/       capture, maturation, synthesis, promotion, vault-sync
 07-interfaces/      canonical API, SDK, adapters
-08-deployment/      Ansible, Docker Compose, GPU topology
+08-deployment/      Docker Compose install, host requirements, GPU topology
 09-operations/      runbooks, alerts, capacity, backup-restore
 10-security/        auth, redaction, audit, data-handling
-11-migration/       POC → v1 phases
-12-roadmap/         v1/v2/v3 direction
+11-migration/       schema and re-embedding migrations
+12-roadmap/         v2/v3 direction
 13-decisions/       ADRs
 _templates/         Templater templates for each note type
-_attachments/       images / binaries (excluded from the graph)
+_tools/             check.py, the docs health check
+proto/              protobuf reference mirror (no server ships)
 ```
 
 See [[00-index/conventions]] for the full schema.
@@ -83,9 +82,12 @@ orphan nodes in the graph to find unlinked notes.
 - **Tasks** — custom statuses include `[R]` (Research) and `[/]` (In Progress). Query blocks sit inside index pages.
 - **Dataview** — live tables/lists over frontmatter. Powers [[00-index/research-questions]] and the per-section indexes. DataviewJS is enabled.
 - **Breadcrumbs** — turns `up:` / `next:` / `prev:` / `depends-on:` / `blocks:` / `supersedes:` / `superseded-by:` frontmatter into an explicit graph. Open the matrix or trail view from the command palette.
-- **Local REST API** — headless access from Musubi's own vault-sync pipeline.
+- **Local REST API** — enabled for editor tooling. Musubi itself does not use it; vault sync reads the filesystem.
 - **Style Settings** — surface for tuning the `musubi-status-colors` CSS snippet.
-- **Git** — auto-commit / push integration; open *Settings → Git* to enable.
+- **Kanban** — enabled; the repo ships no boards.
+- **MCP Tools** and **Smart Connections** — listed as enabled in `.obsidian/community-plugins.json`; install them from the community store if you want them.
+
+The `obsidian-git` plugin folder is present but the plugin is not enabled.
 
 ### Built-in, enabled and configured
 
@@ -111,6 +113,20 @@ Key vault config (verify in *Settings → Files & links*):
 - **Strict line breaks:** OFF (respect authored wrap).
 - **Readable line length:** ON.
 - **Show frontmatter:** ON.
+
+These values are committed in `.obsidian/app.json`.
+
+### If plugin settings drift
+
+Each plugin re-serialises its `.obsidian/plugins/<plugin>/data.json` on load, so an edit made while Obsidian is running can be silently overwritten. Signs of drift: Breadcrumbs shows fewer than its ten edge fields (`up`, `down`, `same`, `next`, `prev`, `depends-on`, `blocks`, `supersedes`, `superseded-by`, `implements`), Tasks is missing the `R` / `!` / `?` custom statuses, or the graph colour groups are gone.
+
+To recover:
+
+1. Quit Obsidian completely.
+2. Restore the committed config: `git restore docs/Musubi/.obsidian/plugins/<name>/data.json`.
+3. Reopen the vault and check the settings above.
+
+Treat a plugin's `data.json` as a cache of its in-memory settings: change settings through the UI, and edit the file only to seed it.
 
 ## Authoring a new note
 

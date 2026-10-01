@@ -4,7 +4,7 @@ section: 00-index
 tags: [reference, section/index, status/complete, type/index, vocabulary]
 type: index
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: false
 ---
@@ -16,11 +16,11 @@ Terms used across this vault. If a term is ambiguous in general usage, this file
 
 - **Plane** — One of three top-level memory partitions: Episodic, Curated Knowledge, Source Artifact. Each has its own write path, truth model, and retention policy. See [[01-overview/three-planes]].
 - **Namespace** — A scoping identifier that partitions all memory objects. Shape: `{tenant}/{presence}/{plane}` (e.g., `alex/claude-code/episodic`). Always explicit; never defaulted. See [[03-system-design/namespaces]].
-- **Presence** — A named AI-agent identity. Not the same as a human user. Examples: `claude-code`, `claude-desktop`, `livekit-voice`, `openclaw`. A presence is the authoring subject of episodic memories and the *from* / *to* of thoughts. Multiple presences may belong to one human.
-- **Tenant** — The agent identity that owns memory: the continuous "who" across channels (for example `alex`). Each tenant owns a set of presences. `system` is reserved for the lifecycle worker and scheduler. Pre-v1.0 used the human operator as the tenant; [[13-decisions/0030-agent-as-tenant|ADR 0030]] retired that.
-- **Canonical API** — The single HTTP + gRPC surface exposed by Musubi Core. Every interface (MCP, LiveKit, OpenClaw) consumes this API. See [[07-interfaces/canonical-api]].
-- **Adapter** — An independent downstream project that translates between a specific protocol (MCP, LiveKit tool, OpenClaw extension) and the canonical API. Adapters are separate repos. See [[07-interfaces/index]].
-- **SDK** — A client library (Python, TypeScript) that adapters embed. Hides HTTP details, handles auth, retries, and error types. See [[07-interfaces/sdk]].
+- **Presence** — The channel or client a tenant (agent) speaks through, such as `voice`, `discord` or `claude-code`. A token names it as `tenant/presence` (for example `alex/voice`) in its `presence` claim, which must equal the token's `sub` (`src/musubi/auth/tokens.py`). A presence is the authoring subject of episodic memories and the *from* / *to* of thoughts. One tenant has several presences.
+- **Tenant** — The agent identity that owns memory: the continuous "who" across channels (for example `alex`). Each tenant owns a set of presences. The lifecycle worker writes as its own tenant, `lifecycle-worker` (for example `lifecycle-worker/ops/curated`). Pre-v1.0 used the human operator as the tenant; [[13-decisions/0030-agent-as-tenant|ADR 0030]] retired that.
+- **Canonical API** — The single HTTP surface exposed by Musubi Core (`openapi.yaml` at the repo root). Every interface (MCP, LiveKit, OpenClaw) consumes this API. See [[07-interfaces/canonical-api]].
+- **Adapter** — A client that translates between a specific protocol (MCP, LiveKit tool, OpenClaw extension) and the canonical API. The MCP server (`src/musubi/adapters/mcp`) ships in this repo; LiveKit, OpenClaw and the other agent integrations are separate repos. See [[07-interfaces/index]].
+- **SDK** — The Python client library adapters embed (`src/musubi/sdk`, also published as `sourceblender/musubi-sdk`). Hides HTTP details, handles auth, retries, and error types. See [[07-interfaces/sdk]].
 
 ## Memory object terms
 
@@ -28,7 +28,7 @@ Terms used across this vault. If a term is ambiguous in general usage, this file
 - **Curated Knowledge** — A topic-first durable fact. Stored as markdown in the Obsidian vault. Indexed in Qdrant. See [[04-data-model/curated-knowledge]].
 - **Source Artifact** — A raw document, transcript, or file. Blob-stored with chunk-level Qdrant index. See [[04-data-model/source-artifact]].
 - **Synthesized Concept** — A higher-order memory created by the Lifecycle Engine when multiple episodic memories reinforce the same idea. Bridge between episodic and curated. See [[04-data-model/synthesized-concept]].
-- **Thought** — A durable inter-presence message. Not memory per se, but a separate namespace backed by the same infra. (Existing POC concept, preserved.)
+- **Thought** — A durable inter-presence message. Not memory per se; it lives in its own `thought` plane (`musubi_thought` collection) on the same infrastructure. See [[04-data-model/thoughts]].
 
 ## Lifecycle terms
 
@@ -43,28 +43,27 @@ Terms used across this vault. If a term is ambiguous in general usage, this file
 
 ## Retrieval terms
 
-- **Fast path** — Latency-budgeted retrieval (< 50ms) used by voice agents at turn start. Episodic-only, cached, no cross-plane orchestration. See [[05-retrieval/fast-path]].
+- **Fast path** — Latency-budgeted retrieval used by voice agents at turn start: 400 ms whole-call budget by default (`RETRIEVAL_FAST_WHOLE_TIMEOUT_S`), `matured` and `promoted` states only, no reranker, a 30 s response cache. See [[05-retrieval/fast-path]].
 - **Deep path** — Full scoring + hybrid retrieval + optional cross-plane fusion. Milliseconds-to-seconds. See [[05-retrieval/deep-path]].
 - **Blended retrieval** — Query that returns results from multiple planes fused into a single ranked list. See [[05-retrieval/blended]].
 - **Orchestration query** — A compound retrieval that issues subqueries across planes and merges programmatically (e.g., "find episodic memories about X, pull the linked artifact chunks, fetch the curated topic page"). See [[05-retrieval/orchestration]].
-- **Hybrid search** — Qdrant query combining dense vectors (Gemini) + sparse vectors (BM25) with server-side fusion. Default for all deep-path retrieval. See [[05-retrieval/hybrid-search]].
+- **Hybrid search** — Qdrant query combining dense vectors (BGE-M3) and sparse vectors (SPLADE v3) with server-side RRF fusion. Default for all deep-path retrieval. See [[05-retrieval/hybrid-search]].
 
 ## Scoring terms
 
-- **Relevance** — Cosine similarity between query vector and memory vector (hybrid score).
-- **Recency** — Time-decayed weight favoring recent memories. See [[05-retrieval/scoring-model#recency]].
+The score is a weighted sum of five components (`src/musubi/retrieve/scoring.py`).
+
+- **Relevance** — The hybrid (RRF) score, or the reranker score when reranking ran, normalised within the result set.
+- **Recency** — Time-decayed weight favoring recent memories, with a per-plane half-life. See [[05-retrieval/scoring-model#recency]].
 - **Importance** — LLM-rated 1–10 score assigned at ingestion or maturation. Stanford Generative Agents lineage.
-- **Maturity** — Lifecycle state weight (provisional < matured < promoted).
+- **Provenance** — Weight derived from the plane and lifecycle state (for example matured curated > promoted concept > matured episodic > provisional episodic). This is where maturity enters the score.
 - **Reinforcement** — Log-scaled count of re-ingestion / re-access events.
-- **Provenance strength** — Weight derived from source type (curated > synthesized > matured-episodic > provisional-episodic).
-- **Duplication penalty** — Reduces score for near-duplicates within a result set.
-- **Contradiction penalty** — Reduces score for memories that contradict higher-priority memories in the current namespace.
 
 ## Infrastructure terms
 
-- **Qdrant** — The vector DB. Currently 1.15+ (April 2026). See [[08-deployment/qdrant-config]].
+- **Qdrant** — The vector DB. Version 1.17 ([[13-decisions/0023-qdrant-version-bump-to-1-17|ADR 0023]]). See [[08-deployment/qdrant-config]].
 - **Obsidian Vault** — The filesystem-rooted markdown corpus. Store of record for curated knowledge.
-- **Lifecycle Engine** — Background worker process that runs maturation, synthesis, promotion, demotion. Separate from the API server. See [[06-ingestion/lifecycle-engine]].
+- **Lifecycle Engine** — Background worker process (`lifecycle-worker`) that runs maturation, synthesis, promotion, demotion, reflection and vault reconciliation. Separate from the API server. See [[06-ingestion/lifecycle-engine]].
 - **Canonical asset** — Data that must be backed up because it cannot be rebuilt from anywhere else. See [[09-operations/asset-matrix]].
 - **Derived asset** — Data that can be regenerated from canonical sources. Backup is optional but may speed up recovery.
 

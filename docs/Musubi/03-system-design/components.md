@@ -4,7 +4,7 @@ section: 03-system-design
 tags: [architecture, components, section/system-design, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[03-system-design/index]]"
 reviewed: false
 implements: "docs/Musubi/03-system-design/"
@@ -13,136 +13,117 @@ implements: "docs/Musubi/03-system-design/"
 
 Every component in Musubi. Each has a clear responsibility, inputs, outputs, and ownership boundary.
 
-## Musubi Core (`musubi/` package, `musubi-core` container)
+> The stack is defined in the root `docker-compose.yml`, with an optional GPU overlay in `deploy/docker/compose.local-gpu.yml`. See [[08-deployment/compose-stack]].
 
-**What it owns:** the canonical API, plane-level business logic, all mutations to Qdrant, authorization decisions, request validation.
+## Musubi Core (`src/musubi/`, `core` service)
 
-**Process:** FastAPI + gRPC (via `grpclib` or `grpc.aio`) running under uvicorn. Single async event loop. Listens on `:8100` (HTTP) and `:8101` (gRPC).
+**What it owns:** the canonical HTTP API, plane-level business logic, all mutations to Qdrant, authorization decisions, request validation.
+
+**Process:** FastAPI under uvicorn (`musubi.api.app:create_app`), listening on `:8100` inside the container. Compose publishes it on `127.0.0.1:8100` by default (`MUSUBI_CORE_BIND`, `MUSUBI_CORE_PORT`).
 
 **Depends on:**
-- Qdrant (`:6333` REST, `:6334` gRPC) — for all planes' indexes.
-- TEI (`:8080`) — for embedding (dense + sparse) and reranking.
-- Ollama (`:11434`) — for importance scoring, summarization (on demand only; not hot-path).
-- Filesystem mounts: `/srv/musubi/vault`, `/srv/musubi/artifacts`.
+- Qdrant (`qdrant:6333`, API key required) for every plane's index.
+- Three TEI endpoints: dense (`TEI_DENSE_URL`), sparse (`TEI_SPARSE_URL`) and reranker (`TEI_RERANKER_URL`). Core probes Qdrant and the dense endpoint at startup.
+- Ollama (`OLLAMA_URL`). Core does not call the LLM on the request path; only the operator-only `POST /v1/ops/debug/trigger-synthesis` hook does.
+- Named volumes: `vault` → `/var/lib/musubi/vault`, `artifact-blobs` → `/var/lib/musubi/artifact-blobs`, `lifecycle` → `/var/lib/musubi/lifecycle`, `logs` → `/var/log/musubi`.
 
 **Does not own:**
-- Background jobs (Lifecycle Worker).
-- File watching (Vault Watcher).
-- Model serving (Inference Pool).
-- Adapter protocols.
+- Background jobs (lifecycle worker).
+- Model serving (TEI and Ollama, local or remote).
+- Adapter protocols, except the in-repo MCP server and CLI, which are clients of the API.
 
 **Key modules:**
-- `musubi/api/` — HTTP + gRPC routers. Thin delegation.
-- `musubi/planes/episodic/` — episodic plane business logic.
-- `musubi/planes/curated/` — curated plane business logic.
-- `musubi/planes/artifact/` — artifact plane business logic.
-- `musubi/planes/synthesis/` — synthesized concept plane.
-- `musubi/planes/thoughts/` — preserved POC thoughts subsystem.
-- `musubi/retrieval/` — scoring, hybrid, fast-path, reranker, orchestration.
-- `musubi/auth/` — bearer-token validation, tenant/presence resolution.
-- `musubi/inference/` — adapter clients for TEI + Ollama.
-- `musubi/vault/` — read-side vault library (metadata, frontmatter).
-- `musubi/store/` — artifact blob store adapter.
-- `musubi/types/` — pydantic v2 schemas shared across modules.
-- `musubi/config.py` — environment + constants. Single source of truth.
+- `src/musubi/api/` — HTTP routers (`routers/`), auth dependencies, idempotency, rate limits. Thin delegation.
+- `src/musubi/planes/episodic/`, `curated/`, `artifact/`, `concept/`, `thoughts/` — plane business logic.
+- `src/musubi/retrieve/` — hybrid search, scoring, fast and deep paths, reranking, blended and orchestrated retrieval, context packs.
+- `src/musubi/auth/` — JWT validation, scope checks.
+- `src/musubi/embedding/` — TEI clients and the embedding cache; `src/musubi/llm/` — Ollama and OpenAI-compatible LLM clients for the lifecycle jobs.
+- `src/musubi/vault/` — frontmatter, `VaultWriter`, write log, reconciler, watcher module.
+- `src/musubi/store/` — Qdrant collection names, specs and indexes.
+- `src/musubi/types/` — pydantic v2 schemas shared across modules.
+- `src/musubi/settings.py` (the `Settings` model) and `src/musubi/config.py` (the `get_settings()` accessor, the only place that reads the environment).
 
-## Lifecycle Worker (`musubi/lifecycle/`, `musubi-lifecycle` container)
+## Lifecycle worker (`src/musubi/lifecycle/`, `lifecycle-worker` service)
 
-**What it owns:** running background jobs. Same codebase as Core (imports from `musubi/planes/` etc.), but a different entrypoint.
+**What it owns:** running background jobs. Same image and codebase as Core, different entrypoint: `python -m musubi.lifecycle.runner`.
 
-**Process:** Python long-running process with APScheduler. No HTTP surface except `/healthz` and `/metrics`.
+**Process:** one long-running asyncio process with a minute-resolution tick runner, no APScheduler ([[13-decisions/0025-lifecycle-runner-without-apscheduler|ADR 0025]]). No HTTP API; it serves Prometheus metrics on `:8101/metrics` (`LIFECYCLE_METRICS_PORT`), and its Compose health check requires `musubi_lifecycle_coordinator_ready 1` there. It starts after Core is healthy.
 
-**Jobs:**
+**Jobs** (registered in `src/musubi/lifecycle/runner.py`; times are UTC):
 
 | Job | Cadence | Purpose |
 |---|---|---|
-| `maturation_sweep` | Hourly | Promote provisional → matured, score importance, normalize tags. |
-| `dedup_sweep` | Hourly | Deep paraphrase-aware dedup pass across matured memories. |
-| `synthesis_run` | Every 6 hours | Extract facts, create concepts from reinforcement clusters. |
-| `promotion_run` | Daily | Evaluate promotion-eligible concepts; write curated files. |
-| `demotion_run` | Weekly | Evaluate low-value / contradicted memories; mark demoted. |
-| `reflection_digest` | Daily | Generate a per-presence reflection summary (markdown in vault). |
-| `vault_full_reindex` | Weekly | Safety-net full reindex of the curated vault. |
-| `snapshot_qdrant` | Nightly | Qdrant snapshot to local NAS + offsite S3. |
+| `maturation_episodic` | Hourly at :13 | Move provisional episodic memories to matured; score importance, infer topics. |
+| `provisional_ttl` | Hourly at :17 | Archive provisional memories older than 7 days. |
+| `synthesis` | Daily 03:00 | Cluster matured memories into synthesized concepts; check contradictions. |
+| `concept_maturation` | Daily 03:30 | Move synthesized concepts to matured. |
+| `promotion` | Daily 04:00 | Promote eligible concepts; write curated files to the vault. |
+| `demotion_concept` | Daily 05:00 | Demote matured concepts not reinforced for 30 days. |
+| `demotion_episodic` | Sundays 03:45 | Demote matured episodic memories older than 60 days with importance < 4 and no access or reinforcement. |
+| `demotion_artifact` | Sundays 04:15 | Archive unreferenced artifacts older than 180 days; a no-op unless `MUSUBI_ARTIFACT_ARCHIVAL_ENABLED=true`. |
+| `reflection_digest` | Daily 06:00 | Write a reflection note to the vault and emit a thought. |
+| `vault_reconcile` | Every 6 hours | Re-sync vault files into the curated index. |
+| `lifecycle_reconcile` | Every `LIFECYCLE_RECONCILE_INTERVAL_S` (default 5 s) | Apply pending lifecycle transitions from the work store. |
 
-**Why separate from Core:** A synthesis job that calls the local LLM can take 2–10 minutes. Running it inside the API process would starve request handling. A worker crash (OOM, GPU hiccup) must not affect request availability.
+**Why separate from Core:** synthesis and promotion call the LLM and can run for minutes. Running them inside the API process would starve request handling, and a worker crash must not affect request availability.
 
-**Depends on:** same as Core, plus:
-- Scheduler state in `/srv/musubi/lifecycle-state.db` (sqlite) — so jobs are idempotent across restarts.
+**Depends on:** same as Core, plus a SQLite work store at `LIFECYCLE_SQLITE_PATH` (`/var/lib/musubi/lifecycle/work.sqlite`), with job locks and the vault write log beside it.
 
-## Vault Watcher (`musubi/vault/watcher.py`, `musubi-vault-watcher` container)
+## Vault watcher (module only)
 
-**What it owns:** monitoring the Obsidian vault filesystem and reindexing changed files.
+`src/musubi/vault/watcher.py` implements a `watchdog`-based watcher with a 2-second per-file debounce and a write-log check that skips Musubi's own writes. **No service runs it** in the shipped stack. Human edits reach the curated index through the lifecycle worker's `vault_reconcile` job every 6 hours. Running the watcher as a real-time process is future work.
 
-**Process:** Python with `watchdog`. No HTTP surface except `/healthz`.
+## Inference services
 
-**Reacts to:** file create, modify, delete, move in `vault/curated/`. Ignores `vault/_archive/`, `vault/_inbox/`, `vault/artifacts/` (separate flow).
+Core and the worker reach inference only through the four URLs in `.env`. They can point at:
 
-**Debouncing:** 2-second debounce per file. Batch events by directory.
+- **Remote endpoints** the operator runs (the default; the root Compose file starts no inference service), or
+- **The local GPU overlay** (`deploy/docker/compose.local-gpu.yml`), which adds four GPU services with no host ports, models cached in the `tei-models` and `ollama-models` volumes:
 
-**Writes to:** Qdrant (`musubi_curated` collection) via Core's internal `curated_reindex_file(...)` function, called through an in-process Python import (not over HTTP — the watcher is same codebase, co-deployable).
+| Service | Serves | Default model |
+|---|---|---|
+| `tei-dense` | dense embeddings | `BAAI/bge-m3` (1024-d) |
+| `tei-sparse` | sparse embeddings (`--pooling splade`) | `naver/splade-v3` |
+| `tei-reranker` | reranking | `BAAI/bge-reranker-v2-m3` |
+| `ollama` | LLM for lifecycle jobs | `LLM_MODEL` (`qwen3:4b` in `.env.example`) |
 
-**Why separate container:** filesystem events are I/O-driven and can spike (bulk git pull in the vault = hundreds of events). Isolating lets us rate-limit and back-pressure without touching the API process.
+The operator picks the TEI image for their GPU (`MUSUBI_TEI_IMAGE` + digest) and the Ollama image (`MUSUBI_OLLAMA_IMAGE` + digest). The lifecycle LLM can instead use any OpenAI-compatible endpoint ([[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint|ADR 0043]]). See [[08-deployment/gpu-inference-topology]] for the VRAM budget.
 
-**Interaction with Core:** when a human promotes a concept via the API, Core writes the file to the vault. The Vault Watcher sees the write, tries to reindex, and detects "this file's `musubi-managed: true`, was just written by Core, skip because Core already indexed it" via a short-lived write-log in a shared sqlite. Prevents double-indexing.
+## Qdrant (`qdrant` service)
 
-## GPU Inference Pool
+- Single node, `qdrant/qdrant:v1.17.1` pinned by digest, API key required, no host port.
+- Named volumes `qdrant-storage` and `qdrant-snapshots`.
+- One collection per plane (`musubi_episodic`, `musubi_curated`, `musubi_concept`, `musubi_artifact`, `musubi_artifact_chunks`, `musubi_thought`, `musubi_lifecycle_events`); namespaces are payload filters (see [[03-system-design/namespaces]]).
+- Named vectors on the searchable collections (`dense_bge_m3_v1` + `sparse_splade_v1`).
 
-### TEI (Text Embeddings Inference, HuggingFace) — `musubi-tei` container
-- Image: `ghcr.io/huggingface/text-embeddings-inference:1.7-gpu-cuda13`
-- Serves **two routes** via named model endpoints:
-  - `/embed` → BGE-M3 dense (1024-d).
-  - `/embed_sparse` → SPLADE++ (v2).
-  - `/rerank` → BGE-reranker-v2-m3.
-- Loads all three models at startup; pinned in VRAM.
-- Metrics at `/metrics`.
+## Artifact blobs
 
-### Ollama — `musubi-ollama` container
-- Image: `ollama/ollama:latest`
-- Serves: `qwen2.5:7b-instruct-q4_K_M` for importance scoring, fact extraction, summarization.
-- Lazy-loaded on first use; unloaded after 5min idle (controlled by Ollama's own TTL) so TEI can reclaim VRAM.
-- Called only by Lifecycle Worker, never by Core on the hot path.
+Plain files under `ARTIFACT_BLOB_PATH` (`artifact-blobs` volume), stored at `<namespace>/<object_id>` with the SHA-256 recorded in the artifact metadata.
 
-See [[08-deployment/gpu-inference-topology]] for the VRAM budget and load policy.
+## `volume-init` (one-shot)
 
-## Qdrant
+Runs once before Core starts and `chown`s the four Musubi volume roots to the image's non-root user (UID 999, GID 985), because new named volumes start root-owned.
 
-- Single node. Persistent volume at `/srv/musubi/qdrant/storage`.
-- Collections per plane + per tenant (see [[03-system-design/namespaces]]).
-- Named vectors for every collection (`dense_bge_m3_v1` + `sparse_splade_v1`).
-
-## Object Store
-
-- **Today (single-host)**: plain filesystem at `/srv/musubi/artifacts/`. Content-addressed subdirs: `/sha256[:2]/sha256[2:]/`.
-- **Future (when multi-host)**: MinIO with S3 API. Drop-in replacement via the `musubi/store/` abstraction.
-
-## Adapter projects (separate repos)
+## Clients
 
 See [[07-interfaces/index]].
 
-| Repo | Runs | Talks to Core via |
+| Client | Where | Talks to Core via |
 |---|---|---|
-| `musubi-mcp` | stdio (subprocess) OR streamable-http on `:8200` | HTTP + SDK |
-| `musubi-livekit` | in LiveKit agent process | HTTP + SDK (asyncio) |
-| `musubi-openclaw` | inside OpenClaw desktop | HTTP + SDK (TS) |
-| `musubi-discord` | separate process | HTTP + SDK |
-| `musubi-cli` | one-shot CLI | HTTP + SDK |
+| MCP server | `src/musubi/adapters/mcp` (stdio or SSE) | HTTP + SDK |
+| `musubi` CLI | `src/musubi/cli` (`context`, `promote force`, `promote reject`, `validate`) | HTTP |
+| Python SDK | `src/musubi/sdk`, also `sourceblender/musubi-sdk` | HTTP |
+| LiveKit | `sourceblender/musubi-livekit` (core keeps a compatibility shim) | HTTP + SDK |
+| OpenClaw and other agent integrations | separate `sourceblender/musubi-*` repos | HTTP |
 
-Adapters **never** import `musubi/` package modules. They depend only on the SDK.
-
-## Operator tooling
-
-- `musubi-cli` — operator ergonomics: `snapshot`, `restore`, `reindex`, `promote --dry-run`, `demote`, `reflect`.
-- `musubi-studio` (post-v1) — web UI for browsing lifecycle state.
+Adapters and the SDK import only `musubi.sdk` and `musubi.types`, never plane or API modules (AGENTS.md import discipline).
 
 ## External dependencies
 
-- **Host**: Ubuntu Server (Noble/24.04 or Plucky/25.04), CUDA 13, Docker Engine, nvidia-container-toolkit.
-- **Docker Compose** for process orchestration (v2 plugin).
-- **Kong** as a reverse proxy (TLS, simple config). Listens on `:443` and proxies to Core on `:8100`.
-- **Git** for vault versioning (nightly auto-commit job).
-- No other external dependencies. Specifically: no Kafka, no Redis, no Postgres, no Nginx.
+- **Host:** Linux with Docker Engine and the Compose v2 plugin; an NVIDIA GPU and the NVIDIA Container Toolkit only for the local GPU overlay. See [[08-deployment/host-profile]].
+- **TLS:** an operator-provided TLS reverse proxy in front of Core's loopback port. Core itself serves plaintext (`MUSUBI_ALLOW_PLAINTEXT=true` in Compose).
+- No other external dependencies. Specifically: no Kafka, no Redis, no Postgres.
 
 ## Test Contract
 
-This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the component specs in sections 04–10, each of which carries its own `## Test Contract` section.
