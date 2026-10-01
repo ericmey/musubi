@@ -86,7 +86,7 @@ not silently become a Qdrant identifier.
 
 - `backup.yml` performs on-demand or scheduled backups.
 - `restore.yml` is intended to restore the host-local stores and recover the Qdrant snapshots. **Blocked:** it does not work today (see the warning above).
-- `drill.yml` is intended to run bootstrap, `restore.yml` and validation as a restore drill. **Blocked:** it imports `restore.yml`, so it fails with it.
+- `drill.yml` is intended to optionally run bootstrap (only when `drill_fresh_host` is true; it defaults to false), then run `restore.yml` and validate the result. **Blocked:** it imports `restore.yml`, so it fails with it.
 
 ## Credentials
 
