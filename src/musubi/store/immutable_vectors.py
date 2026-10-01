@@ -41,8 +41,8 @@ _SYNC_DRIVE_ATTEMPTS = 8  # bounded inline re-drives to commit synchronously und
 
 # Fields the anchor NEVER stamps on a publish — they are owned by the RET-008 access lease and the
 # Phase-1 mutation lease, which write them on the anchor directly. A partial set_payload that omits
-# them preserves the lease-written values (Yua: anchor owns the authoritative mutable payload, but the
-# LEASES write these fields, not the vector publish).
+# them preserves the lease-written values: the anchor owns the authoritative mutable payload, but
+# leases write these fields, not the vector publisher.
 _LEASE_OWNED_ON_ANCHOR = LEASE_OWNED_FIELDS | {"update_lease_token"}
 
 ANCHOR_KIND = "anchor"
@@ -56,7 +56,7 @@ _ID_NS = uuid.UUID("d0e5c1a0-0000-4000-8000-000000000001")  # stable namespace f
 class ImmutableVectorPublishPending(RuntimeError):
     """A synchronous :meth:`ImmutableVectorPublisher.publish` did NOT commit the vector inline (a
     retry/fence/worker-held outcome). The durable intent remains for the worker to finish; the caller
-    fails loud rather than returning an uncommitted object (DATA-001 P2, Yua ruling)."""
+    fails loud rather than returning an uncommitted object."""
 
 
 class NonEmbeddingPatchConflict(RuntimeError):
@@ -83,8 +83,7 @@ class ImmutableVectorIdentityAbsent(NonEmbeddingPatchConflict):
     is an intent that can never finalize occupying the outbox until the cap evicts it.
 
     `terminal = True` is the same marking `ImmutableVectorIdentityAmbiguous` carries, and
-    for the same reason: the condition is proven, not transient
-    (Copilot round 29 on musubi#732; correction by Yua).
+    for the same reason: the condition is proven, not transient.
     """
 
     terminal = True
@@ -234,7 +233,7 @@ def _resolve_identity_payload(
 
 
 def _legacy_conversion_filter(namespace: str, object_id: str, obs_version: int) -> models.Filter:
-    """Fence for the IN-PLACE conversion of a v1 legacy row INTO the v2 anchor (Yua item 1): target the
+    """Fence for the IN-PLACE conversion of a v1 legacy row INTO the v2 anchor: target the
     identity row (object_id+namespace, neither anchor nor content) AT the observed version, so a
     concurrent Phase-1 bump matches zero and the op-token readback shows we lost -> retry. A
     never-mutated legacy row carries NO ``version`` field (semantically 0); at ``obs_version == 0`` we
@@ -294,8 +293,7 @@ def _legacy_fence_not_retracted(
                          where it used to match zero and force a retry.
 
     The second is strictly worse than having no evidence predicate at all, which is why
-    the base filter is COPIED and one field overridden rather than reconstructed here (Copilot round 26 on musubi#732;
-    branch split measured by Aoi).
+    the base filter is COPIED and one field overridden rather than reconstructed here.
     """
     base = _legacy_conversion_filter(namespace, object_id, obs_version)
     # COPY the filter and override one field. Enumerating arms to rebuild it is how the
@@ -689,11 +687,11 @@ def resolve_committed_content(
 ) -> dict[str, Any] | None:
     """Return the authoritative committed payload for ``object_id``: the content snapshot named by the
     anchor's ``live_point`` MERGED WITH the anchor payload OVER it (the anchor is authoritative for
-    every mutable field — Yua), or a v1 legacy self-pointer. A v2 anchor with an absent ``live_point``
+    every mutable field), or a v1 legacy self-pointer. A v2 anchor with an absent ``live_point``
     FAILS CLOSED (returns None). Because the anchor wins, a stale content-snapshot field can never
     expose or hide a row.
 
-    The named content point must actually HYDRATE the committed object (Yua): a dangling pointer (no
+    The named content point must actually HYDRATE the committed object: a dangling pointer (no
     such point / empty payload), or a corrupt/cross-object one (not ``point_kind=content``, or a
     mismatched namespace/object_id), FAILS CLOSED — we never serve an anchor-only shell or borrow a
     different row's payload under this anchor's identity."""
@@ -746,7 +744,7 @@ def read_identity_payload(
 def delete_object_layout(
     client: Any, collection: str, *, namespace: str, object_id: str, legacy_point_id: str
 ) -> None:
-    """Remove the COMPLETE v1/v2 layout for an object (DATA-001 P2). Order is load-bearing (Yua): delete
+    """Remove the COMPLETE v1/v2 layout for an object (DATA-001 P2). Order is load-bearing: delete
     every write-once CONTENT point FIRST (``wait=True``), THEN the identity row in BOTH deterministic id
     spaces — ``legacy_point_id`` (v1 / converted-in-place anchor) AND ``anchor_point_id(namespace,
     object_id)`` (brand-new anchor) — also ``wait=True``. If content cleanup fails the identity survives
@@ -795,7 +793,7 @@ def resolve_ranked_candidate(
     client: Any, collection: str, *, point_id: Any, payload: dict[str, Any]
 ) -> dict[str, Any] | None:
     """Hydrate a DENSE-RANKED candidate point to the authoritative payload to expose, or None if it is
-    not the committed live candidate (DATA-001 P2, Yua's frozen retrieval rule).
+    not the committed live candidate.
 
     - A v2 CONTENT point is accepted ONLY when it IS the committed ``live_point`` of its object's anchor
       AND the anchor's namespace/object_id match — one anchor read, so a concurrent pointer swap can
@@ -873,7 +871,7 @@ _EMBED_KINDS = ("episodic", "curated")
 
 
 def _projection(embed_kind: str, payload: dict[str, Any]) -> str:
-    """The EMBEDDING PROJECTION for a plane (Yua) — the exact text a plane feeds the embedder, derived
+    """The EMBEDDING PROJECTION for a plane — the exact text a plane feeds the embedder, derived
     from the fully rebased authoritative payload. A vector change is decided by whether THIS text
     changes (title/summary/content for curated; summary-or-content for episodic), NOT the stored body
     alone: a metadata-only mutation outside the projection stays payload-only, and a summary/title-only
@@ -886,7 +884,7 @@ def _projection(embed_kind: str, payload: dict[str, Any]) -> str:
 
 
 def _projection_snapshot(embed_kind: str, new_full: dict[str, Any]) -> dict[str, Any]:
-    """The IMMUTABLE projection-source fields stamped on the write-once content point (Yua): episodic
+    """The IMMUTABLE projection-source fields stamped on the write-once content point: episodic
     stores content+summary; curated stores title+content+summary — never a ``body`` key. The content
     point is thus a faithful, self-describing snapshot of exactly what produced its vector."""
     snap: dict[str, Any] = {
@@ -901,7 +899,7 @@ def _projection_snapshot(embed_kind: str, new_full: dict[str, Any]) -> dict[str,
 def _parse_descriptor(patch_json: str | None) -> dict[str, Any] | None:
     """The durable intent payload is an INTENDED MUTATION DESCRIPTOR (never a full snapshot). It carries
     a validated ``embed_kind`` (which projection the handler re-embeds against); a missing/invalid kind
-    FAILS CLOSED (Yua) — the handler returns a terminal fence rather than embed the wrong projection."""
+    FAILS CLOSED — the handler returns a terminal fence rather than embed the wrong projection."""
     if not patch_json:
         return None
     try:
@@ -1101,13 +1099,13 @@ class ImmutableVectorPublisher:
                 # ``already_active``: a DIFFERENT operation holds the active intent for this object (our
                 # opk is freshly random and was NOT inserted). NEVER return the current pre-mutation
                 # committed row as if THIS request landed — fail loud pending so the caller sees its
-                # write did not commit (Yua item 3). The other operation's durable intent will drive that
+                # write did not commit. The other operation's durable intent will drive that
                 # object forward on its own.
                 raise ImmutableVectorPublishPending(
                     f"another intent is already active for {object_id!r}; this publish did not land"
                 )
             # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry',
-            # and drive_intent bypasses the retry backoff for this explicit inline drive (Yua item 4) so
+            # and drive_intent bypasses the retry backoff for this explicit inline drive so
             # the coordinator re-reads fresh and re-applies immediately — no production sleep. Both
             # changes converge; a persistent conflict exhausts the bound and fails loud (durable intent
             # remains).
@@ -1159,7 +1157,7 @@ class ImmutableVectorPublisher:
         )
         # Idempotent replay (crash after our commit, before FINAL) for BOTH v1 and v2, vector-change AND
         # payload-only: every committed path stamps ``committed_operation_id``, so we re-detect OUR exact
-        # token on the identity row and re-run only cleanup — never a second apply (Yua item 2).
+        # token on the identity row and re-run only cleanup — never a second apply.
         if fresh is not None and fresh.get("committed_operation_id") == ctx.operation_key:
             outcome = self._cleanup_and_confirm(
                 ctx.object_id, ctx.namespace, keep=fresh.get("live_point")
@@ -1196,7 +1194,7 @@ class ImmutableVectorPublisher:
             self._inject_pre_publish = None
             fn()
 
-        # VECTOR-CHANGE is decided by the EMBEDDING PROJECTION, not the stored content alone (Yua): a
+        # VECTOR-CHANGE is decided by the EMBEDDING PROJECTION, not the stored content alone: a
         # title/summary/content change re-embeds; a metadata-only mutation OUTSIDE the projection (e.g.
         # importance, tags) stays payload-only even though new_full differs from fresh.
         new_projection = _projection(embed_kind, new_full)
@@ -1229,7 +1227,7 @@ class ImmutableVectorPublisher:
                         "generation": generation,
                         "owner_token": ctx.owner_token,
                         # immutable projection-source snapshot (episodic: content+summary;
-                        # curated: title+content+summary) — never a 'body' key (Yua).
+                        # curated: title+content+summary) — never a 'body' key.
                         **_projection_snapshot(embed_kind, new_full),
                     },
                     vector={DENSE_VECTOR_NAME: dense, SPARSE_VECTOR_NAME: _sparse_to_model(sparse)},
@@ -1254,7 +1252,7 @@ class ImmutableVectorPublisher:
         if anchor is None:
             if identity_payload is not None and identity_point_id is not None:
                 # IN-PLACE fenced conversion of the v1 row INTO the anchor — NEVER delete an unfenced
-                # legacy row (Yua item 1). The version-fenced set_payload matches zero if a concurrent
+                # legacy row. The version-fenced set_payload matches zero if a concurrent
                 # Phase-1 bump moved the row's version, and the op-token readback below then shows we did
                 # not win -> retry against fresh. One row always represents the object (no two-identity
                 # window), so the leases' ``must_not content`` still targets exactly one row throughout.
@@ -1291,7 +1289,7 @@ class ImmutableVectorPublisher:
                 # So the write is removed instead of guarded. An anchor that is never
                 # created cannot be resurrected, and that guarantee depends on no client
                 # parameter, no server version, and no vendor behaviour to re-verify on
-                # upgrade (ruling: Yua, 2026-09-20).
+                # upgrade.
                 #
                 # CLEANUP FIRST, THEN ROUTE. Neither exit from here commits this
                 # generation, so the staged content is dead either way and nothing below
@@ -1340,7 +1338,7 @@ class ImmutableVectorPublisher:
                     "update; this path does not create anchors"
                 )
         else:
-            # Fenced pointer swap on BOTH observed pointer_version AND version (Yua dual fence): a
+            # Fenced pointer swap on BOTH observed pointer_version AND version: a
             # concurrent vector publish (pointer_version) OR Phase-1 payload mutation (version) matches
             # zero, so we lose and retry against fresh.
             self._client.set_payload(
@@ -1413,11 +1411,11 @@ class ImmutableVectorPublisher:
     ) -> str:
         """Existing content won -> only narrow payload fields changed. Fenced set_payload on the
         identity row (anchor if v2, else the v1 row) gated on the observed version, stamping OUR
-        ``committed_operation_id`` so success is ATTRIBUTABLE (Yua item 2): a concurrent writer that also
+        ``committed_operation_id`` so success is ATTRIBUTABLE: a concurrent writer that also
         bumped version to ``obs+1`` leaves ITS token, not ours, so version equality alone would falsely
         confirm. No new content point, no vector recompute. Losing the fence -> retry against fresh.
 
-        The identity fence is chosen by LAYOUT (Yua item 7): a v2 anchor fences on its EXACT anchor
+        The identity fence is chosen by LAYOUT: a v2 anchor fences on its EXACT anchor
         identity (point_kind==anchor) + observed version; a v1/legacy row (``anchor is None``) reuses
         :func:`_legacy_conversion_filter`, which admits an absent-or-zero ``version`` so a version-less
         legacy row's metadata-only mutation commits once instead of an exact ``version==0`` match that a
@@ -1436,7 +1434,7 @@ class ImmutableVectorPublisher:
             )
         else:
             # v2: fence on the EXACT anchor identity (point_kind==anchor), not merely must_not content —
-            # a stray legacy identity row for the same object would otherwise match too (Yua tightening).
+            # a stray legacy identity row for the same object would otherwise match too.
             fence = models.Filter(
                 must=[
                     models.HasIdCondition(has_id=[identity_point_id]),
@@ -1513,7 +1511,7 @@ class ImmutableVectorPublisher:
 
     def _delete_superseded_content(self, object_id: str, namespace: str, keep: str) -> None:
         """Delete EVERY content point for this object except the committed one (``keep``) in ONE
-        server-side filtered delete (Yua item 5): ``must_not has_id(keep)`` excludes exactly the live
+        server-side filtered delete: ``must_not has_id(keep)`` excludes exactly the live
         point, so a >256 fan-out is fully collected with no client-side ``limit``/pagination that could
         silently orphan the tail past the first page."""
         self._client.delete(
@@ -1538,8 +1536,8 @@ class ImmutableVectorPublisher:
 def register_immutable_vector_dispatch(
     coordinator: Any, publishers: dict[str, ImmutableVectorPublisher]
 ) -> None:
-    """Register ONE collection-aware handler for the shared ``immutable_vector_publish`` intent kind
-    (Yua). The coordinator holds exactly ONE handler per intent_kind; episodic and curated both publish
+    """Register ONE collection-aware handler for the shared ``immutable_vector_publish`` intent kind.
+    The coordinator holds exactly ONE handler per intent_kind; episodic and curated both publish
     under this kind, so calling each publisher's :meth:`ImmutableVectorPublisher.register` in turn would
     SILENTLY OVERWRITE — only the last-registered collection could reconcile, and the other's durable
     intents would dispatch to the wrong bound apply. Instead this installs a single dispatcher that

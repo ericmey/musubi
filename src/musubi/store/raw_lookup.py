@@ -29,8 +29,7 @@ delegates here, so the semantics live in one place instead of drifting across fi
 Callers of ``raw_payload()`` must treat every key as untrusted — ``.get()`` with a
 default, never index. A corrupted row may be missing or malforming anything.
 
-Found across planes by Yua in adversarial review of PR #398, after the episodic-only
-fix was proposed as complete. It was not.
+PR #398 first proposed an episodic-only fix. The same defect existed across planes.
 """
 
 from __future__ import annotations
@@ -71,7 +70,7 @@ def point_exists(client: QdrantClient, collection: str, *, namespace: str, objec
     directly and does not care what the payload says.
 
     DATA-001 P2: presence is answered from the IDENTITY row (v2 anchor or v1), never a CONTENT
-    snapshot (Yua). An orphan content shell left behind after a missing/deleted anchor must NOT
+    snapshot. An orphan content shell left behind after a missing/deleted anchor must NOT
     report the object as present — otherwise an existence guard keeps a half-deleted object alive.
     """
     records, _ = client.scroll(
@@ -97,12 +96,11 @@ def raw_payload(
     ``LookupError`` on an empty-payload row and refused to remove it. That is the same class
     of bug this whole module exists to kill — a corruption shape that makes a memory
     *undeletable because it is broken*. Callers must test ``is None``, never truthiness.
-    (Yua, rev2 review of PR #398.)
 
     Subject to the same payload-filter reachability limit as :func:`point_exists`.
 
-    DATA-001 P2: returns the AUTHORITATIVE identity row (v2 anchor or v1), never a CONTENT snapshot
-    (Yua). The v2 anchor carries the full mutable payload — content included — so this IS the
+    DATA-001 P2: returns the AUTHORITATIVE identity row (v2 anchor or v1), never a CONTENT snapshot.
+    The v2 anchor carries the full mutable payload — content included — so this IS the
     anchor-over-content authoritative view; it deliberately does NOT follow ``live_point`` (that
     fails closed on a dangling pointer, which would blind this inspection/repair door to exactly the
     broken row it exists to open). For the hydrated committed content use

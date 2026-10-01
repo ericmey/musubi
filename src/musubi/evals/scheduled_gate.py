@@ -1,6 +1,6 @@
 """RET-004 self-seeding scheduled quality gate.
 
-One canonical checksum-pinned graded corpus + one self-seeding runner (Yua ruling 2026-07-15). The
+One canonical checksum-pinned graded corpus + one self-seeding runner. The
 scheduled gate does NOT query a pre-seeded store: it validates the corpus schema + checksum, mints a
 fresh run-scoped valid 3-segment namespace, seeds the labelled documents into real Qdrant through the
 PRODUCTION write seam (:meth:`EpisodicPlane.create`), waits for visibility, runs per-mode retrieval
@@ -198,7 +198,7 @@ async def wait_for_visibility(
 async def _measure(
     corpus: ScheduledCorpus, key_to_object_id: dict[str, str], *, retrieve: Any
 ) -> tuple[dict[str, dict[str, float]], list[dict[str, Any]]]:
-    """Retrieve + score each query. Returns ``(per_mode_aggregate, per_query)`` — Yua requires the
+    """Retrieve + score each query. Returns ``(per_mode_aggregate, per_query)`` — include
     per-query results, not only aggregates, so a failing run can be attributed to specific queries."""
     by_mode: dict[str, list[dict[str, float]]] = {}
     per_query: list[dict[str, Any]] = []

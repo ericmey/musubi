@@ -59,7 +59,7 @@ async def list_contradictions(
         # SEC-004 / RET-007: a backend outage must surface as an error, never a clean-looking
         # empty 200 that is indistinguishable from "no contradictions". The broad Exception is
         # accepted only at this boundary (the alternative is a generic 500) — the original
-        # exception stays CHAINED (`from exc`) and LOG-VISIBLE with its traceback (Yua).
+        # exception stays CHAINED (`from exc`) and LOG-VISIBLE with its traceback.
         log.exception(
             "contradictions backend scroll failed; returning 503",
             extra={"namespace": namespace, "collection": "musubi_concept"},

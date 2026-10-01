@@ -1,7 +1,7 @@
 """Per-component health probes.
 
-Per [[09-operations/observability]] § Inference metrics + Aoi's v0.1
-review ask: ``/ops/status`` populates ``StatusResponse.components``
+Per [[09-operations/observability]] § Inference metrics:
+``/ops/status`` populates ``StatusResponse.components``
 with one :class:`ComponentStatus` per dependency (TEI dense / sparse /
 reranker, Ollama, vector-store, lifecycle-worker). Each probe is a
 cheap GET against the dependency's ``/health`` endpoint; failure

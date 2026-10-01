@@ -46,7 +46,7 @@ S3 note: the coordinator's ``_finalize`` writes the C6-owned ``lifecycle_events`
 DIRECTLY (all 8 columns, in the same txn as the outbox APPLIED→FINAL move) rather than
 through the buffered ``LifecycleEventSink`` — this is required for R8 atomicity. The
 coordinator path owns its own FINAL event; ``events.py`` is unchanged and its sink callers
-are not composed on this path (Yua S3 ruling 1). See the slice boundary note.
+are not composed on this path. See the slice boundary note.
 """
 
 from __future__ import annotations
@@ -329,7 +329,7 @@ Checking for the WORD `coalesce` was not enough: an index that coalesces the wro
 field -- `COALESCE(collection,'')` -- contains it and would be accepted as current,
 leaving the NULL hazard exactly where it was. Testing for the presence of a mechanism
 instead of the mechanism being applied TO THE RIGHT OBJECT is the defect this whole
-change is about, and it reappeared inside the guard against it (Tama, musubi#771)."""
+change is about, and it reappeared inside the guard against it."""
 
 
 def _active_intent_index_is_current(conn: sqlite3.Connection) -> bool:
@@ -375,15 +375,14 @@ def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
     2. `DROP INDEX` outside a transaction COMMITS. Between it and the `CREATE`, the
        partial unique index does not exist at all -- and any admission landing in that
        window can insert a second active intent for one identity. A migration that
-       installs a constraint must never open a hole in it (Copilot/Yua, musubi#771).
+       installs a constraint must never open a hole in it.
 
     Widening a unique index can never fail on existing rows: more columns means fewer
     collisions, so any set legal under the old key is legal under the new one.
     """
     # This function OWNS its transaction from BEGIN to COMMIT and must be entered with
     # none open. Committing a caller's in-flight transaction from in here would durably
-    # land unrelated work as a side effect of a schema check -- the caller ends its own
-    # (Yua, musubi#771).
+    # land unrelated work as a side effect of a schema check -- the caller ends its own transaction.
     if conn.in_transaction:
         raise LifecycleStoreError(
             "_migrate_active_intent_index requires no open transaction; the caller must "
@@ -402,8 +401,7 @@ def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
         # lock lost -- and outside it that exception escapes with no rollback, leaving
         # the connection in-transaction for whatever runs next. The rollback is guarded
         # on `in_transaction` because after a failed COMMIT there may be nothing left to
-        # roll back, and an unconditional ROLLBACK would then raise over the real error
-        # (Yua, musubi#771).
+        # roll back, and an unconditional ROLLBACK would then raise over the real error.
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:

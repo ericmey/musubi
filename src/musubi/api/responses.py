@@ -93,8 +93,8 @@ class RankedScoreComponents(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # `StrictFloat` rejects str (e.g. "0.1") and bool (e.g. True)
-    # per Yua 2026-07-13 12:45:46 #2: "use strict numeric validation
-    # (accept real int/float as intended, reject str/bool/coercion)".
+    # because the wire contract requires strict numeric validation:
+    # accept real int/float, reject str/bool/coercion.
     relevance: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
     recency: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
     importance: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
@@ -169,9 +169,9 @@ class RankedResultRow(BaseModel):
     # 422; per spec §4.6 invalid source semantics). The
     # `Annotated[..., Field(...)]` form (no default arg) keeps the
     # field REQUIRED in OpenAPI while still allowing `null`.
-    # `StrictInt` rejects str (e.g. "7") and bool (e.g. True) per
-    # Yua 2026-07-13 12:45:46 #2: "use strict numeric validation
-    # (accept real int/float as intended, reject str/bool/coercion)".
+    # `StrictInt` rejects str (e.g. "7") and bool (e.g. True).
+    # The wire contract requires strict numeric validation: accept real ints,
+    # reject str/bool/coercion.
     importance: Annotated[StrictInt | None, Field(ge=1, le=10)]
     score_kind: Literal["ranked_combined"]
     extra: RankedExtra
@@ -206,7 +206,7 @@ class RecentResultRow(BaseModel):
     state: LifecycleState | None
     # importance: required-nullable (no default=) with int 1..10 when
     # present. See `RankedResultRow.importance` for the rationale.
-    # `StrictInt` rejects str/bool per Yua 12:45:46 #2.
+    # `StrictInt` rejects str/bool by design.
     importance: Annotated[StrictInt | None, Field(ge=1, le=10)]
     score_kind: Literal["created_epoch"]
     # DQ-001: silent-truncation fix. Sliced content is tagged with the original
@@ -215,8 +215,7 @@ class RecentResultRow(BaseModel):
     content_truncated: bool = False
     content_length: int | None = None
     # provenance_score: required-nullable float in [0.0, 1.0] when
-    # present. `StrictFloat` rejects str/bool per Yua 12:45:46 #2:
-    # "bound recent provenance_score 0..1 if non-null".
+    # present. `StrictFloat` rejects str/bool by design; non-null values are bounded to 0..1.
     provenance_score: Annotated[StrictFloat | None, Field(ge=0.0, le=1.0)]
     extra: RecentExtra
     title: str | None = None
@@ -227,9 +226,8 @@ class _RetrieveResponseBase(BaseModel):
 
     NOTE: ``results`` is intentionally NOT declared here — each variant
     declares its own concrete row type (RankedResultRow OR
-    RecentResultRow). Per Yua 2026-07-13 12:45:46 #1: the contract
-    requires ranked `results: list[RankedResultRow]` and recent
-    `results: list[RecentResultRow]`. A `Union[RankedResultRow,
+    RecentResultRow). The contract requires `results: list[RankedResultRow]` for ranked
+    and `results: list[RecentResultRow]` for recent. A `Union[RankedResultRow,
     RecentResultRow]` in a shared base would let OpenAPI show
     `anyOf` both row types in BOTH variants (and let a recent
     response smuggle a ranked row in, or vice versa). The
@@ -281,7 +279,7 @@ class RecentRetrieveResponse(_RetrieveResponseBase):
 # FastAPI emits `anyOf` (no discriminator mapping) which is functionally
 # equivalent for non-overlapping Literal-typed variants but lacks the
 # client-side dispatch hint. The discriminator is the locked contract
-# per spec §4.1 and Yua 2026-07-13 11:57:59 #4.
+# per spec §4.1.
 RetrieveResponse = Annotated[
     RankedRetrieveResponse | RecentRetrieveResponse,
     Field(discriminator="mode"),

@@ -32,8 +32,8 @@ POINT_KIND_CONTENT: Final[str] = "content"
 
 # Phase-2 layout-only keys that live on the anchor/content but are NOT fields of any canonical memory
 # model (the models are ``extra="forbid"``). Every consumer that ``model_validate``s a resolved payload
-# — plane get/query/write-return + anchor-aware reads — must strip these first (Yua: resolve, then
-# validate). Lives here (a zero-dependency module) so planes can import it without the
+# — plane get/query/write-return + anchor-aware reads — must strip these before validation.
+# Lives here (a module without dependencies) so planes can import it without the
 # immutable_vectors <-> episodic.plane import cycle.
 LAYOUT_ONLY_FIELDS: Final[frozenset[str]] = frozenset(
     {
