@@ -48,7 +48,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     failed=1
     continue
   fi
-  if bash -lc "$cmd"; then
+  # A command may invoke a tool that reads stdin. Do not let it consume the
+  # remaining manifest rows and turn a partial run into a successful gate.
+  if bash -lc "$cmd" </dev/null; then
     pass "consumer ${name}"
   else
     fail "consumer ${name}" || true
