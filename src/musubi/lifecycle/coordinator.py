@@ -657,7 +657,7 @@ class LifecycleTransitionCoordinator:
             # `intent_digest` is what makes the probe safe: it already binds namespace, so
             # a legacy row belonging to a DIFFERENT namespace cannot match our digest. A
             # non-matching legacy row is simply not ours -- ignore it and admit under the
-            # new key, never return a conflict.
+            # new key, never return a conflict (musubi#771).
             legacy_opk = self._legacy_key(intent)
             if legacy_opk is not None:
                 legacy_row = self._row_for_key(legacy_opk)
@@ -729,7 +729,7 @@ class LifecycleTransitionCoordinator:
             # A mutation lease is transient ownership, not evidence that this intent's
             # version is stale. Keep the canonical intent pending so the reconciler can
             # retry after the owner releases; abandoning it would permanently poison
-            # this (version, target_state) key.
+            # this (version, target_state) key (musubi#771).
             return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
         if status == "fence":
             # a known version fence is terminal (the intent is stale) — abandon, never retry.

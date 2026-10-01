@@ -540,7 +540,7 @@ async def episodic_maturation_sweep(
                 # The predecessor is, by construction, in the same namespace:
                 # `_find_supersession_candidate` returns "the unique matured row in the
                 # SAME namespace". This back-link was one of four identical unqualified
-                # sites, one per plane.
+                # sites, one per plane (musubi#771).
                 namespace=row["namespace"],
                 target_state="superseded",
                 actor=_LIFECYCLE_ACTOR,
@@ -594,7 +594,7 @@ async def episodic_maturation_sweep(
                 #
                 # Recorded rather than swallowed. `enriched` must not count it (the
                 # write did not happen) and silence would make the loss invisible in
-                # the one report an operator reads.
+                # the one report an operator reads (musubi#771).
                 failed += 1
                 log.warning(
                     # The fence has FOUR conditions and this path cannot tell which one
@@ -1203,7 +1203,7 @@ def _apply_enrichment(
         # VERSION is the transition identity; `state` alone is not. An archived or
         # demoted row can be restored to `matured`, and a stale snapshot would then
         # satisfy a state-only fence and write enrichment computed for a row that
-        # has since moved. A restore bumps the version, so
+        # has since moved (musubi#771). A restore bumps the version, so
         # this condition refuses anything that is not the exact row this sweep
         # transitioned.
         models.FieldCondition(key="version", match=models.MatchValue(value=expected_version)),
@@ -1238,7 +1238,7 @@ def _apply_enrichment(
     # writer acquiring the lease between the scroll and the write sails straight
     # through, because the thing that was checked is not the thing that gated the
     # write. Same defect class as enriching on `state` while `version` identifies the
-    # row -- right check, wrong object.
+    # row -- right check, wrong object (musubi#771).
     #
     # Refusal here is STRICT: any token present, fresh or expired, refuses. That is
     # sound only because expired-ordinary-token TAKEOVER happens in the coordinator
@@ -1257,7 +1257,7 @@ def _apply_enrichment(
     # Success is read back from DURABLE STATE, never inferred from having issued the
     # write. A pre-write count cannot prove a post-write outcome: count sees `matured`,
     # a retraction archives the row, the fenced write then matches zero rows, and the
-    # caller is told an enrichment happened. `set_payload` reports
+    # caller is told an enrichment happened (musubi#771). `set_payload` reports
     # operation status, not how many points it matched, so the only honest signal is
     # to look afterwards.
     #
@@ -1285,7 +1285,7 @@ def _apply_enrichment(
     # BEST-EFFORT, and skipped entirely when nothing landed. The authoritative answer is
     # already determined above; cleanup is hygiene. Letting it raise would turn a
     # DURABLE SUCCESS into a reported failure -- the caller would count `failed += 1`
-    # and log a refusal for enrichment that is sitting in the collection.
+    # and log a refusal for enrichment that is sitting in the collection (musubi#771).
     #
     # Yes, this is the broad catch I just deleted from `_scroll_by_object_id`. The
     # difference is what the result is used for, and it is worth stating rather than

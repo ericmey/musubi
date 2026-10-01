@@ -379,7 +379,7 @@ async def owned_update(
         # The PRODUCTION consumer of the shared rule. Leaving an inline TTL expression
         # here beside a helper documented as "the shared rule, in one place" is how the
         # two drift apart again -- and it would make the helper's tests unable to say
-        # anything about real acquisition semantics.
+        # anything about real acquisition semantics (musubi#771).
         elif is_takeover_eligible_token(stored_token, now_us=now_us):
             token_fence = models.FieldCondition(
                 key="update_lease_token", match=models.MatchValue(value=str(stored_token))

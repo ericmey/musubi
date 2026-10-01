@@ -198,7 +198,7 @@ async def wait_for_visibility(
 async def _measure(
     corpus: ScheduledCorpus, key_to_object_id: dict[str, str], *, retrieve: Any
 ) -> tuple[dict[str, dict[str, float]], list[dict[str, Any]]]:
-    """Retrieve + score each query. Returns ``(per_mode_aggregate, per_query)`` — include
+    """Retrieve + score each query. Returns ``(per_mode_aggregate, per_query)`` — including
     per-query results, not only aggregates, so a failing run can be attributed to specific queries."""
     by_mode: dict[str, list[dict[str, float]]] = {}
     per_query: list[dict[str, Any]] = []

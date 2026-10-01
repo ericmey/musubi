@@ -271,7 +271,7 @@ def transition(
     # docs/Musubi/04-data-model/relationships.md it crosses types by design -- a
     # SynthesizedConcept is merged FROM EpisodicMemory rows -- so a same-collection rule
     # would be wrong rather than merely strict. `promoted_to` and `contradicts` carry
-    # their own contracts.
+    # their own contracts (musubi#771).
     lineage_targets: list[str] = []
     if lineage_updates is not None:
         if lineage_updates.superseded_by:
@@ -402,7 +402,8 @@ def _existing_collections(client: QdrantClient) -> set[str]:
     Asking once is what removes the exception guessing. Keying "does this exist?" off an
     exception's type or text is a guess about a client library -- the local client raises
     `ValueError`, the remote raises a 404 -- and any guess that is wrong silently
-    converts a real fault into a miss. Discovery failures propagate like any other fault.
+    converts a real fault into a miss. Discovery failures propagate like any other fault
+    (musubi#771).
     """
     return {c.name for c in client.get_collections().collections}
 
@@ -425,7 +426,7 @@ class AmbiguousObjectId(Exception):
     the scroll returned first -- silently transitioning a stranger's row and counting it
     as this caller's. A later revision counted DISTINCT NAMESPACES, which let two rows in
     one namespace collapse to a set of size one and pass. Identity is a count of rows,
-    not a count of the values one of their fields happens to take.
+    not a count of the values one of their fields happens to take (musubi#771).
     """
 
 
@@ -452,7 +453,7 @@ def _locate_object(
     # a scroll threw. That inference was the fail-open: `except Exception: return []`
     # turned a timeout into a confirmed miss, so a transient fault on one plane made its
     # duplicate invisible and the lookup resolved to another plane. Discovery failures
-    # propagate like any other fault. It also keeps test clients that
+    # propagate like any other fault (musubi#771). It also keeps test clients that
     # hold only some collections working, without a broad catch to excuse them.
     present = _existing_collections(client)
     for collection in _COLLECTION_TO_OBJECT_TYPE:
@@ -468,7 +469,8 @@ def _locate_object(
         # let two rows in the SAME namespace collapse to a set of size one and pass, so
         # the qualifier was doing the deciding instead of the identity. Whatever the
         # cause -- an unqualified id spanning namespaces, or two anchors within one --
-        # the lookup cannot name the row, and `records[0]` is a guess either way.
+        # the lookup cannot name the row, and `records[0]` is a guess either way
+        # (musubi#771).
         if len(records) > 1:
             spaces = sorted({str(r.get("namespace")) for r in records})
             raise AmbiguousObjectId(
@@ -513,7 +515,7 @@ def _scroll_by_object_id(
 
     An earlier revision of this paginated to exhaustion and called that load-bearing.
     It was not -- and worse, no test could distinguish it from `limit=2`, so it was an
-    untestable stronger claim dressed as rigour. The reason `limit=2`
+    untestable stronger claim dressed as rigour (musubi#771). The reason `limit=2`
     was insufficient BEFORE is that the caller counted DISTINCT NAMESPACES, so two rows
     from one namespace collapsed to a set of size one and a third namespace stayed
     invisible. Fixing the invariant is what made the scan cheap; the limit was never

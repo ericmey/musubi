@@ -329,7 +329,7 @@ Checking for the WORD `coalesce` was not enough: an index that coalesces the wro
 field -- `COALESCE(collection,'')` -- contains it and would be accepted as current,
 leaving the NULL hazard exactly where it was. Testing for the presence of a mechanism
 instead of the mechanism being applied TO THE RIGHT OBJECT is the defect this whole
-change is about, and it reappeared inside the guard against it."""
+change is about, and it reappeared inside the guard against it (musubi#771)."""
 
 
 def _active_intent_index_is_current(conn: sqlite3.Connection) -> bool:
@@ -375,14 +375,15 @@ def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
     2. `DROP INDEX` outside a transaction COMMITS. Between it and the `CREATE`, the
        partial unique index does not exist at all -- and any admission landing in that
        window can insert a second active intent for one identity. A migration that
-       installs a constraint must never open a hole in it.
+       installs a constraint must never open a hole in it (musubi#771).
 
     Widening a unique index can never fail on existing rows: more columns means fewer
     collisions, so any set legal under the old key is legal under the new one.
     """
     # This function OWNS its transaction from BEGIN to COMMIT and must be entered with
     # none open. Committing a caller's in-flight transaction from in here would durably
-    # land unrelated work as a side effect of a schema check -- the caller ends its own transaction.
+    # land unrelated work as a side effect of a schema check -- the caller ends its own
+    # transaction (musubi#771).
     if conn.in_transaction:
         raise LifecycleStoreError(
             "_migrate_active_intent_index requires no open transaction; the caller must "
@@ -401,7 +402,8 @@ def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
         # lock lost -- and outside it that exception escapes with no rollback, leaving
         # the connection in-transaction for whatever runs next. The rollback is guarded
         # on `in_transaction` because after a failed COMMIT there may be nothing left to
-        # roll back, and an unconditional ROLLBACK would then raise over the real error.
+        # roll back, and an unconditional ROLLBACK would then raise over the real error
+        # (musubi#771).
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:

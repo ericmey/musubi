@@ -83,7 +83,7 @@ class ImmutableVectorIdentityAbsent(NonEmbeddingPatchConflict):
     is an intent that can never finalize occupying the outbox until the cap evicts it.
 
     `terminal = True` is the same marking `ImmutableVectorIdentityAmbiguous` carries, and
-    for the same reason: the condition is proven, not transient.
+    for the same reason: the condition is proven, not transient (musubi#732).
     """
 
     terminal = True
@@ -293,7 +293,8 @@ def _legacy_fence_not_retracted(
                          where it used to match zero and force a retry.
 
     The second is strictly worse than having no evidence predicate at all, which is why
-    the base filter is COPIED and one field overridden rather than reconstructed here.
+    the base filter is COPIED and one field overridden rather than reconstructed here
+    (musubi#732).
     """
     base = _legacy_conversion_filter(namespace, object_id, obs_version)
     # COPY the filter and override one field. Enumerating arms to rebuild it is how the
