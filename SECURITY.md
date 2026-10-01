@@ -39,7 +39,7 @@ This is a personal project with a single maintainer, so response is best-effort 
 
 ### In scope
 
-- The Musubi Core service (the Python code under `src/musubi/`, the published container image at `ghcr.io/ericmey/musubi-core`, and the published SDK).
+- The Musubi Core service (the Python code under `src/musubi/`, the published container image at `ghcr.io/sourceblender/musubi-core`, and the published SDK).
 - The Ansible deployment playbooks under `deploy/ansible/`, to the extent they configure Musubi itself.
 - The HTTP and gRPC API surfaces.
 - Auth / session / token handling.
@@ -48,8 +48,8 @@ This is a personal project with a single maintainer, so response is best-effort 
 ### Out of scope
 
 - Third-party dependencies with their own security policies (Qdrant, TEI, Ollama, FastAPI). Report those upstream; we'll pick up their fixes when they ship.
-- Denial-of-service against a single-node homelab deployment by an authenticated caller — Musubi has no admission-control hardening for that use case today, and making it robust is on the roadmap rather than a bug.
-- Homelab-specific topology disclosed in historical `refs/pull/*` refs from before the repo went public. The current default branch is scrubbed; see commit [`cbcca0b`](https://github.com/sourceblender/musubi/commit/cbcca0b) for details.
+- Denial-of-service against a single-node deployment by an authenticated caller — Musubi has no admission-control hardening for that use case today, and making it robust is on the roadmap rather than a bug.
+- Deployment-specific topology disclosed in historical `refs/pull/*` refs from before the repo went public. The current default branch is scrubbed; see commit [`cbcca0b`](https://github.com/sourceblender/musubi/commit/cbcca0b) for details.
 
 ## Supply-chain verification
 
@@ -59,7 +59,7 @@ Every published image is signed by a GitHub Actions OIDC identity via [cosign](h
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/ericmey/musubi-core@sha256:<digest>
+  ghcr.io/sourceblender/musubi-core@sha256:<digest>
 ```
 
 The attestation can be retrieved with:
@@ -67,9 +67,9 @@ The attestation can be retrieved with:
 ```bash
 cosign download attestation \
   --predicate-type 'https://cyclonedx.org/bom' \
-  ghcr.io/ericmey/musubi-core@sha256:<digest>
+  ghcr.io/sourceblender/musubi-core@sha256:<digest>
 ```
 
 ## No bounties
 
-This is a homelab / portfolio project. There is no bug bounty program, no payouts, no swag. What we can offer in return for a responsible report is recognition in the advisory and a sincere thank-you.
+There is no bug bounty program, no payouts, no swag. What we can offer in return for a responsible report is recognition in the advisory and a sincere thank-you.

@@ -14,7 +14,7 @@ implements: "docs/Musubi/08-deployment/"
 
 The VLAN-wide API gateway. Fronts Musubi Core's public API surface; terminates TLS; enforces edge rate-limits, basic auth, and access logging. Runs on a dedicated VM (`<kong-gateway>`, `<kong-ip>`) — **not on the Musubi host itself**. See [[13-decisions/0014-kong-over-caddy]] for the rationale.
 
-> Concrete hostnames, IPs, and domains in this spec use placeholder tokens (`<kong-gateway>`, `<musubi-host>`, `<homelab-domain>`, etc.). The real values for the operator's deployment live in `.agent-context.local.md` at the repo root, which is gitignored. See that file's **Placeholder → real-value map** before running any command that needs a concrete endpoint.
+> Concrete hostnames, IPs, and domains in this spec use placeholder tokens (`<kong-gateway>`, `<musubi-host>`, `<homelab-domain>`, etc.). Substitute your own deployment's values before running any command that needs a concrete endpoint.
 
 ## Topology
 

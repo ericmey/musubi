@@ -15,7 +15,7 @@ Ansible is the bring-up tool. One playbook provisions a fresh Ubuntu box to a Mu
 
 **Repo:** `musubi-infra` (separate from Core). Kept deliberately thin — ~500 lines of YAML.
 
-> Hostnames and IPs use placeholder tokens. Real values in `.agent-context.local.md` (gitignored).
+> Hostnames and IPs use placeholder tokens. Substitute your own values.
 
 ## Why Ansible
 

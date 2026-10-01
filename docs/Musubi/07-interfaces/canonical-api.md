@@ -207,7 +207,7 @@ Shape preserved from POC (see [[04-data-model/thoughts]]), just under the `/v1/t
 
 #### Thoughts stream (SSE)
 
-Real-time thought delivery for consumers that need push semantics without polling — browser extensions (can't receive webhooks), voice-agent workers (low-latency context updates), any future homelab service subscribing to cross-presence notifications.
+Real-time thought delivery for consumers that need push semantics without polling — browser extensions (can't receive webhooks), voice-agent workers (low-latency context updates), any other service subscribing to cross-presence notifications.
 
 **Request:**
 
@@ -255,7 +255,7 @@ Replay is capped at **500 events per reconnect** (the window that covers typical
 
 #### Consumer expectations (for any `/thoughts/stream` subscriber)
 
-These are shared contract, not implementation suggestions. OpenClaw, LiveKit worker, and any future Python homelab consumer all build to these:
+These are shared contract, not implementation suggestions. OpenClaw, LiveKit worker, and any future Python consumer all build to these:
 
 1. **Reconnect with exponential backoff + jitter** on drop. `min(2^n * 1s + rand(0, 1s), 60s)`. Reset after 5 minutes of stable connection. Don't hammer Musubi when it's down.
 2. **Persist `Last-Event-ID` across restarts.** OpenClaw uses `chrome.storage.local` / IndexedDB; Python consumers a file or KV. Lose the ID and you replay the entire plane on restart.
@@ -612,7 +612,7 @@ For a cross-principal auditor, an existing identity with the wrong digest collap
 to `absent`; only the owning principal may receive `conflict`. This prevents a loop
 over guessable human-readable keys from becoming an existence oracle. The endpoint
 confirms durable receipt state only and does not expose process-local `in_flight`
-leases. Its safety depends on the household fleet trust model: an operator with
+leases. Its safety depends on a single trusted operator domain: an operator with
 namespace read authority may confirm that a named principal captured a named digest
 at a named time. Do not expose this contract to a broader trust domain without a new
 security decision.
