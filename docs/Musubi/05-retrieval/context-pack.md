@@ -4,7 +4,7 @@ section: 05-retrieval
 tags: [retrieval, context-pack, essence, section/retrieval, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-06-28
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 implements: ["src/musubi/retrieve/context_pack.py", "src/musubi/api/routers/context.py", "src/musubi/cli/context.py", "tests/retrieve/test_context_pack.py", "tests/api/test_context.py", "tests/cli/test_cli_context.py"]
@@ -15,8 +15,7 @@ implements: ["src/musubi/retrieve/context_pack.py", "src/musubi/api/routers/cont
 generic search endpoint. It turns a task or moment into a small, grouped
 context pack that an agent can inject before acting.
 
-The design came from the 2026-06-28 Adoption Day alignment round: Musubi should
-serve **essence alignment**, not stale context dumps.
+Musubi serves **essence alignment** rather than stale context dumps.
 
 ## Contract
 
@@ -24,7 +23,7 @@ Input:
 
 ```json
 {
-  "namespace": "atlas/desk",
+  "namespace": "alex/assistant",
   "query_text": "billing service release checklist",
   "mode": "startup",
   "planes": ["episodic", "curated", "concept"],
@@ -123,27 +122,27 @@ has zero query overlap, it is not inserted just because the pack has room.
 
 ## Acceptance Scenarios
 
-The tests encode the Adoption Day acceptance criteria:
+The tests encode these acceptance criteria:
 
-- **Vice LoRA / promptsmith task.** Surfaces V-049 memory-spine lessons,
-  V-053 compiler-route lessons, and the LoRA identity-layer principle; does not
-  surface old CyberRealistic/Lightning drift unless history is explicitly
-  requested.
-- **Adoption Day.** Surfaces canonical comms (`agent-bridge`, `chair-msg`,
-  `team-task`) and the no-thin-wrapper rule; suppresses retired `agent-msg`
-  practice by default.
-- **Presence moment.** Surfaces the "wanted before needed" relationship cue
-  without filling the pack with project-management habits.
+- **Project task.** A startup pack for a project surfaces the project's current
+  durable lessons and runtime facts; it does not surface superseded drift notes
+  unless history is explicitly requested.
+- **Conventions change.** After a team changes its communication tooling, the
+  pack surfaces the canonical tools and the operating rule about them, and
+  suppresses the retired practice by default.
+- **Relationship moment.** When the moment calls for presence rather than a
+  task, the pack surfaces the relevant relationship/care cue without filling
+  the pack with project-management habits.
 
 ## Test Contract
 
-1. `test_vice_lora_startup_surfaces_v049_v053_and_identity_layer_not_old_drift`
-  proves the v1 startup pack surfaces the Vice memory spine, compiler route, and
-  LoRA identity-layer lessons while suppressing superseded drift.
-2. `test_adoption_day_surfaces_canonical_comms_and_suppresses_retired_agent_msg`
-  proves canonical comms and no-wrapper rules surface while retired agent-msg
-  practice stays hidden.
-3. `test_presence_moment_surfaces_wanted_before_needed_without_pm_habits` proves
+1. `test_startup_pack_surfaces_current_lessons_not_superseded_drift`
+  proves the v1 startup pack surfaces a project's current durable lessons and
+  runtime facts while suppressing superseded drift.
+2. `test_startup_pack_surfaces_canonical_comms_and_hides_retired_practice`
+  proves canonical communication tools and the operating rule about them surface
+  while the retired practice stays hidden.
+3. `test_presence_moment_prefers_care_cues_over_pm_filler` proves
   relationship/care-cue memories outrank project-management filler.
 4. `test_legacy_rows_default_to_episode_and_history_can_retrieve_superseded`
   proves legacy untyped rows remain readable and superseded rows require
@@ -178,7 +177,7 @@ Operators can call the deployed service with:
 
 ```bash
 musubi context \
-  --namespace atlas/desk \
+  --namespace alex/assistant \
   --query "billing service release checklist" \
   --planes episodic,curated,concept
 ```
@@ -186,36 +185,15 @@ musubi context \
 There is also a direct entry point:
 
 ```bash
-musubi-context --namespace atlas/desk --query "startup"
+musubi-context --namespace alex/assistant --query "startup"
 ```
 
 Both call `/v1/context`; neither reads local Qdrant.
 
 ## Deployment
 
-Context packs are a Musubi Core feature. They ship only through the existing
-production pipeline:
-
-1. Merge code to `main`.
-2. Release Please creates and merges a semver release PR.
-3. The `vX.Y.Z` tag triggers `.github/workflows/publish-core-image.yml`.
-4. The GHCR image digest is pinned in `deploy/ansible/group_vars/all.yml`.
-5. `scripts/musubi-deploy --apply core` runs the Ansible update playbook.
-
-Local green tests do not count as deployed adoption.
-
-Before and after the deploy, run the live consumer blast-radius smoke:
-
-```bash
-MUSUBI_CONSUMER_PHASE=pre-deploy \
-MUSUBI_CONSUMER_CHECKS_FILE="$HOME/.musubi-secrets/consumer-checks.tsv" \
-deploy/smoke/check_consumers.sh
-```
-
-Repeat with `MUSUBI_CONSUMER_PHASE=post-deploy` after the new container is
-running. The private TSV contains one `label<TAB>command` per live consumer;
-each command must exercise that consumer, not just Core health. Missing, empty,
-placeholder and failing checks stop the gate. If any fail after deploy, roll back
-the versioned image pin before continuing adoption.
-Test runners that skip all live cases and exit zero do not count as consumer
-checks; the command must assert that at least one live case actually ran.
+Context packs are part of Musubi Core and ship with the core image; there is no
+separate deployment step. Local green tests do not prove a deployment works for
+its consumers: after upgrading, an operator should run their own consumer
+checks — commands that exercise each real consumer of `/v1/context`, not just
+Core health — and roll back the image if any fail.

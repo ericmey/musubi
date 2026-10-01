@@ -4,7 +4,7 @@ section: 05-retrieval
 type: contract
 status: active
 tags: [section/retrieval, status/active, type/contract]
-updated: 2026-07-15
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 ---
@@ -21,8 +21,11 @@ Every bounded row exposes whether it was truncated, the original character lengt
 - Exact-cap content is not truncated.
 - Ranked, recent, fast, deep, blended, and context-pack projections use the same metadata semantics.
 - The metadata is backward-compatible when absent from an older serialized row.
-- Current cutting is code-point bounded. Grapheme-safe cutting and cross-adapter parity remain open
-  under Issue #443.
+- Cutting is grapheme-safe: every cap goes through `truncate_grapheme_safe`
+  (`src/musubi/retrieve/grapheme_truncation.py`), used by the fast, recent, orchestration
+  (deep/blended) and context-pack projections, so an emoji sequence, combining mark or flag is never
+  split. `content_length` still counts code points.
+- Parity across the external client adapters is not verified here.
 
 ## Test Contract
 

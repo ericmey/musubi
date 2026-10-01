@@ -4,21 +4,21 @@ section: 05-retrieval
 tags: [deep, planning, retrieval, section/retrieval, slow-thinker, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 implements: ["src/musubi/retrieve/deep.py", "tests/retrieve/test_deep.py"]
 ---
 # Deep Path
 
-Retrieval for planning, analysis, and background pre-fetch. Uses the full pipeline including reranker + lineage hydration. Budget is loose (p95 ≤ 5s) because the caller isn't a human waiting on a keystroke.
+Retrieval for planning, analysis, and background pre-fetch. Uses the full pipeline including reranker + lineage hydration. Budget is loose (p95 ≤ 5 s) because the caller isn't a human waiting on a keystroke.
 
 ## Typical callers
 
-- **Slow Thinker** in LiveKit: pre-fetches context while the user is mid-sentence, holds the results ready for the Fast Talker to consume.
-- **Coding agent planning loops** (e.g., Claude Code, OpenClaw extension): ahead-of-action retrieval to ground the plan in memory.
-- **Reflection job** (Lifecycle Worker): daily summary pass.
-- **Evals harness**: replays golden queries against a corpus.
+- **Voice adapters** that pre-fetch context while the user is still speaking (see below).
+- **Coding-agent planning loops**: ahead-of-action retrieval to ground the plan in memory.
+- **Blended mode**: `run_blended_retrieve` runs one deep retrieval per plane ([[05-retrieval/blended]]).
+- **Evals harness**: replays corpus queries against a fixture (see [[05-retrieval/evals]]).
 
 ## Invocation
 
@@ -35,36 +35,36 @@ results = await musubi.retrieve(
 )
 ```
 
-`include_lineage=True` is the default on deep. It enables step 7 (lineage hydrate) in the orchestration pipeline.
+`include_lineage=True` is the default. It enables lineage hydration after scoring.
+
+## Pipeline
+
+`run_deep_retrieve` (`src/musubi/retrieve/deep.py`):
+
+1. **Optional LLM query expansion.** If a `DeepRetrievalLLM` is passed, its `expand_query` runs under a 2 s deadline and its output is appended to the query text; any failure falls back to the raw query. The HTTP router does not pass one, so over `/v1/retrieve` this step is a no-op.
+2. **Hybrid search per plane** with `limit = query.limit * 2` (headroom for the reranker). Per-plane budget 1.5 s; sparse encoding gets 1.0 s, after which that leg continues dense-only with a `sparse_embedding_failed` warning.
+3. **Merge** per-plane hits by `object_id` (highest fused score wins).
+4. **Cross-encoder rerank** of the merged candidates against the original query text, keeping `top_k = query.limit`, under `retrieval_rerank_timeout_s` (default 1.5 s). Five or fewer candidates skip the reranker. See [[05-retrieval/reranker]].
+5. **Score** with the unified scorer; relevance becomes the sigmoid of the rerank score ([[05-retrieval/scoring-model]]).
+6. **Lineage hydration** per hit, concurrently, each under `retrieval_lineage_timeout_s` (default 0.5 s).
 
 ## What deep path adds over fast path
 
-1. **Cross-encoder rerank** (step 5 in orchestration). BGE-reranker-v2-m3 scores each candidate against the query. Replaces the `relevance` component.
-2. **Lineage hydration** (step 7). Fetches:
-   - Full body text for large-curated results truncated in the index.
+1. **Cross-encoder rerank.** BGE-reranker-v2-m3 scores each candidate against the query. Replaces the RRF-based `relevance` input.
+2. **Lineage hydration.** Fetches:
+   - The full stored content and title of each hit.
    - Supersession chain tips (so the caller can follow "what replaced this?").
    - Source artifact metadata for any `supported_by` references.
    - Promoted-from / promoted-to for concepts and curated.
-3. **Larger budgets** — more prefetch, looser timeouts, deeper merge.
 
-## Slow Thinker pattern (LiveKit)
+   Hydration reads use `bump_access=False`: a lineage hop is never counted as a delivered row (RET-002; see [[05-retrieval/orchestration]]).
+3. **Larger budgets** — more prefetch, looser timeouts.
 
-The voice agent runs two parallel loops:
+## Pre-fetch pattern for voice adapters
 
-```
-User utterance stream
-  │
-  ├─► Fast Talker: ASR tokens → minimal retrieval → speak fragment
-  │                 (fast path, 150ms budget per mini-query)
-  │
-  └─► Slow Thinker: accumulating transcript → deep-path retrieval
-                    (deep path, 2s budget, running concurrently)
-                    → result cache available for Fast Talker's next turn
-```
+A voice adapter can run two loops in parallel: a fast loop that uses the fast path for anything it must say right now, and a slower loop that runs deep retrieval on the accumulating transcript and holds the results for the next turn. When the fast loop needs context, it checks the pre-fetched results first and falls back to the fast path if they are not ready.
 
-When the Fast Talker needs context during speech generation, it checks the Slow Thinker's cache first. If hot, it uses that (richer, reranked) context. If cold, it falls back to fast-path retrieval.
-
-This gives us the effect of "deep retrieval at conversational latency" without blocking speech. See [[07-interfaces/livekit-adapter]] for the adapter's implementation plan.
+That cache, if any, belongs to the adapter (for example `sourceblender/musubi-livekit`), not to Musubi Core. See [[07-interfaces/livekit-adapter]].
 
 ## Result shape additions
 
@@ -74,51 +74,33 @@ Deep-path results include hydrated lineage:
 {
   "object_id": "...",
   "plane": "curated",
-  "title": "CUDA 13 setup notes",
+  "title": "Release checklist v3",
   "snippet": "...",
   "score": 0.82,
   "score_components": { ... },
   "lineage": {
     "supersedes": [
-      {"object_id": "...", "title": "CUDA 12 setup notes", "state": "superseded"}
+      {"object_id": "...", "title": "Release checklist v2", "state": "superseded"}
     ],
     "superseded_by": null,
-    "promoted_from": {"object_id": "...", "title": "CUDA install pattern"},
+    "promoted_from": {"object_id": "...", "title": "Release checklist pattern"},
     "supported_by": [
-      {"artifact_id": "...", "chunk_id": "...", "title": "nvidia-smi output 2026-04-10"}
+      {"artifact_id": "...", "chunk_id": "...", "title": "release-notes.pdf"}
     ]
   },
   "payload": { ... full body or large snippet ... }
 }
 ```
 
-Fast-path results have a `lineage` field too, but with references only (IDs, no hydrated titles/bodies).
+Fast-path results have a `lineage` field too, built from the payload only (IDs, no hydrated titles/bodies).
 
 ## Caching at this tier
 
-We do **not** response-cache deep-path results by default. The queries are varied, the corpus changes, and a stale deep-path result is worse than a fresh one.
+Deep-path results are **not** response-cached. The queries are varied, the corpus changes, and a stale deep-path result is worse than a fresh one.
 
-The **Slow Thinker cache** is a different cache, per-session, short-lived (<= 2 minutes), and keyed on the full conversation state — not an orchestration-level cache. That cache belongs to the LiveKit adapter, not to Musubi Core.
+## LLM-in-the-loop
 
-## Deep path + reflection
-
-The reflection job (daily) runs deep-path retrieval for selected "reflection prompts" to surface patterns across memory. Example prompts:
-
-- "What did I work on this week that I haven't documented?"
-- "Which concepts have reinforced past the promotion threshold?"
-- "What contradictions surfaced in the last 7 days?"
-
-Results drive the reflection output written to `vault/reflections/YYYY-MM/YYYY-MM-DD.md`. See [[06-ingestion/reflection]].
-
-## LLM-in-the-loop (advanced deep)
-
-A special mode `"deep_llm"` (future; post-v1) would use an LLM to:
-
-- Expand the query (synonym / multi-hop reformulation).
-- Filter results for factuality.
-- Summarize across the top-N into a structured response.
-
-This is a full RAG loop with tool-use. Not in v1 — Musubi v1 stops at returning ranked passages. The caller does the LLM work. This keeps the Core's responsibility tight: "give me the right passages"; the caller decides what to do with them.
+Musubi stops at returning ranked passages; the caller does the LLM work. The only LLM touchpoint in deep retrieval is the optional `DeepRetrievalLLM.expand_query` hook above. A fuller RAG mode (filtering for factuality, summarising across the top N) is **planned, not implemented**.
 
 ## Failure handling (deep)
 
@@ -126,12 +108,11 @@ Softer than fast path — deep path callers generally can retry or degrade:
 
 | Failure | Response |
 |---|---|
-| Rerank down | Fall back to hybrid-only relevance + warning. |
-| Lineage hydrate partial | Return hits with partial lineage + structured log. |
-| One plane slow | Wait up to per-plane timeout, then return without that plane + warning. |
-| TEI query encoding slow | Timeout at 150ms; fall back to cached embedding if within TTL. |
-
-No 5xx on deep path unless everything's down.
+| Rerank error or timeout | Fall back to the fused (RRF) order + `reranker_failed` warning with a bounded `cause`. |
+| Lineage hydrate failure or timeout | Return that hit unhydrated + a log line with the object id. |
+| Sparse encoding slow (> 1.0 s) | Continue dense-only + `sparse_embedding_failed` warning. |
+| One plane's hybrid query fails | `run_deep_retrieve` returns that error; the orchestrator turns a per-target timeout into a `plane_timeout_<plane>` warning when other targets survive. |
+| Whole target exceeds 5 s | `kind="timeout"` (503 if no target survives). |
 
 Operationally, rerank and lineage are bounded optional stages. The defaults are
 `retrieval_rerank_timeout_s=1.5` and
@@ -146,7 +127,7 @@ capped at 16 total active calls per API process: eight slots reserved for
 required query and authoritative-resolution work, and eight isolated slots for
 optional lineage hydration. Excess work queues behind its stage ceiling instead of consuming the
 asyncio default executor, with the submitting request and trace context copied
-into each worker call. The production-shaped regression covers 20 concurrent
+into each worker call. The regression suite (`tests/retrieve/test_ret016_bounded_offload.py`) covers 20 concurrent
 callers through the public deep path, including query, authoritative resolution,
 rerank, scoring, and lineage stages. When the optional executor is saturated,
 the per-hit lineage deadline still returns the original unhydrated hit without
@@ -159,51 +140,41 @@ genuine synchronous read seam before use here.
 
 The separate recent/context retrieval path is outside this executor contract.
 
-The rerank budget is production-derived rather than inherited from the earlier
-800 ms spec: a ten-caller burst on 2026-08-12 measured reranker duration at
-approximately p50 0.684 s, p95 1.226 s, and p99 1.268 s across 200 candidate
-predictions. The 1.5 s default clears that loaded p99 while leaving the lineage
-stage and whole-call deadline bounded.
+The 1.5 s rerank default is derived from a measurement on the reference
+deployment rather than inherited from the earlier 800 ms spec: a ten-caller
+burst measured reranker duration at approximately p50 0.684 s, p95 1.226 s, and
+p99 1.268 s across 200 candidate predictions. The 1.5 s default clears that
+loaded p99 while leaving the lineage stage and whole-call deadline bounded.
 
 ## Observability
 
-- `retrieval.deep.latency_ms` histogram
-- `retrieval.deep.rerank_used` counter (when we did rerank vs skipped)
-- `retrieval.deep.lineage_hydrate_ms` histogram
-- `retrieval.deep.degraded` counter with `reason=` label
+Deep path shares the retrieval counters: `musubi_retrieval_warnings_total{warning, plane}` (e.g. `reranker_failed`, `sparse_embedding_failed`), `musubi_reranker_degradation_causes_total{cause, plane}` and `musubi_retrieval_errors_total{kind}` (`src/musubi/observability/retrieval_metrics.py`). There are no deep-specific latency histograms.
 
 ## Test Contract
 
-**Module under test:** `musubi/retrieval/deep.py` (glue over `orchestration.py`)
+**Module under test:** `src/musubi/retrieve/deep.py`
 
 Happy path:
 
 1. `test_deep_path_invokes_rerank`
 2. `test_deep_path_hydrates_lineage_by_default`
 3. `test_deep_path_snippet_longer_than_fast`
-4. `test_deep_path_p95_under_5s_on_100k_corpus` (benchmark)
+4. `test_deep_path_p95_under_5s_on_100k_corpus` — deferred (skipped stub)
 
-Slow Thinker integration shape:
+Concurrency and caching:
 
-5. `test_deep_path_parallel_safe_under_concurrent_callers`
-6. `test_deep_path_no_response_cache_by_default`
+5. `test_deep_path_parallel_safe_under_concurrent_callers` — deferred (skipped stub; concurrent callers are exercised by `test_twenty_callers_complete_through_the_production_deep_path`)
+6. `test_deep_path_no_response_cache_by_default` — deferred (skipped stub)
 
 Degradation:
 
 7. `test_deep_path_rerank_down_falls_back_with_warning`
 8. `test_deep_path_hydrate_missing_artifact_partial_lineage`
-9. `test_deep_path_one_plane_timeout_degrades`
+9. `test_deep_path_one_plane_timeout_degrades` — deferred (skipped stub)
+10. `test_run_deep_retrieve_honors_caller_stage_budgets`
 
-Reflection integration:
+Property and integration (deferred: skipped stubs):
 
-10. `test_reflection_prompts_resolved_via_deep_path`
-11. `test_reflection_results_include_provenance_for_audit`
-
-Property:
-
-12. `hypothesis: deep path result ordering is stable for fixed inputs and weights`
-
-Integration:
-
-13. `integration: LiveKit Slow Thinker scenario — pre-fetched context available within 2s while user is speaking`
-14. `integration: deep path vs fast path on the same query — deep NDCG@10 higher by ≥ 5 points on evals corpus`
+11. `test_hypothesis_deep_path_result_ordering_is_stable_for_fixed_inputs_and_weights` — deferred
+12. `test_integration_livekit_slow_thinker_scenario` — deferred
+13. `test_integration_deep_path_vs_fast_path_on_the_same_query` — deferred

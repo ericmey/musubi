@@ -4,117 +4,108 @@ section: 05-retrieval
 tags: [cross-encoder, deep-path, rerank, retrieval, section/retrieval, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 implements: ["src/musubi/retrieve/rerank.py", "tests/retrieve/test_rerank.py"]
 ---
 # Reranker
 
-A cross-encoder that scores (query, passage) pairs directly. Used only on the deep path — the latency cost is too high for fast path, but the quality lift on ambiguous queries is substantial.
+A cross-encoder that scores (query, passage) pairs directly. Used only on the deep path (and so in blended, which runs deep per plane) — the latency cost is too high for the fast path, but the quality lift on ambiguous queries is substantial.
 
 ## Model
 
-**BGE-reranker-v2-m3** (`BAAI/bge-reranker-v2-m3`). April 2026 state-of-the-art for open-weight rerankers, 568M params, multilingual, beats larger proprietary models on MTEB reranking benchmarks for our size range.
+**BGE-reranker-v2-m3** (`BAAI/bge-reranker-v2-m3`): an open-weight, multilingual cross-encoder of about 568M parameters.
 
-Deployed via TEI in a dedicated instance (can co-load with BGE-M3 on the same GPU — they share the same tokenizer and VRAM isn't tight at our batch sizes). See [[08-deployment/gpu-inference-topology]].
+Deployed via TEI in a dedicated instance (it can share a GPU with BGE-M3; VRAM isn't tight at our batch sizes). See [[08-deployment/gpu-inference-topology]].
 
 ## When it runs
 
-Only on the deep path:
+Only on the deep path (`src/musubi/retrieve/deep.py`):
 
 ```python
-if query.mode == "deep":
-    candidates = await hybrid_fanout(query)   # 50-100 candidates
-    reranked = await rerank(query.query_text, candidates, top_k=query.limit * 3)
-    scored = [score(c) for c in reranked]
-    packed = pack(scored[:query.limit])
+# per deep call
+candidates = merge(hybrid_search(plane, limit=query.limit * 2) for plane in planes)
+reranked = await rerank(reranker, query.query_text, candidates, top_k=query.limit)
+scored = rank_hits(reranked, now=now)
 ```
 
-Candidate count going into rerank: ~50-100 (3-4 planes × prefetch_limit = 20-30 per plane, after merge ~60-100). Reranker batch-processes all at once.
+Each plane's hybrid search fetches `query.limit * 2` candidates; the merged set (deduped by `object_id`) goes to the reranker, which keeps `top_k = query.limit`. Through `/v1/retrieve` the orchestrator runs one deep call per `(namespace, plane)` target, so in practice each rerank call sees one plane's candidates. The fast path never reranks.
 
 ## The call
 
+`rerank()` in `src/musubi/retrieve/rerank.py`:
+
 ```python
 async def rerank(
+    client: TEIRerankerClient,
     query_text: str,
     candidates: list[Hit],
     *,
     top_k: int,
-) -> list[Hit]:
-    pairs = [(query_text, c.content_for_rerank) for c in candidates]
-    scores = await tei_client.rerank(model="bge-reranker-v2-m3", pairs=pairs)
-    for cand, score in zip(candidates, scores):
-        cand.rerank_score = score
-    # Sort and clip
-    ranked = sorted(candidates, key=lambda c: c.rerank_score, reverse=True)
-    return ranked[:top_k]
+) -> RerankResult:
+    if len(candidates) <= 5:
+        return RerankResult(hits=candidates[:top_k])
+    texts = [_extract_content(c) for c in candidates]
+    scores = await client.rerank(query_text, texts)
+    scored = [replace(c, rerank_score=s) for c, s in zip(candidates, scores)]
+    ranked = sorted(scored, key=lambda c: c.rerank_score, reverse=True)
+    return RerankResult(hits=ranked[:top_k])
 ```
 
-`content_for_rerank` is:
+The rerank text is:
 
-- For episodic / concept / curated: `f"{hit.title or ''}\n\n{hit.content[:2048]}"`
-- For artifact chunks: `hit.chunk_content` verbatim
+- For episodic / concept / curated: `f"{title}\n\n{content[:2048]}"` (content only when there is no title)
+- For artifact chunks: `chunk_content` verbatim
 
-Truncation at 2048 chars (~1000 tokens) for the passage side keeps batch size manageable. The reranker's max context is 8K, so we could go longer — we don't, because it bloats latency with little recall gain on a small-team corpus.
+Truncation at 2048 characters keeps batches manageable. The reranker's context is longer; we don't use it, because it adds latency for little recall gain on a small-team corpus.
 
 ## Latency budget
 
-On the RTX 3080 via TEI, warm:
+The rerank stage is bounded by `retrieval_rerank_timeout_s` (default 1.5 s, `src/musubi/settings.py`). On expiry, deep retrieval returns the fused (RRF) order with a `reranker_failed` warning (`cause="timeout"`) instead of failing the request. The default comes from a ten-caller burst on the reference deployment (see [[05-retrieval/deep-path]]).
 
-| Candidates | p50 | p95 |
-|---|---|---|
-| 20 | 80ms | 150ms |
-| 50 | 180ms | 320ms |
-| 100 | 340ms | 600ms |
-
-So deep-path budget (p50 ≤ 2s) absorbs rerank at 100 candidates comfortably. Fast path (150ms p50) can't.
+Per-candidate-count latency depends on the host; measure on yours. On the measured reference host (RTX 3080 10 GB) reranking is fast enough for the 5 s deep budget and far too slow for the 400 ms fast budget.
 
 ## How we use the rerank score
 
 **The rerank score replaces the `relevance` component of the composite score.** It does not join as a 6th component. Why: it's already a measure of relevance (a much better one), and adding it alongside RRF-relevance double-counts.
 
-Implementation: when a deep-path result has `rerank_score`, `_relevance()` returns a normalization of that instead of the RRF score.
+Implementation: when a hit has `rerank_score`, `_relevance()` returns its sigmoid instead of the normalized RRF score (`src/musubi/retrieve/scoring.py`):
 
 ```python
 def _relevance(hit: Hit) -> float:
     if hit.rerank_score is not None:
-        return hit.rerank_score_normalized
-    return hit.rrf_score / hit.batch_max_rrf
+        return sigmoid(hit.rerank_score)
+    if hit.batch_max_rrf <= 0.0:
+        return 0.0
+    return clamp01(hit.rrf_score / hit.batch_max_rrf)
 ```
 
-`rerank_score_normalized` is a sigmoid over the raw cross-encoder logit, so the value lands in [0, 1] consistently.
+The sigmoid maps the raw cross-encoder logit into [0, 1].
 
 ## When we skip reranking on deep path
 
-- Candidate count ≤ 5: the hybrid result is tiny; no reorder helpful.
-- Candidate count == 0: trivial no-op.
-- TEI reranker instance down: fall back to RRF-only relevance + log a warning.
+- Candidate count ≤ 5: the hybrid result is tiny; no reorder helpful. No warning.
+- Candidate count == 0: deep returns early; nothing to rerank.
+- TEI reranker error or stage timeout: fall back to the fused RRF order (`hybrid_fallback`, sorted by `(-rrf_score, object_id)`) + a `reranker_failed` warning with a bounded `cause` (`timeout`, `request_rejected`, `unavailable`, `invalid_response`, `unexpected_error`).
 
 ## Multi-plane reranking
 
-Reranker scores are **plane-agnostic**. We pass everything to the reranker as a flat list (not per-plane), then score + sort. A curated fact and an episodic memory compete on the same query-passage score; the provenance component re-introduces plane preference at scoring time.
+Reranker scores are **plane-agnostic**: plane does not influence the cross-encoder score. The provenance component re-introduces plane preference at scoring time.
 
 ## Batching
 
-TEI batches internally by default. For a single query with 50 candidates we send one request with 50 pairs; TEI packs them into sub-batches sized to fit the GPU's compute tile.
+`TEIRerankerClient.rerank` (`src/musubi/embedding/tei.py`) splits the candidates into chunks of the reranker's `max_client_batch_size`, discovered from the TEI `/info` endpoint at startup (fallback 32), and sends one `/rerank` request per chunk. If any chunk fails, the whole rerank degrades to the RRF order; there is no partial rescoring. See [[05-retrieval/reranker-batching]].
 
-We don't cross-batch queries (one reranker request per user query). Attempting to batch across queries would require request-queueing and would introduce head-of-line blocking.
+We don't cross-batch queries (one reranker request stream per query). Batching across queries would require request-queueing and would introduce head-of-line blocking.
 
 ## Quality expectation
 
-Empirically (BEIR + MTEB reranking at April 2026):
-
-- Hybrid BGE-M3+SPLADE retrieval, no rerank: NDCG@10 ≈ 0.52–0.58 on heterogeneous corpora.
-- Same + BGE-reranker-v2-m3 rerank top-100: NDCG@10 ≈ 0.64–0.70.
-
-That's the gap we're paying rerank latency for. On queries where the hybrid retrieval already ranks the answer in top-3, rerank contributes little; on ambiguous queries, it's meaningful.
-
-We'll measure our own corpus via [[05-retrieval/evals]] and adjust if the win is smaller than expected.
+On queries where hybrid retrieval already ranks the answer in the top 3, rerank contributes little; on ambiguous queries, it's meaningful. We measure our own corpus via [[05-retrieval/evals]] (the deep-mode nightly gate) and adjust if the win is smaller than expected.
 
 ## Test Contract
 
-**Module under test:** `musubi/retrieval/rerank.py`
+**Module under test:** `src/musubi/retrieve/rerank.py`
 
 1. `test_rerank_sorts_by_cross_encoder_score`
 2. `test_rerank_replaces_relevance_component` (not appends)
@@ -122,16 +113,16 @@ We'll measure our own corpus via [[05-retrieval/evals]] and adjust if the win is
 4. `test_rerank_degrades_to_rrf_when_tei_down`
 5. `test_rerank_content_truncated_to_2048_chars`
 6. `test_rerank_score_normalized_via_sigmoid`
-7. `test_rerank_called_only_on_deep_path` (mode=deep; mode=fast asserts not called)
-8. `test_rerank_latency_under_budget_for_50_candidates` (benchmark)
+7. `test_rerank_called_only_on_deep_path` — deferred (skipped stub; covered by `test_fast_mode_skips_rerank` in [[05-retrieval/orchestration]])
+8. `test_rerank_latency_under_budget_for_50_candidates` (smoke test with a fake client)
 9. `test_rerank_plane_agnostic_ordering`
 
 Degradation:
 
 10. `test_rerank_tei_error_returns_hybrid_results_with_warning`
-11. `test_rerank_partial_batch_failure_rescored_for_rest`
+11. `test_rerank_partial_batch_failure_rescored_for_rest` (despite the name, asserts that any client error degrades the whole rerank: no hit keeps a rerank score)
+12. `test_reranker_batch_failure_degrades_the_whole_rerank`
 
 Integration:
 
-12. `integration: deep-path NDCG@10 on golden set improves vs fast-path by ≥ 5 points`
-13. `integration: deep-path p95 latency under 2s with 100 candidates`
+13. `test_integration_deep_path_p95_latency_under_2s_with_100_candidates` — deferred (skipped stub)

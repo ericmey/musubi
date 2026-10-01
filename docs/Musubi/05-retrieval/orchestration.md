@@ -5,174 +5,114 @@ tags: [orchestration, pipeline, retrieval, section/retrieval, status/complete, t
 type: spec
 status: complete
 implements: src/musubi/retrieve/orchestration.py
-updated: 2026-04-19
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 ---
 # Orchestration
 
-The single function that runs the retrieval pipeline. Fast and deep share this; mode parameter selects branches.
+The single function that runs the retrieval pipeline. All four modes (`fast`, `deep`, `blended`, `recent`) go through it; `mode` selects the runner.
 
 ## Signature
 
 ```python
-# musubi/retrieval/orchestration.py
+# src/musubi/retrieve/orchestration.py
 
 async def retrieve(
     client: QdrantClient,
-    tei: TEIClient,
+    embedder: Embedder,
+    reranker: TEIRerankerClient | None = None,
     *,
-    query: RetrievalQuery,
+    query: RetrievalQuery | dict[str, Any],
+    llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
-) -> Result[list[RetrievalResult], RetrievalError]:
+    account_access: bool = True,
+    fast_timing: FastTiming | None = None,
+) -> Result[RetrievalEnvelope, RetrievalError]:
     ...
 ```
 
-Pure function over clients. No globals. Takes `now` injection for test determinism.
+Pure function over clients. No globals. Takes `now` injection for test determinism. `RetrievalEnvelope` carries `results` plus a tuple of structured `warnings`. `reranker` is required for `deep` and `blended`; `llm` is the optional deep-path query-expansion hook (the HTTP router does not pass one). `fast_timing` carries the three fast-path deadlines (see [[05-retrieval/fast-path]]).
 
-## Steps (deep path)
+## Flow
 
 ```
  ┌─────────────────────────────┐
- │ 1. validate query           │   pydantic + authz
+ │ 1. validate query           │   pydantic (authorization already done by the router)
  └────────────┬────────────────┘
               ▼
  ┌─────────────────────────────┐
- │ 2. encode query             │   TEI dense+sparse, parallel, cached
+ │ 2. expand targets           │   one target per (namespace, plane)
  └────────────┬────────────────┘
               ▼
  ┌─────────────────────────────┐
- │ 3. hybrid fan-out           │   per-plane Qdrant hybrid, parallel
- │    (per plane in scope)     │   RRF fusion server-side
+ │ 3. run each target          │   fast / deep / blended / recent runner,
+ │    concurrently             │   each under its own whole-call deadline
  └────────────┬────────────────┘
               ▼
  ┌─────────────────────────────┐
- │ 4. merge + dedup            │   content+lineage
+ │ 4. calibrate + merge        │   RET-012 cross-plane seam, then dedup by object_id
+ │    (multi-target only)      │   and sort by (-score, object_id, plane)
  └────────────┬────────────────┘
               ▼
  ┌─────────────────────────────┐
- │ 5. rerank (DEEP only)       │   BGE-reranker-v2-m3
+ │ 5. limit                    │   top query.limit
  └────────────┬────────────────┘
               ▼
  ┌─────────────────────────────┐
- │ 6. score                    │   unified scorer
+ │ 6. account access           │   delivered rows only (RET-002)
  └────────────┬────────────────┘
               ▼
  ┌─────────────────────────────┐
- │ 7. lineage hydrate (DEEP)   │   optional chunk / supersedes hydration
+ │ 7. finalize                 │   bounded warnings, metrics counted once
  └────────────┬────────────────┘
               ▼
- ┌─────────────────────────────┐
- │ 8. pack                     │   snippet, score components, lineage summary
- └────────────┬────────────────┘
-              ▼
-          response
+          RetrievalEnvelope
 ```
 
-Fast path: steps 5 and 7 are skipped.
+The encode → hybrid → (rerank) → score → (lineage) work happens **inside each runner**, per target: see [[05-retrieval/fast-path]] and [[05-retrieval/deep-path]].
 
 ## Step-by-step semantics
 
 ### 1. Validate
 
-```python
-try:
-    query = RetrievalQuery.model_validate(query.model_dump())  # idempotent
-except ValidationError as e:
-    return Err(RetrievalError.bad_query(e))
+`retrieve()` re-validates the query as the internal `RetrievalQuery` model. A validation failure returns `Err(RetrievalError(kind="bad_query", ...))`. Ranked modes require non-empty `query_text`; `recent` may omit it.
 
-if not _authorize(query.namespace, current_token):
-    return Err(RetrievalError.forbidden())
-```
+Authorization is **not** done here. The HTTP router resolves the namespace targets and checks each one against the token's scope before it calls `retrieve()` (see [[10-security/auth]] and [[05-retrieval/auth001-token-scope]]).
 
-Authorization: namespace must be in the token scope. See [[10-security/auth]].
+### 2. Expand targets
 
-### 2. Encode
+If the router supplied `namespace_targets`, each becomes one `(namespace, plane)` target. Otherwise a single target is derived from the three-segment `namespace` (direct callers that bypass the router).
 
-```python
-dense, sparse = await encode_query(tei, query.query_text)
-```
+### 3. Run each target
 
-Cache: in-memory LRU, keyed by raw text. See [[05-retrieval/hybrid-search#caching]].
+Each target runs one single-plane pipeline through `_run_single`, which dispatches on `mode`:
 
-### 3. Hybrid fan-out
+- **fast** — `run_fast_retrieve` (`src/musubi/retrieve/fast.py`) under `fast_timing.whole_timeout_s`. The query is encoded inside each target run, so "encode once" holds per target, not per request.
+- **deep** — `run_deep_retrieve` (`src/musubi/retrieve/deep.py`) under a 5 s deadline.
+- **blended** — `run_blended_retrieve` (`src/musubi/retrieve/blended.py`) under a 5 s deadline; it runs deep internally.
+- **recent** — `run_recent_retrieve` (`src/musubi/retrieve/recent.py`) under a 2 s deadline.
 
-```python
-tasks = [
-    hybrid_plane(client, plane=p, query=query, dense=dense, sparse=sparse)
-    for p in query.planes
-]
-per_plane = await asyncio.gather(*tasks, return_exceptions=True)
-```
+Targets run concurrently with `asyncio.gather(return_exceptions=True)`. A single target goes straight to step 5 with no merge.
 
-Each `hybrid_plane` call returns a list of `Hit` or an Exception. Exceptions are logged and produce a warning in the response; they don't fail the whole retrieval.
+Per-target outcomes:
 
-### 4. Merge + dedup
+- `kind="timeout"` → warning `plane_timeout_<plane>`; the other targets continue.
+- `kind="internal"` or `"bad_query"` from any target → the whole call returns that error, because a merged response would silently under-report.
+- A raised exception → `kind="internal"`.
+- If every target timed out and nothing survived → `Err(kind="timeout")`.
 
-```python
-flat: list[Hit] = [h for plane_hits in per_plane if isinstance(plane_hits, list) for h in plane_hits]
-flat = dedup_content(flat, similarity_threshold=0.92)
-flat = drop_lineage_ancestors(flat)   # concept if curated derived from it is also present
-```
+### 4. Calibrate + merge (multi-target only)
 
-See [[05-retrieval/blended]] for the full merge algorithm.
+Each leg scored relevance against its own batch maximum, so leg scores are not directly comparable. The RET-012 seam (`calibrate_global_relevance`, `src/musubi/retrieve/scoring.py`) re-anchors every candidate against the working-set maximum **before** dedup; see [[05-retrieval/cross-plane-ranking]].
 
-### 5. Rerank (deep only)
+The merge then keeps the highest-scoring copy **per `object_id`** (equal scores: the lexicographically smaller plane wins). This merge does no content-similarity or lineage dedup; that happens only inside `blended`. The final sort key is `(-score, object_id, plane)`.
 
-```python
-if query.mode == "deep" and len(flat) >= 5:
-    try:
-        flat = await rerank(tei, query.query_text, flat, top_k=query.limit * 3)
-    except TEIUnavailable:
-        warnings.append("rerank unavailable; using hybrid-only relevance")
-```
+### 5. Limit
 
-See [[05-retrieval/reranker]].
+`results[: query.limit]`.
 
-### 6. Score
-
-```python
-now_epoch = now or time.time()
-for h in flat:
-    h.score, h.score_components = score(h, now=now_epoch)
-flat.sort(key=lambda h: (-h.score, h.object_id))  # deterministic tiebreak
-```
-
-### 7. Lineage hydrate (deep only)
-
-If `query.include_lineage == True` (default on deep, false on fast):
-
-- For each result whose content was truncated at index time (large curated), fetch the full body from vault.
-- For results with `superseded_by`, attach the chain head metadata.
-- For artifact chunks, attach the parent artifact's title + source_ref.
-
-Each hydration is a targeted read; parallelized via `asyncio.gather`.
-
-**Hydration does NOT account access (RET-002).** Lineage reads use `bump_access=False`; a
-lineage-walk hop is never a delivered row and is never accounted. All access accounting
-happens once at step 9, on the final delivered set.
-
-### 8. Pack
-
-```python
-results = [
-    RetrievalResult(
-        object_id=h.object_id,
-        namespace=h.namespace,
-        plane=h.plane,
-        title=h.title,
-        snippet=_snippet(h, max_chars=300 if query.mode == "deep" else 200),
-        score=h.score,
-        score_components=h.score_components,
-        lineage=_summarize_lineage(h),
-        payload=h.payload if not query.brief else None,
-    )
-    for h in flat[: query.limit]
-]
-return Ok(results)
-```
-
-### 9. Account access (final delivery boundary — RET-002 / #500)
+### 6. Account access (final delivery boundary — RET-002 / #500)
 
 After the envelope is finalized (fanout, dedup, sort, and limit all applied), account each
 **delivered** row exactly once — never a dropped candidate, and identically whether or not
@@ -196,15 +136,15 @@ boundary exactly once:
 
 ## Timeouts (layered)
 
-| Layer | Fast | Deep |
-|---|---|---|
-| Whole `retrieve()` | 400ms | 5s |
-| Query encoding | 80ms | 150ms |
-| Per-plane hybrid | 250ms | 1500ms |
-| Reranker | — | 1500ms |
-| Lineage hydrate | — | 500ms |
+| Layer | Fast | Deep | Blended | Recent |
+|---|---|---|---|---|
+| Whole target run | `retrieval_fast_whole_timeout_s` (0.4 s) | 5 s | 5 s | 2 s |
+| Query encoding | `retrieval_fast_encoding_timeout_s` (0.25 s) | sparse 1.0 s, then dense-only | as deep | — |
+| Per-plane hybrid | `retrieval_fast_plane_timeout_s` (0.25 s) | 1.5 s | as deep | — |
+| Reranker | — | `retrieval_rerank_timeout_s` (1.5 s) | as deep | — |
+| Lineage hydrate | — | `retrieval_lineage_timeout_s` (0.5 s per hit) | as deep | — |
 
-Whole-call timeout wraps everything with `asyncio.wait_for`. Sub-timeouts use `asyncio.wait_for` individually and produce warnings on hit.
+The whole-run deadline wraps each target with `asyncio.wait_for`. Sub-stage timeouts degrade rather than fail where the stage is optional.
 
 The deep-stage budgets are runtime settings, not call-site literals:
 `retrieval_rerank_timeout_s` defaults to `1.5` and
@@ -213,7 +153,9 @@ below the whole-call budget in production configuration. Rerank expiry returns
 the hybrid ordering with `reranker_failed` plus a bounded additive cause code;
 lineage expiry returns the affected
 hit without hydrated lineage. Neither optional stage may consume the whole-call
-budget and turn an otherwise healthy retrieval into a 503.
+budget and turn an otherwise healthy retrieval into a 503. The deep per-plane
+hybrid (1.5 s) and sparse-encoding (1.0 s) budgets are code defaults in
+`src/musubi/retrieve/deep.py`, not settings.
 
 Hybrid Qdrant queries, authoritative-anchor resolution, and deep lineage
 hydration use the synchronous Qdrant client. The deep/hybrid orchestrator
@@ -236,15 +178,15 @@ Plane `get` methods used there must complete without suspending on a loop-bound
 awaitable; the seam detects suspension and fails explicitly so future async I/O
 cannot be driven on a fresh worker-thread event loop by accident.
 
-The 1.5 s rerank default is calibrated from the 2026-08-12 production-shaped
-ten-caller burst: p50 0.684 s, p95 1.226 s, and p99 1.268 s for 200 candidate
-predictions. The prior 800 ms value sat only 125 ms above an observed 675 ms
-average and would have converted the 503 cliff into routine hybrid-only
+The 1.5 s rerank default is calibrated from a ten-caller burst on the
+reference deployment: p50 0.684 s, p95 1.226 s, and p99 1.268 s for 200
+candidate predictions. The prior 800 ms value sat only 125 ms above an observed
+675 ms average and would have converted the 503 cliff into routine hybrid-only
 degradation under load.
 
 ## Error propagation
 
-Musubi uses `Result[T, E]` for this function (see `preserved`). The error variant:
+`retrieve()` returns `Result[RetrievalEnvelope, RetrievalError]` (`Result`, `Ok` and `Err` live in `src/musubi/types/common.py`). The error variant:
 
 ```python
 class RetrievalError(BaseModel):
@@ -253,7 +195,7 @@ class RetrievalError(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 ```
 
-Success variant carries a `warnings` list too (non-fatal issues). Callers check `is_ok` and inspect `warnings` for partial-degradation signaling.
+The success variant carries structured `warnings` (`RetrievalWarning`: `code`, `plane`, optional reranker `cause`; `src/musubi/retrieve/warnings.py`). The router maps `kind` to HTTP: `bad_query` → 400, `forbidden` → 403, `timeout` → 503 `BACKEND_UNAVAILABLE`, `internal` → 500.
 
 ### Exhaustive sub-layer code classification
 
@@ -281,14 +223,13 @@ that makes those inputs unreachable is asserted by
 
 ## Observability hooks
 
-Every step emits:
+`_finalize` is the one place retrieval telemetry is counted (`src/musubi/observability/retrieval_metrics.py`):
 
-- `retrieval.step_latency_ms{step=1..8, mode=fast|deep}` histogram
-- `retrieval.plane_hits_count{plane=...}` histogram
-- `retrieval.warnings{reason=...}` counter
-- `retrieval.result_count{mode=...}` histogram
+- `musubi_retrieval_warnings_total{warning, plane}` — once per distinct warning on a degraded success.
+- `musubi_retrieval_errors_total{kind}` — once per total-failure request.
+- `musubi_reranker_degradation_causes_total{cause, plane}` — bounded reranker cause detail.
 
-Traces (OpenTelemetry) span the full `retrieve()` call with child spans per step. Hooks in `musubi/observability/tracing.py`.
+Only allowlisted warnings survive onto the envelope, so a free-text code can never become a Prometheus label. There are no per-step latency or result-count histograms. Tracing (OpenTelemetry) wraps the call in one `retrieve.orchestration` span with namespace, mode, limit and target-count attributes; it is a no-op unless OTLP export is configured (`src/musubi/observability/tracing.py`).
 
 ## Idempotency + determinism
 
@@ -298,11 +239,11 @@ Given:
 - same `now`
 - same weights
 
-the pipeline returns byte-identical results. Tests rely on this. RNG is banned; any randomness in upstream libs (Qdrant has none; TEI is deterministic for fixed weights) is either seeded or caught via an allow-list.
+the pipeline returns identical results. Tests rely on this. RNG is banned; any randomness in upstream libs (Qdrant has none; TEI is deterministic for fixed weights) is either seeded or caught via an allow-list.
 
 ## Test Contract
 
-**Module under test:** `musubi/retrieval/orchestration.py`
+**Module under test:** `src/musubi/retrieve/orchestration.py`
 
 Structural:
 
@@ -320,68 +261,70 @@ Concurrency:
 Timeouts:
 
 8. `test_whole_call_timeout_fast_400ms`
-9. `test_per_plane_timeout_deep_1500ms`
-10. `test_rerank_timeout_returns_with_warning`
+9. `test_fast_timing_override_reaches_pipeline_and_whole_call`
+10. `test_per_plane_timeout_deep_1500ms`
+11. `test_rerank_timeout_returns_with_warning`
 
 Determinism:
 
-11. `test_deterministic_for_fixed_inputs`
-12. `test_tiebreak_on_object_id`
+12. `test_deterministic_for_fixed_inputs`
+13. `test_tiebreak_on_object_id`
 
 Error paths:
 
-13. `test_bad_query_returns_typed_error`
-14. `test_forbidden_namespace_returns_typed_error`
-15. `test_partial_plane_failure_returns_partial_with_warning`
+14. `test_bad_query_returns_typed_error`
+15. `test_no_retrieval_channels_is_classified_as_bad_query`
+16. `test_forbidden_namespace_returns_typed_error` — deferred (skipped stub: authorization is enforced at the HTTP boundary, not in `retrieve()`)
+17. `test_partial_plane_failure_returns_partial_with_warning`
 
-Integration:
+Integration (deferred: skipped stubs):
 
-16. `integration: end-to-end fast-path on 10K corpus with real TEI + Qdrant, p95 ≤ 400ms`
-17. `integration: end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold`
-18. `integration: kill TEI mid-request, pipeline returns with documented degradation`
+18. `test_integration_end_to_end_fast_path_on_10K_corpus_with_real_TEI_Qdrant_p95_le_400ms` — deferred
+19. `test_integration_end_to_end_deep_path_with_rerank_NDCG_10_on_golden_set_ge_threshold` — deferred
+20. `test_integration_kill_TEI_mid_request_pipeline_returns_with_documented_degradation` — deferred
 
 Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_access_accounting.py`,
 `tests/api/test_ret002_streaming_access.py`, and `tests/api/test_ret002_context_accounting.py`:
 
-19. `test_delivered_episodic_row_accounted_once_per_mode`
-20. `test_deep_include_lineage_false_still_accounts_delivered`
-21. `test_deep_accounting_identical_regardless_of_include_lineage`
-22. `test_limit_drop_accounts_only_delivered_not_dropped_candidates`
-23. `test_delivered_curated_row_accounted`
-24. `test_delivered_concept_row_accounted`
-25. `test_non_accountable_plane_delivery_is_noop`
-26. `test_account_delivered_scopes_to_exact_namespace_object_id_pair`
-27. `test_accounting_is_batched_per_collection_not_n_plus_1`
-28. `test_streaming_retrieval_accounts_each_delivered_row_once`
-29. `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates`
-30. `test_retrieve_normalizes_accounting_failure_to_typed_err`
-31. `test_context_accounting_failure_returns_internal_not_raw`
+21. `test_delivered_episodic_row_accounted_once_per_mode`
+22. `test_deep_include_lineage_false_still_accounts_delivered`
+23. `test_deep_accounting_identical_regardless_of_include_lineage`
+24. `test_limit_drop_accounts_only_delivered_not_dropped_candidates`
+25. `test_delivered_curated_row_accounted`
+26. `test_delivered_concept_row_accounted`
+27. `test_non_accountable_plane_delivery_is_noop`
+28. `test_account_delivered_scopes_to_exact_namespace_object_id_pair`
+29. `test_accounting_is_batched_per_collection_not_n_plus_1`
+30. `test_streaming_retrieval_accounts_each_delivered_row_once`
+31. `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates`
+32. `test_retrieve_normalizes_accounting_failure_to_typed_err`
+33. `test_context_accounting_failure_returns_internal_not_raw`
 
 Exhaustive error classification (RET-014 / #619):
 
-32. `test_every_literal_retrieve_error_code_has_an_explicit_classification`
-33. `test_existing_error_code_classifications_preserve_their_semantics`
-34. `test_unknown_retrieve_error_code_is_rejected_instead_of_implicitly_internal`
-35. `test_intentional_internal_error_codes_are_named_and_complete`
-36. `test_error_code_collector_rejects_new_unrecognised_code_callee`
-37. `test_error_code_collector_accounts_for_dynamic_forwarding_sites`
-38. `test_error_code_collector_walks_both_conditional_expression_arms`
-39. `test_retrieval_error_construction_remains_closed_over_retrieve_package`
-40. `test_sparse_embedding_failed_remains_distinct_in_error_and_warning_taxonomies`
+34. `test_every_literal_retrieve_error_code_has_an_explicit_classification`
+35. `test_existing_error_code_classifications_preserve_their_semantics`
+36. `test_unknown_retrieve_error_code_is_rejected_instead_of_implicitly_internal`
+37. `test_intentional_internal_error_codes_are_named_and_complete`
+38. `test_error_code_collector_rejects_new_unrecognised_code_callee`
+39. `test_error_code_collector_accounts_for_dynamic_forwarding_sites`
+40. `test_error_code_collector_walks_both_conditional_expression_arms`
+41. `test_retrieval_error_construction_remains_closed_over_retrieve_package`
+42. `test_sparse_embedding_failed_remains_distinct_in_error_and_warning_taxonomies`
 
 
 Grapheme-safe truncation:
-41. `test_truncation_bypasses_short_text`
-42. `test_truncation_cuts_at_grapheme_boundaries_safely`
-43. `test_truncation_respects_max_chars_lte_3`
-44. `test_truncation_prevents_emoji_zwj_bisection`
-45. `test_truncation_preserves_single_emoji`
-46. `test_truncation_prevents_combined_diacritic_bisection`
-47. `test_truncation_prevents_regional_indicator_bisection`
-48. `test_truncation_preserves_internal_whitespace`
-49. `test_truncation_preserves_trailing_whitespace_if_within_budget`
-50. `test_truncation_prevents_skin_tone_modifier_bisection`
-51. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
-52. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
-53. `test_orchestration_uses_grapheme_truncation_for_long_content`
-54. `test_context_pack_uses_grapheme_truncation_for_long_content`
+43. `test_truncation_bypasses_short_text`
+44. `test_truncation_cuts_at_grapheme_boundaries_safely`
+45. `test_truncation_respects_max_chars_lte_3`
+46. `test_truncation_prevents_emoji_zwj_bisection`
+47. `test_truncation_preserves_single_emoji`
+48. `test_truncation_prevents_combined_diacritic_bisection`
+49. `test_truncation_prevents_regional_indicator_bisection`
+50. `test_truncation_preserves_internal_whitespace`
+51. `test_truncation_preserves_trailing_whitespace_if_within_budget`
+52. `test_truncation_prevents_skin_tone_modifier_bisection`
+53. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
+54. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
+55. `test_orchestration_uses_grapheme_truncation_for_long_content`
+56. `test_context_pack_uses_grapheme_truncation_for_long_content`

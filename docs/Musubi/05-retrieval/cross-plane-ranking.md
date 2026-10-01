@@ -4,7 +4,7 @@ section: 05-retrieval
 type: contract
 status: active
 tags: [section/retrieval, status/active, type/contract]
-updated: 2026-07-15
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 ---
@@ -21,7 +21,7 @@ A weak plane's sole hit must not become maximally relevant merely by being alone
 - When a leg carries only a `raw_rrf_score` (fast mode), the leg's relevance is `_clamp01(raw_rrf_score / global_max)`.
 - When a leg carries neither (recent mode), the leg's `score` and `score_components` are passed through unchanged.
 - The seam runs over the full pre-dedup candidate list, then the existing `best_by_id` dedup picks the highest-recalibrated copy per `object_id`. Calibrating after dedup can permanently discard the better copy using the bad per-leg score.
-- The final sort key is `(-score, object_id, plane)`. The current multi-target sort has no secondary key.
+- The final sort key is `(-score, object_id, plane)` (`src/musubi/retrieve/orchestration.py`). The dedup's tie-break mirrors it: on equal scores, the copy from the lexicographically smaller plane wins.
 - The seam is gated on the multi-target branch only. The `len(targets) == 1` branch is bit-for-bit unchanged.
 - The two optional raw fields (`raw_rrf_score`, `raw_rerank_score`) live on the internal `RetrievalResult` only. They are not projected onto the wire models (`RankedResultRow`, `RecentResultRow`, `ContextPackItem`).
 

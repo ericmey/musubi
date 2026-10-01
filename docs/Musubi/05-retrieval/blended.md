@@ -4,14 +4,14 @@ section: 05-retrieval
 tags: [blending, dedup, planes, retrieval, section/retrieval, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 implements: ["src/musubi/retrieve/blended.py", "tests/retrieve/test_blended.py"]
 ---
 # Blended Retrieval
 
-A single query that returns the best results from multiple planes. This is the default mode for human-facing assistants ("help me remember…") and for coding-agent planning.
+A single query that returns the best results from multiple planes, with cross-plane deduplication. Select it with `mode="blended"`.
 
 ## Why blend
 
@@ -25,28 +25,28 @@ Blended retrieval centralizes this in the Core.
 
 ## The merge algorithm
 
-Input: `list[list[Hit]]` — one list per plane queried. Each hit is already RRF-scored within its plane.
+`run_blended_retrieve` (`src/musubi/retrieve/blended.py`) runs a **full deep retrieval per plane**: each leg is its own `run_deep_retrieve` call (hybrid → cross-encoder rerank → score → lineage hydrate) with `limit = query.limit * 2`. Blended always runs deep internally. Then:
 
 ```
-1. Flatten into a single list.
-2. Content-dedup (fuzzy, hash+Jaccard).
-3. Lineage-aware drop (concept→curated collapse).
-4. Rerank (deep only) — plane-agnostic.
-5. Unified score.
-6. Sort desc.
-7. Trim to limit.
+1. Flatten the per-plane ScoredHits into a single list.
+2. Content-dedup (hash, or tag-Jaccard + cosine).
+3. Lineage-aware drop (concept→curated collapse, supersession).
+4. Sort by the existing score, desc.
+5. Trim to limit.
 ```
+
+There is no separate rerank or rescoring after the merge: each hit keeps the score its deep leg gave it.
 
 ### Content dedup
 
 Two hits are "duplicates" if:
 
-- Their first-300-char content hash matches exactly, OR
+- Their first-300-character content SHA-256 hashes match exactly, OR
 - Their tag-set Jaccard ≥ 0.5 AND their content cosine similarity ≥ 0.92.
 
-Fast path uses only the hash check (cheaper). Deep path uses both.
+For the cosine check, blended first collects every candidate pair that passes the Jaccard test, then embeds the first 500 characters of each candidate's content in **one batched `embed_dense` call** and compares those vectors.
 
-When duplicates are found, we keep the one with highest provenance (curated > concept > episodic-matured > episodic-provisional), and if tied, highest score.
+Before dedup, hits are sorted by provenance (curated > concept > episodic-matured/promoted > episodic-provisional), then by score, so the kept copy is the one with the highest provenance, and if tied, the highest score.
 
 ### Lineage-aware drop
 
@@ -58,39 +58,35 @@ Algorithm:
 promoted_curateds = {h.object_id for h in hits if h.plane == "curated"}
 to_drop = {
     h.object_id for h in hits
-    if h.plane == "concept" and h.promoted_to in promoted_curateds
+    if h.plane == "concept" and h.lineage.promoted_to.object_id in promoted_curateds
 }
-hits = [h for h in hits if h.object_id not in to_drop]
 ```
 
 Symmetric rule for supersession:
 
 ```python
-to_drop |= {h.object_id for h in hits if h.superseded_by in {x.object_id for x in hits}}
+to_drop |= {h.object_id for h in hits if h.lineage.superseded_by.object_id in {x.object_id for x in hits}}
 ```
 
-A hit that's been superseded, if its superseder is also in the result set, is dropped. If the superseder isn't in the result set, the old hit stays (user wanted it for a reason; we don't hide it silently).
+A hit that's been superseded, if its superseder is also in the result set, is dropped. If the superseder isn't in the result set, the old hit stays (the caller wanted it for a reason; we don't hide it silently). Both rules read the lineage that the deep leg hydrated.
 
-### Plane-agnostic rerank
+### Rerank happens inside each leg
 
-See [[05-retrieval/reranker]]. All hits are fed flat to the reranker; plane doesn't influence the cross-encoder score. Provenance weighting re-enters at the scoring step.
+Each deep leg reranks its own candidates with the cross-encoder (see [[05-retrieval/reranker]]); plane does not influence the cross-encoder score. Provenance enters through the unified score each leg computes. The merge sorts on those existing scores.
+
+### Through `/v1/retrieve`
+
+The orchestrator splits every request into one target per `(namespace, plane)` and runs `run_blended_retrieve` once per target with a single plane ([[05-retrieval/orchestration]]). So over HTTP, content dedup and lineage drops apply to the hits **within each target**, and the cross-target merge afterwards dedups by `object_id` only. Cross-plane content dedup and the concept→curated drop only take effect when `run_blended_retrieve` is called directly with several planes.
 
 ## Default plane scope
 
 ```python
-DEFAULT_PLANES = ["curated", "concept", "episodic"]
+planes = ("curated", "concept", "episodic")   # BlendedRetrievalQuery default
 ```
 
-Artifacts are not in the default set because artifact chunks are usually too granular for blended — they're queried explicitly when a citation is being resolved. Callers can opt in:
+Artifacts are not in the default set because artifact chunks are usually too granular for blended — they're queried explicitly when a citation is being resolved. Callers can opt in with `planes=["curated", "concept", "episodic", "artifact"]`.
 
-```python
-query = RetrievalQuery(
-    ...,
-    planes=["curated", "concept", "episodic", "artifact"],
-)
-```
-
-With artifacts enabled, chunks surface alongside the other planes. Chunks are scored with provenance 0.7 (see [[05-retrieval/scoring-model]]).
+With artifacts enabled, chunks surface alongside the other planes, scored with the same unified scorer (see [[05-retrieval/scoring-model]]).
 
 ## Namespace scope
 
@@ -108,47 +104,48 @@ See [[10-security/auth]] for the token-scope mapping.
 
 ## Score normalization within a blend
 
-Before scoring, per-plane `rrf_score` values need normalizing to [0, 1] within the batch. We do this once on the flattened list:
-
-```python
-batch_max = max(h.rrf_score for h in hits) or 1.0
-for h in hits:
-    h.relevance_normalized = h.rrf_score / batch_max
-```
-
-Then the unified scorer consumes `relevance_normalized`. This approach handles the case where one plane has systematically higher RRF scores than another (e.g., small curated collection → less rank-collision → higher RRF peaks).
+Not implemented as a separate step. Blended does not re-normalize RRF across planes; it sorts on the scores the deep legs already produced (relevance there is the sigmoid of the cross-encoder score when the leg reranked). Across targets, the orchestrator's RET-012 seam re-anchors relevance before the merge ([[05-retrieval/cross-plane-ranking]]).
 
 ## When blend is wrong
 
 Blended is wrong when the caller knows exactly which plane it wants:
 
 - "Show me the runbook for deploying the voice agent" → **curated only**, top-1.
-- "What did Claude say about the GPU check this morning?" → **episodic** filtered on capture_presence.
+- "What did the assistant say about the release check this morning?" → **episodic** for that presence.
 
-Both cases are expressible via `planes=[...]` on `RetrievalQuery`. Don't blend when you shouldn't.
+Both cases are expressible via `planes=[...]` and an explicit namespace. Don't blend when you shouldn't.
 
 ## Edge cases
 
 ### Empty single plane
 
-If one plane returns zero hits, the merge treats it as an empty list and proceeds. No error.
+If one plane returns zero hits, the merge treats it as an empty list and proceeds. No error, no warning.
 
 ### All planes empty
 
-Results = `[]`, response is 200 with `warnings: ["no hits in any plane"]`. Caller decides next step.
+Results = `[]` with **no** warning: a plane that ran and matched nothing is healthy. Only genuine degradation (a failed plane leg, a sparse fallback, a reranker fallback) adds a warning.
+
+### Plane failures
+
+A failed leg adds `plane_timeout_<plane>` (timeout) or `plane_error_<plane>` (other errors) and the other planes continue. If every leg fails, the result is an error: `all_planes_timeout` when they all timed out, otherwise `all_planes_failed`.
 
 ### Massive skew
 
-If one plane returns 100 hits and another returns 2, we still rerank everything together — the cross-encoder is plane-agnostic. No per-plane rate-limiting at the merge step.
+If one plane returns 100 hits and another returns 2, each is reranked within its own leg and all survivors compete on score at the merge. No per-plane rate-limiting at the merge step.
 
 ### Cross-namespace retrieval
 
-Use a scoped wildcard retrieve to search multiple namespaces. Token scope must
-cover the requested tenant; cross-tenant retrieval remains disallowed in v1.
+Use a wildcard retrieve to search multiple namespaces. `alex/*/episodic` spans
+every presence in one tenant; `*/voice/curated` spans tenants for one presence.
+Wildcards are expanded against the stored data, and the token needs read scope on
+every expanded target or the request is refused (`src/musubi/api/routers/retrieve.py:24-30`).
+Cross-tenant retrieval therefore requires a wildcard-tenant scope such as
+`*/*/episodic:r`; a scope that names a concrete tenant must name the token's own
+(`src/musubi/auth/tokens.py:228-245`).
 
 ## Test Contract
 
-**Module under test:** `musubi/retrieval/blending.py`
+**Module under test:** `src/musubi/retrieve/blended.py`
 
 Merge:
 
@@ -168,25 +165,22 @@ Scope:
 
 9. `test_default_planes_cover_curated_concept_episodic`
 10. `test_artifact_opted_in_surfaces_chunks`
-11. `test_legacy_blended_namespace_fails_instead_of_using_house_presences`
+11. `test_legacy_blended_namespace_requires_explicit_presences`
 
-Scoring:
+Scoring (deferred: empty stubs):
 
-12. `test_relevance_normalized_across_planes_pre_score`
-13. `test_plane_agnostic_rerank_orders_ignoring_plane`
-14. `test_provenance_still_influences_final_rank`
+12. `test_relevance_normalized_across_planes_pre_score` — deferred
+13. `test_plane_agnostic_rerank_orders_ignoring_plane` — deferred
+14. `test_provenance_still_influences_final_rank` — deferred
 
 Edge cases:
 
 15. `test_one_plane_empty_merge_succeeds`
-16. `test_all_planes_empty_returns_empty_warning`
-17. `test_cross_tenant_blend_forbidden`
+16. `test_all_planes_empty_returns_empty_warning` (asserts no warning on a healthy empty result)
+17. `test_cross_tenant_blend_forbidden` — deferred (empty stub; enforced by the auth layer)
 
-Property:
+Property and integration (deferred: skipped stubs):
 
-18. `hypothesis: blend result contains no pair of lineage-ancestor + descendant`
-19. `hypothesis: content dedup is idempotent`
-
-Integration:
-
-20. `integration: real corpus with 3 planes, blended vs per-plane manual shows dedup removes ~10% of redundant hits`
+18. `test_hypothesis_blend_result_contains_no_pair_of_lineage_ancestor_and_descendant` — deferred
+19. `test_hypothesis_content_dedup_is_idempotent` — deferred
+20. `test_integration_real_corpus_with_3_planes_blended_vs_per_plane_manual_shows_dedup_removes_10_percent_redundant_hits` — deferred

@@ -4,8 +4,9 @@ section: 05-retrieval
 type: spec
 status: complete
 tags: [section/retrieval, type/spec, status/complete, rerank, batching]
-updated: 2026-08-12
+updated: 2026-10-01
 reviewed: false
+up: "[[05-retrieval/index]]"
 implements: ["src/musubi/embedding/tei.py", "src/musubi/retrieve/rerank.py", "tests/test_embedding.py", "tests/retrieve/test_rerank.py"]
 ---
 
@@ -23,11 +24,11 @@ for reranking, preserving startup while avoiding the previously unsafe 64-item
 embedding assumption. Direct client construction may still provide an explicit
 ceiling for tests or deliberately pinned callers.
 
-Production measurement on 2026-08-14 used the live advertised reranker
-ceiling of 32 and 80 candidates (three sequential chunks). Ten runs from the
-Musubi consumer container measured 0.091 s minimum, 0.094 s median, and
+A measurement on the reference deployment used an advertised reranker
+ceiling of 32 and 80 candidates (three sequential chunks). Ten runs from a
+client on the same host measured 0.091 s minimum, 0.094 s median, and
 0.146 s maximum. Every run remained below the RET-015 1.5-second outer rerank
-budget; contract discovery therefore removes ceiling drift without making
+budget (`retrieval_rerank_timeout_s`); contract discovery therefore removes ceiling drift without making
 ordinary three-chunk reranks consume the optional-stage deadline.
 
 TEI response indexes are local to each request and may arrive in score order.
