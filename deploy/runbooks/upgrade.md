@@ -183,6 +183,7 @@ Single-line diff in `group_vars/all.yml`. PR greens on CI.
 
 ```bash
 export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
+export MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json
 ansible-playbook \
  -i deploy/ansible/inventory.yml \
  -e @~/.musubi-secrets/inventory-vars.yml \
@@ -211,6 +212,7 @@ ansible-playbook \
 
 ```bash
 export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
+export MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json
 ansible-playbook \
  -i deploy/ansible/inventory.yml \
  -e @~/.musubi-secrets/inventory-vars.yml \
@@ -306,6 +308,7 @@ git -C ~/musubi push origin main
 
 # Re-run update.yml:
 export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
+export MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json
 ansible-playbook \
  -i deploy/ansible/inventory.yml \
  -e @~/.musubi-secrets/inventory-vars.yml \

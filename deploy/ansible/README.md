@@ -81,15 +81,19 @@ Where `<playbook>` is one of `bootstrap`, `config`, `deploy`, `update`, or
 `health`.
 
 `update.yml` Core/lifecycle-worker applies additionally require an explicit
-minimal validator environment on the control host:
+minimal validator environment and operator-owned credential inventory on the
+control host:
 
 ```bash
 MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
+  MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json \
   scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
 That root-readable env contains exactly one `JWT_SIGNING_KEY` and one
-`OAUTH_AUTHORITY`. Before mounting that file or the credential directory, the
+`OAUTH_AUTHORITY`. The manifest lists the operator's live credentials; use
+`deploy/credential-preflight.example.json` as a schema example and keep the
+filled inventory outside the repository. Before mounting these files or the credential directory, the
 playbook verifies the exact digest's cosign identity. The candidate rejects
 unknown or duplicate authority keys, runs as the controller UID/GID, inventories
 every `musubi-mcp*.env`, and fails before touching the workload host if any file

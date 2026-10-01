@@ -42,7 +42,7 @@
       {{ lookup('env', 'MUSUBI_CREDENTIAL_DIR')
          | default(lookup('env', 'HOME') + '/.musubi', true) }}
     candidate_preflight_authority_env: "{{ lookup('env', 'MUSUBI_PREFLIGHT_AUTHORITY_ENV') }}"
-    candidate_preflight_manifest: "{{ playbook_dir }}/../credential-preflight.json"
+    candidate_preflight_manifest: "{{ lookup('env', 'MUSUBI_PREFLIGHT_MANIFEST') }}"
     # Every task below uses THIS, never `changed_services` directly.
     # Only JSON-looking strings are parsed; anything else passes through
     # unchanged so the assert below reports it with a usable message instead
@@ -85,6 +85,21 @@
         - not ansible_check_mode
         - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
 
+    - name: Require an explicit candidate preflight manifest
+      ansible.builtin.assert:
+        that:
+          - candidate_preflight_manifest | length > 0
+          - candidate_preflight_manifest is match('^/')
+        fail_msg: >-
+          Set MUSUBI_PREFLIGHT_MANIFEST to an absolute path to an operator-owned manifest
+          declaring the live credential inventory before a Core update.
+        quiet: true
+      delegate_to: localhost
+      become: false
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
+
     - name: Inspect candidate preflight inputs on the controller
       ansible.builtin.stat:
         path: "{{ item }}"
@@ -108,9 +123,9 @@
           - candidate_preflight_inputs.results[2].stat.isreg | default(false)
           - musubi_core_image is match('^ghcr[.]io/(ericmey|sourceblender)/musubi-core@sha256:[0-9a-f]{64}$')
         fail_msg: >-
-          Core update is not armed: set MUSUBI_PREFLIGHT_AUTHORITY_ENV to an
-          explicit server/preflight env, provide every configured credential,
-          and select an exact musubi-core sha256 digest.
+          Core update is not armed: set MUSUBI_PREFLIGHT_AUTHORITY_ENV and
+          MUSUBI_PREFLIGHT_MANIFEST to readable operator-owned files, provide
+          every configured credential, and select an exact musubi-core sha256 digest.
         quiet: true
       delegate_to: localhost
       become: false

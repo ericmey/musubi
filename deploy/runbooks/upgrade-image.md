@@ -111,6 +111,7 @@ git pull --ff-only origin main
 export CANDIDATE_IMAGE=ghcr.io/<owner>/musubi-core@sha256:<paste digest here>
 export MUSUBI_CREDENTIAL_DIR=~/.musubi
 export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
+export MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json
 
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/\.github/workflows/publish-core-image\.yml@refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$' \
@@ -122,7 +123,7 @@ docker run --rm \
   --entrypoint python \
   --mount "type=bind,src=${MUSUBI_PREFLIGHT_AUTHORITY_ENV},dst=/preflight/authority.env,readonly" \
   --mount "type=bind,src=${MUSUBI_CREDENTIAL_DIR},dst=/credentials,readonly" \
-  --mount "type=bind,src=${PWD}/deploy/credential-preflight.json,dst=/preflight/manifest.json,readonly" \
+  --mount "type=bind,src=${MUSUBI_PREFLIGHT_MANIFEST},dst=/preflight/manifest.json,readonly" \
   "${CANDIDATE_IMAGE}" \
   -m musubi.auth.credential_preflight \
   --manifest /preflight/manifest.json \
@@ -134,6 +135,7 @@ gh pr merge <number> --squash
 git pull --ff-only
 # ANSIBLE_VAULT_PASSWORD_FILE must already be exported (deploy/ansible/README.md).
 MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
+  MUSUBI_PREFLIGHT_MANIFEST=/absolute/path/to/operator-manifest.json \
   scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
@@ -151,7 +153,11 @@ caller-provided attestation, so direct Core updates run the same gate.
 `MUSUBI_PREFLIGHT_AUTHORITY_ENV` must name a minimal env containing exactly one
 `JWT_SIGNING_KEY` and one `OAUTH_AUTHORITY`; it is mounted rather than injected
 wholesale, and duplicate or unknown keys fail closed. `MUSUBI_CREDENTIAL_DIR`
-may override the default `~/.musubi` directory.
+may override the default `~/.musubi` directory. `MUSUBI_PREFLIGHT_MANIFEST`
+must name the operator's live credential inventory; start from
+`deploy/credential-preflight.example.json` and classify every discovered
+credential. A missing manifest or empty live set fails before any service is
+recreated. Keep the filled manifest outside this repository.
 
 **Expected output:** `update.yml` reports one changed task (the
 `docker_compose_v2` task that recreates `core`). Everything else
