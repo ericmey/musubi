@@ -130,11 +130,8 @@ class RecentExtra(BaseModel):
 
     `score_components` is REQUIRED (no default) so OpenAPI lists it
     in the `required` set; a missing input fails the Pydantic model
-    validation (per Yua 2026-07-13 12:45:46 #3: "RecentExtra.score_components
-    has a default_factory, so missing input fabricates `{}` and
-    OpenAPI does not require it. Make it required; assert missing
-    and nonempty both reject, and required set includes
-    score_components.").
+    validation. A default factory would fabricate `{}` for missing input
+    and omit the field from OpenAPI's required set.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -146,7 +143,7 @@ class RecentExtra(BaseModel):
 class RankedResultRow(BaseModel):
     """One row in a ranked-mode response.
 
-    Required fields (per spec §4.3 + Yua 2026-07-13 11:57:59 #3):
+    Required fields (per spec §4.3):
     `object_id`, `namespace`, `plane`, `score`, `content`, `state`,
     `importance`, `score_kind`, `extra`. `title` is optional.
 
@@ -189,7 +186,7 @@ class RankedResultRow(BaseModel):
 class RecentResultRow(BaseModel):
     """One row in a recent-mode response.
 
-    Required fields (per spec §4.3 + Yua 2026-07-13 11:57:59 #3):
+    Required fields (per spec §4.3):
     `object_id`, `namespace`, `plane`, `score`, `content`, `state`,
     `importance`, `score_kind`, `provenance_score`, `extra`. `title`
     is optional.
@@ -252,7 +249,7 @@ class RankedRetrieveResponse(_RetrieveResponseBase):
     `mode` is the top-level discriminator (rows do NOT carry `mode`).
     The results list is concrete `list[RankedResultRow]` — NOT a
     Union — so a recent row cannot be smuggled into a ranked
-    response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
+    response. The OpenAPI schema
     is a list of `RankedResultRow`, not an `anyOf` of both row types.
     """
 
@@ -267,7 +264,7 @@ class RecentRetrieveResponse(_RetrieveResponseBase):
 
     The results list is concrete `list[RecentResultRow]` — NOT a
     Union — so a ranked row cannot be smuggled into a recent
-    response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
+    response. The OpenAPI schema
     is a list of `RecentResultRow`, not an `anyOf` of both row types.
     """
 

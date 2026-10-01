@@ -225,9 +225,6 @@ paths:
         nobody calls was fixed, and the path that actually failed in production was
         not.
 
-        (Yua, rev3 review of PR #398.)
-
-
         ``plane.delete()`` addresses the point by its deterministic ID, enforces the
         stored
 
@@ -2753,10 +2750,9 @@ components:
 
         have returned 400 to every retraction — shipping a memory-integrity fix that
 
-        disabled the tool for fixing memory. Caught by Yua in review of PR #398, and
-        the
+        disabled the tool for fixing memory. This docstring spells out why ``content``
 
-        reason this docstring now spells the contract out instead of leaving it implied.
+        remains part of the public PATCH contract.
 
 
         Note on vectors: ``content`` is patched via ``set_payload``, which does NOT
@@ -2872,7 +2868,7 @@ components:
       description: 'One row in a ranked-mode response.
 
 
-        Required fields (per spec §4.3 + Yua 2026-07-13 11:57:59 #3):
+        Required fields (per spec §4.3):
 
         `object_id`, `namespace`, `plane`, `score`, `content`, `state`,
 
@@ -2928,7 +2924,7 @@ components:
 
         Union — so a recent row cannot be smuggled into a ranked
 
-        response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
+        response. The OpenAPI schema
 
         is a list of `RankedResultRow`, not an `anyOf` of both row types.'
     RankedScoreComponents:
@@ -3198,15 +3194,9 @@ components:
 
         in the `required` set; a missing input fails the Pydantic model
 
-        validation (per Yua 2026-07-13 12:45:46 #3: "RecentExtra.score_components
+        validation. A default factory would fabricate `{}` for missing input
 
-        has a default_factory, so missing input fabricates `{}` and
-
-        OpenAPI does not require it. Make it required; assert missing
-
-        and nonempty both reject, and required set includes
-
-        score_components.").'
+        and omit the field from OpenAPI''s required set.'
     RecentResultRow:
       properties:
         object_id:
@@ -3288,7 +3278,7 @@ components:
       description: 'One row in a recent-mode response.
 
 
-        Required fields (per spec §4.3 + Yua 2026-07-13 11:57:59 #3):
+        Required fields (per spec §4.3):
 
         `object_id`, `namespace`, `plane`, `score`, `content`, `state`,
 
@@ -3335,7 +3325,7 @@ components:
 
         Union — so a ranked row cannot be smuggled into a recent
 
-        response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
+        response. The OpenAPI schema
 
         is a list of `RecentResultRow`, not an `anyOf` of both row types.'
     RecentScoreComponents:
@@ -3523,8 +3513,8 @@ components:
           description: 'Namespace pattern. Three shapes accepted: 3-segment concrete
             `<tenant>/<presence>/<plane>` (single target), 2-segment `<tenant>/<presence>`
             (cross-plane fanout, requires `planes`), or wildcard with `*` replacing
-            any single segment (e.g. `nyla/*/episodic`, `*/voice/curated`). Optional
-            in AUTH-001: omit (or null) to recall across all authorized namespaces;
+            any single segment (e.g. `example/*/episodic`, `*/assistant/curated`).
+            Optional in AUTH-001: omit (or null) to recall across all authorized namespaces;
             the per-agent exclusion list (`salesai` mandatory + per-agent settings)
             is applied centrally. See ADR 0031 + AUTH-001.'
         query_text:
@@ -4182,8 +4172,8 @@ components:
         namespace:
           type: string
           title: Namespace
-          description: Agent-scoped namespace prefix (e.g. 'example/assistant'). The synthesis
-            loop operates on '<prefix>/episodic' + '<prefix>/concept'.
+          description: Agent-scoped namespace prefix (e.g. 'example/assistant'). The
+            synthesis loop operates on '<prefix>/episodic' + '<prefix>/concept'.
         simulate_ollama_offline:
           type: boolean
           title: Simulate Ollama Offline
@@ -4247,7 +4237,7 @@ components:
       description: 'Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``.
 
 
-        The ``namespace`` field carries the **identity family** (e.g. ``"aoi"``)
+        The ``namespace`` field carries the **identity family** (e.g. ``"example"``)
 
         that synthesis actually clustered, NOT an echo of the input
 

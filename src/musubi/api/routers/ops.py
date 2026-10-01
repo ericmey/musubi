@@ -3,8 +3,7 @@
 ``/health`` is a liveness probe (always 200 if the process serves
 requests). ``/status`` is per-component readiness — populates
 :class:`StatusResponse.components` with one row per dependency
-(Qdrant + each TEI service + Ollama), satisfying Aoi's v0.1
-health-granularity ask. ``/metrics`` exposes the in-process
+(Qdrant + each TEI service + Ollama). ``/metrics`` exposes the in-process
 Prometheus registry in text format.
 
 ``/debug/trigger-synthesis`` is an operator-scope test-hook that
@@ -132,7 +131,7 @@ class TriggerSynthesisRequest(BaseModel):
 class TriggerSynthesisResponse(BaseModel):
     """Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``.
 
-    The ``namespace`` field carries the **identity family** (e.g. ``"aoi"``)
+    The ``namespace`` field carries the **identity family** (e.g. ``"example"``)
     that synthesis actually clustered, NOT an echo of the input
     namespace. Per v1.5.5+'s per-family synthesis (musubi#335), the loop
     operates on identity-family scope; the field name is preserved for

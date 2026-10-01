@@ -22,9 +22,9 @@ Three namespace shapes are accepted:
   can't read 403s the entire request rather than silently omitting
   that plane (ADR 0028).
 - **Wildcard segments** (per ADR 0031): ``*`` matches any single
-  segment. ``nyla/*/episodic`` fans an episodic retrieve across all
-  of Nyla's channels; ``*/voice/curated`` spans every agent's voice
-  curated. Wildcards are expanded server-side against the live Qdrant
+  segment. ``example/*/episodic`` fans an episodic retrieve across all
+  presences in one tenant; ``*/assistant/curated`` spans tenants for one
+  presence. Wildcards are expanded server-side against the live Qdrant
   payload, then the resolved concrete targets feed the same fanout
   pipeline above. Strict scope still applies — every expanded target
   must be readable by the token. Writes still reject ``*``.
@@ -94,7 +94,7 @@ class RetrieveQuery(BaseModel):
             "3-segment concrete `<tenant>/<presence>/<plane>` (single target), "
             "2-segment `<tenant>/<presence>` (cross-plane fanout, requires `planes`), "
             "or wildcard with `*` replacing any single segment "
-            "(e.g. `nyla/*/episodic`, `*/voice/curated`). "
+            "(e.g. `example/*/episodic`, `*/assistant/curated`). "
             "Optional in AUTH-001: omit (or null) to recall across all "
             "authorized namespaces; the per-agent exclusion list "
             "(`salesai` mandatory + per-agent settings) is applied centrally. See ADR 0031 + AUTH-001."
