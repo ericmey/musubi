@@ -121,7 +121,7 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
 
 def _safe_ranked_memory(resolved: dict[str, Any]) -> EpisodicMemory | None:
     """Model-validate a resolved ranked candidate, FAILING CLOSED (None) rather than raising on an
-    empty/malformed payload (DATA-001 P2, Yua) — a corrupt row must never 500 a dense query; it is
+    empty/malformed payload — a corrupt row must never 500 a dense query; it is
     skipped from the ranked view (and stays deletable via the delete path)."""
     from pydantic import ValidationError
 
@@ -173,7 +173,7 @@ class EpisodicPlane:
         # DATA-001 P2: vector-changing updates go through the durable immutable-vector publisher (fenced
         # anchor + content snapshot). Injected only in PRODUCTION WRITE compositions; a read-only
         # construction leaves them None and a vector-changing write then FAILS CLOSED (never the old
-        # unfenceable update_vectors). Approved optional injection (Yua).
+        # unfenceable update_vectors). Approved optional injection.
         self._coordinator = coordinator
         self._vector_publisher = vector_publisher
 
@@ -527,7 +527,7 @@ class EpisodicPlane:
             sparse,
         )  # recomputed by the publisher when needed.
 
-        # DATA-001 P2 (Yua correction 2026-07-15): the durable immutable-vector intent must persist an
+        # DATA-001 P2: the durable immutable-vector intent must persist an
         # INTENDED MUTATION DESCRIPTOR (merge_strategy + the incoming new memory) and REBASE it on the
         # FRESH authoritative anchor INSIDE the handler — deciding there whether content/vector changes,
         # taking lease/access fields from fresh state, and fencing on BOTH pointer_version AND version.
@@ -547,7 +547,7 @@ class EpisodicPlane:
             merge_strategy=merge_strategy,
         )
         # resolve, then validate: the committed payload is anchor-over-content and carries Phase-2
-        # layout-only keys the extra="forbid" model would reject — strip them first (Yua).
+        # layout-only keys the extra="forbid" model would reject — strip them first.
         return EpisodicMemory.model_validate(strip_layout_fields(committed))
 
     def _upsert(
@@ -590,7 +590,7 @@ class EpisodicPlane:
             resolve_ranked_candidate,
         )
 
-        # DEDUP BUDGET (Yua): a duplicate-create is DESTRUCTIVE, so the live duplicate must not be hidden
+        # DEDUP BUDGET: a duplicate-create is DESTRUCTIVE, so the live duplicate must not be hidden
         # behind a few stale/superseded higher-scoring content snapshots — walk the FULL capped candidate
         # budget (the shared seam), not a small factor, before concluding "no duplicate".
         resp = self._client.query_points(
@@ -674,7 +674,7 @@ class EpisodicPlane:
         """
         from musubi.store.immutable_vectors import resolve_committed_content
 
-        # Prove the object RESOLVES before any access mutation (Yua): a missing/dangling row returns
+        # Prove the object RESOLVES before any access mutation: a missing/dangling row returns
         # None and must NEVER trigger a lease write (the pre-P2 contract mutated nothing on absent).
         resolved = resolve_committed_content(
             self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
@@ -851,7 +851,7 @@ class EpisodicPlane:
         # model-validates — so a row carrying an unmodeled payload key raised here,
         # and the delete never ran. That made a corrupted row undeletable through the
         # SDK exactly as it was through the API, and the router-level fix does not
-        # protect direct callers (Yua, PR #398 review, 2026-07-11).
+        # protect direct callers (PR #398).
         #
         # We still need the prior state for the lifecycle event's `from_state`, so we
         # cannot skip the read — but we must not let the MODEL decide whether a delete
@@ -860,9 +860,8 @@ class EpisodicPlane:
         # Address the point DIRECTLY, not through a payload filter. `raw_payload()` finds a
         # row by its `namespace`/`object_id` PAYLOAD fields — so a row that has lost or
         # malformed those very keys is invisible to it, and would once again be
-        # undeletable-because-broken. The point ID is derived deterministically from the
+        # undeletable-because-broken (PR #398). The point ID is derived deterministically from the
         # object_id, so it addresses the row no matter what the payload says.
-        # (Yua, rev2 review of PR #398.)
         #
         # DATA-001 P2: the identity row lives in ONE of two deterministic id spaces — the legacy
         # `_point_id` (a v1 row or a converted-in-place anchor) OR `anchor_point_id(namespace, object_id)`
@@ -905,7 +904,6 @@ class EpisodicPlane:
         # canonically VALID and different. Anything else — missing, non-string, or invalid
         # under the canonical contract — is corruption, and corruption must be removable.**
         # Operator scope already gates this path.
-        # (Copilot found the class; Yua found that I had fixed only its examples.)
         stored_ns = payload.get("namespace")
         stored_ns_is_canonical = False
         if isinstance(stored_ns, str):

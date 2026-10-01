@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 def _provenance_score_for(plane: str, state: LifecycleState | None) -> float | None:
     """Exact-table-only lookup for recent-mode `provenance_score`.
 
-    Per spec §3.3 (Yua 2026-07-13 09:49:53 #7): recent's `provenance_score`
+    Per spec §3.3: recent's `provenance_score`
     is exact-table-only. Returns `None` when:
       - `state is None` (legacy row without lifecycle state)
       - `(plane, state)` is absent from the explicit lookup table

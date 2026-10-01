@@ -291,7 +291,7 @@ def _canonical_patch_sha(patch: dict[str, object]) -> str:
     ).hexdigest()
 
 
-#: Private, fail-closed collection -> object_type mapping (Yua S3 micro-ruling). Derived from the
+#: Private, fail-closed collection -> object_type mapping. Derived from the
 #: canonical mapping (``transitions.py::_COLLECTION_TO_OBJECT_TYPE``) but NOT imported from it — S3
 #: must not touch the S7 seam. A parity/coverage test pins these against the canonical source; an
 #: unknown collection fails closed (a pre-mutation terminal validation error).
@@ -307,7 +307,7 @@ _COLLECTION_TO_OBJECT_TYPE: dict[str, str] = {
 class _TerminalValidation(Exception):
     """A pre-mutation validation/invariant failure (unknown collection, missing object, illegal
     transition). ``transition()`` maps it to a typed terminal ``Err`` and marks the durable row
-    ABANDONED — the Qdrant mutation is never attempted (Yua S3 correction 6)."""
+    ABANDONED — the Qdrant mutation is never attempted."""
 
 
 def _object_type_for_collection(collection: str) -> str:
@@ -632,7 +632,7 @@ class LifecycleTransitionCoordinator:
         the S4 reconciler; or a bounded ``Err`` — ``cap_exceeded`` / ``active_intent_exists`` /
         ``durable_begin_failed`` / ``operation_key_conflict`` / ``version_fence_violation`` /
         ``terminal_apply_failure``."""
-        # namespace/actor/reason are required admission truth (Yua S4): a PENDING row must be
+        # namespace/actor/reason are required admission truth: a PENDING row must be
         # self-sufficient for reconcile's server-fenced reapply + event rebuild even before its
         # event_payload exists. Reject a degenerate intent BEFORE any durable work — a bounded
         # terminal validation, no row, no mutation. (The digest already binds all three.)
@@ -657,7 +657,7 @@ class LifecycleTransitionCoordinator:
             # `intent_digest` is what makes the probe safe: it already binds namespace, so
             # a legacy row belonging to a DIFFERENT namespace cannot match our digest. A
             # non-matching legacy row is simply not ours -- ignore it and admit under the
-            # new key, never return a conflict (Tama, musubi#771).
+            # new key, never return a conflict (musubi#771).
             legacy_opk = self._legacy_key(intent)
             if legacy_opk is not None:
                 legacy_row = self._row_for_key(legacy_opk)
@@ -729,7 +729,7 @@ class LifecycleTransitionCoordinator:
             # A mutation lease is transient ownership, not evidence that this intent's
             # version is stale. Keep the canonical intent pending so the reconciler can
             # retry after the owner releases; abandoning it would permanently poison
-            # this (version, target_state) key (Shiori/Tama, musubi#771).
+            # this (version, target_state) key (musubi#771).
             return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
         if status == "fence":
             # a known version fence is terminal (the intent is stale) — abandon, never retry.
@@ -1063,18 +1063,17 @@ class LifecycleTransitionCoordinator:
         # LEASE HANDLING. A row under a live mutation lease belongs to another writer:
         # without this, the lease the retraction saga fences its CAS with is honoured by
         # the retraction path and ignored here, so a lifecycle transition could mature a
-        # row mid-retraction and the version-fenced repair would lose (found by Aoi).
+        # row mid-retraction and the version-fenced repair would lose.
         #
         # The server-side `IsEmpty` condition below is what actually closes the race. A
         # python-only pre-check would be TOCTOU: a writer could acquire a token between
         # the read and the write, and the lifecycle write would land through a live
-        # lease (Tama).
+        # lease.
         #
         # But `IsEmpty` alone is too strict, because `update_lease_token` is the GENERIC
         # lease every `owned_update` takes -- not a retraction-specific one. A crashed
         # ORDINARY patch leaves a `done:*` token with no saga coming to clear it, and a
-        # bare IsEmpty would block lifecycle writes on that row permanently. Aoi raised
-        # exactly that; I argued it away with a premise that was checkable and false.
+        # bare IsEmpty would block lifecycle writes on that row permanently.
         #
         # So: clear an EXPIRED ORDINARY token first, behind its own exact fence, and
         # then let IsEmpty do the real gating. A writer that acquires in between makes
@@ -1489,8 +1488,7 @@ class LifecycleTransitionCoordinator:
         #
         # `_read_object_with_id` caps at limit=2, so 2 reads as "at least 2". Duplicate
         # authoritative anchors are treated as reachable everywhere else in this file
-        # (musubi#771 added 1085 for exactly that), so this is not hypothetical
-        # (Aoi, 2026-09-20).
+        # (musubi#771 added 1085 for exactly that), so this is not hypothetical.
         if held_count > 1:
             self._persist_attempt(
                 opk,
@@ -1689,7 +1687,7 @@ class LifecycleTransitionCoordinator:
         SELECT); an expired lease (``<= now``) is reclaimable while a valid one is exclusive (R17).
         The caller commits.
 
-        ``force_due`` (DATA-001 P2, Yua item 4) drops ONLY the ``next_attempt_epoch`` backoff predicate,
+        ``force_due`` drops ONLY the ``next_attempt_epoch`` backoff predicate,
         for the explicit synchronous :meth:`drive_intent` path: an inline re-drive after a 'retry' must
         re-apply immediately rather than wait out the backoff a background worker paces on. It NEVER
         relaxes the lease-exclusivity guard, so a valid owner (the worker) still cannot be stolen."""
@@ -2058,7 +2056,7 @@ class LifecycleTransitionCoordinator:
             counts["finalized"] += 1
             return
         # PENDING: readback FIRST — a crash after the Qdrant apply, before APPLIED, is recognized and
-        # finalized WITHOUT a second effective apply (Yua S4: already-visible target/version).
+        # finalized WITHOUT a second effective apply.
         if self._cur(coll, oid, ns) == (ver + 1, tstate):
             self._mark_applied(opk, oid, tstate, owner=token)
             self._finalize(opk, owner=token)

@@ -65,8 +65,8 @@ _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000002")
 
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
 
-# DATA-001 P2: the ONLY fields a same-id body/frontmatter update may set on the durable descriptor
-# (Yua ruling). Everything else — lifecycle ``state`` (transitions own it), ``namespace``, identity
+# DATA-001 P2: the ONLY fields a same-id body/frontmatter update may set on the durable descriptor.
+# Everything else — lifecycle ``state`` (transitions own it), ``namespace``, identity
 # (``object_id``), creation (``created_at``/``created_epoch``), ``version``, lineage
 # (``supersedes``/``superseded_by``/``promoted_from``/``promoted_at``), and access/lease/anchor
 # internals — is inherited from the FRESH authoritative row inside the handler, so a concurrent
@@ -123,7 +123,7 @@ def _curated_safe(payload: dict[str, Any]) -> CuratedKnowledge | None:
     Only the RANKED QUERY skips a malformed authoritative payload — it must not 500 the whole retrieval
     over one bad row. The by-id fetch (:meth:`get`) and the reconciler scan (:meth:`scan_vault_rows`)
     do the opposite and SURFACE corruption (raise): a caller asking for one specific row, or building a
-    complete trustworthy inventory, must hear that a row is broken (Yua)."""
+    complete trustworthy inventory, must hear that a row is broken."""
     try:
         return _curated_from_payload(payload)
     except ValidationError:
@@ -135,7 +135,7 @@ def _curated_visible_at(row: CuratedKnowledge, at_epoch: float) -> bool:
     AND the bitemporal window ``(valid_from is null OR valid_from <= at) AND (valid_until is null OR at <
     valid_until)``. Evaluated on ``CuratedKnowledge`` (``valid_*_epoch`` are ``float | None``), NEVER on
     the raw payload — a malformed string/object epoch there would ``TypeError`` and 500 the query, so the
-    row must be validated (or dropped) FIRST (Yua). Applied after anchor hydration because a v2 content
+    row must be validated (or dropped) FIRST. Applied after anchor hydration because a v2 content
     point carries no state/validity — only the committed anchor does."""
     if str(row.state) not in {str(s) for s in _VISIBLE_STATES}:
         return False
@@ -164,11 +164,10 @@ class FindByVaultPathError:
       - ``multiple_matches`` — more than one IDENTITY row matched (the
         ``(namespace, vault_path)`` uniqueness invariant was violated).
         The caller MUST treat this as a visible warning and refuse to
-        take destructive action against an arbitrary match (Yua
-        VAULT-003 binding: fail closed and visibly on >1 matches).
+        take destructive action against an arbitrary match (VAULT-003 binding: fail closed and visibly on >1 matches).
       - ``invalid_row``      — exactly one identity matched but it is
         DANGLING (a v2 anchor with no committed content) or MALFORMED
-        (will not model-validate). DATA-001 P2 (Yua): a broken identity
+        (will not model-validate). DATA-001 P2: a broken identity
         must NOT collapse into a clean ``not_found`` — the path IS
         occupied, so the watcher must WARN/REFUSE rather than treat it as
         a safe archive-by-path no-op. Visible fail-closed, never silent.
@@ -203,7 +202,7 @@ class CuratedPlane:
         # DATA-001 P2: a same-id body/frontmatter update is a vector-capable mutation and goes through
         # the durable immutable-vector publisher (fenced anchor + content snapshot). Injected only in
         # PRODUCTION WRITE compositions; a read-only construction leaves them None and a same-id update
-        # then FAILS CLOSED (never the old unfenceable update_vectors). Approved optional injection (Yua).
+        # then FAILS CLOSED (never the old unfenceable update_vectors). Approved optional injection.
         self._coordinator = coordinator
         self._vector_publisher = vector_publisher
 
@@ -271,7 +270,7 @@ class CuratedPlane:
             # identity, creation, lineage, lifecycle ``state`` (transitions own it), ``namespace``, and
             # access/anchor internals are inherited from the FRESH authoritative row INSIDE the handler,
             # so a concurrent supersession/promotion/state/access mutation between this read and the
-            # apply is never overwritten (Yua). The handler decides payload-only vs vector-change by the
+            # apply is never overwritten. The handler decides payload-only vs vector-change by the
             # curated projection (title + summary-or-content). Version bumps once, in the handler.
             if self._vector_publisher is None or self._coordinator is None:
                 raise RuntimeError(
@@ -387,8 +386,8 @@ class CuratedPlane:
         its anchor before validating (``extra="forbid"`` rejects raw layout keys). A normal v2 content
         point carries no ``vault_path`` (only its projection source), so ``must_not`` content is here as
         fail-closed defense against a corrupt/future content shell that DID carry ``vault_path`` and could
-        shadow the real anchor. Crucially, this DISTINGUISHES two cases the caller must not conflate
-        (Yua): NO identity for the path -> ``None`` (``create`` inserts fresh); a found-but-DANGLING/
+        shadow the real anchor. Crucially, this DISTINGUISHES two cases the caller must not conflate:
+        NO identity for the path -> ``None`` (``create`` inserts fresh); a found-but-DANGLING/
         MALFORMED identity -> RAISE (fail closed) — returning ``None`` there would let ``create``
         manufacture a DUPLICATE for a path that is already occupied by a broken row."""
         from musubi.store.immutable_vectors import not_content_condition, resolve_committed_content
@@ -459,15 +458,14 @@ class CuratedPlane:
           refuse to take destructive action.
         - Returns ``Err(FindByVaultPathError(code='invalid_row'))`` when
           exactly one identity matches but is DANGLING or MALFORMED — a
-          broken-but-present row, NOT a clean absence (DATA-001 P2, Yua).
+          broken-but-present row, NOT a clean absence.
 
         The scroll excludes content shells (``must_not`` content) so
         cardinality is counted over DISTINCT IDENTITIES. A normal content
         snapshot carries no ``vault_path``, so this is the fail-closed
         defense against a corrupt/future shell that DID carry it inflating
         the count into a false ``multiple_matches`` or shadowing the real
-        anchor. It is bounded to ``limit=2`` (Yua VAULT-003 review
-        binding): fetching the second match is sufficient to fail
+        anchor. It is bounded to ``limit=2`` (VAULT-003 binding): fetching the second match is sufficient to fail
         closed, and a limit of 2 is the smallest unconstrained value
         that still surfaces the duplicate case without pulling a
         potentially unbounded row count. Zero identities -> not_found;
@@ -613,7 +611,7 @@ class CuratedPlane:
         self, *, namespace: Namespace, object_id: KSUID, changes: dict[str, Any]
     ) -> CuratedKnowledge:
         """Apply a metadata-only PATCH (author frontmatter, NO body/vector change) to the identity row
-        through the attributable Phase-1 mutation lease (DATA-001 P2, Yua): version-fenced owner-token,
+        through the attributable Phase-1 mutation lease: version-fenced owner-token,
         rebased on the FRESH row each round, one version bump, targets the identity row (v1 or v2 anchor
         via ``must_not content``), and composes with concurrent access/transition mutations — so a
         concurrent state/access change survives while the intended metadata lands. Returns the published
@@ -714,7 +712,7 @@ class CuratedPlane:
         its anchor and be counted again — excluding content both collapses that double-count and stops the
         1000-row page budget being burned on snapshots that are not identities. Each identity row is
         RESOLVED through its anchor before validating (``extra="forbid"`` rejects raw layout keys). This
-        scan is FAIL-LOUD, the opposite of the ranked query (Yua / VaultReconciler contract): a dangling
+        scan is FAIL-LOUD, the opposite of the ranked query: a dangling
         or malformed identity RAISES rather than being skipped — the reconciler needs a COMPLETE,
         trustworthy inventory, and a silently-dropped row would let ghost archival run against an
         incomplete picture."""

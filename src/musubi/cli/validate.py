@@ -33,16 +33,15 @@ then printed ``clean`` and exited 0 whenever no broken rows had been *collected*
 included the case where **auth failed, the network failed, or every collection was
 misnamed and nothing was scanned at all.** A sweep that reports the vault healthy because
 it could not look at the vault is the exact defect this whole PR exists to fix, rebuilt
-one layer up. (Caught by Yua, rev2 review. It was the third instance of this shape in a
-single day: the vault's stale-check reported "0 stale" while reading 8 of 164 pages, the
-frontmatter lint could never pass so was never run, and then this.)
+one layer up. It was the third instance of this shape in a single day: the vault's
+stale-check reported "0 stale" while reading 8 of 164 pages, the
+frontmatter lint could never pass so was never run, and then this.
 
 **A missing canonical collection counts as NOT SCANNED.** The second thing this file got
 wrong. ``absent`` was treated as benign — "an empty plane, nothing to see" — so pointing
 the command at the wrong Qdrant node found no collections at all and printed
 ``clean — 0 rows scanned across 7 plane(s)``, exit 0. The test guarding that behaviour was
 named ``test_absent_collection_is_not_an_error_and_not_a_lie`` while *asserting the lie*.
-(Yua, rev3 review.)
 
 Every collection in ``store/names.py`` is canonical and ``store/collections.py`` bootstraps
 all of them. A missing one is not an empty plane — it is an unbootstrapped, damaged, or
@@ -56,7 +55,7 @@ everything?" and "was what I saw sound?" into a single verdict. So ``--allow-abs
 mutated the completeness flag, which drove the verdict, which drove the summary — and a run
 that skipped a collection AND found a broken row printed ``clean-partial … every one
 readable by its model`` immediately above ``1 of 1 scanned rows are UNREADABLE``. The output
-contradicted itself in adjacent sentences. (Yua, rev4 review.)
+contradicted itself in adjacent sentences.
 
     coverage:  full | partial | incomplete     — did I see everything?
     integrity: clean | broken | unknown        — was what I saw sound?
@@ -77,7 +76,6 @@ The fourth thing this file got wrong, and the same defect once more with a diffe
 *that list* — so scanning **1 of 7** canonical collections produced ``coverage: full``,
 ``complete: true``, ``verdict: clean``, **exit 0**: the exact machine signal of a clean
 full-production sweep. And ``test_single_plane_filter`` asserted exit 0, locking it in.
-(Yua, rev5 review.)
 
 *Full relative to what I selected* is not *full relative to production.*
 
@@ -194,7 +192,7 @@ class _CuratedContentPoint(_EpisodicContentPoint):
 # The partial codes sit above the broken cap on purpose. `broken-partial` must NOT collapse
 # into an ordinary fully-scanned broken count: "I found 2 bad rows and saw everything" and
 # "I found 2 bad rows but skipped a collection" are different facts, and a CI gate reading
-# only the exit code must not confuse them. (Yua, rev4 review of PR #398.)
+# only the exit code must not confuse them (PR #398).
 EXIT_CLEAN = 0
 _MAX_BROKEN_EXIT = 250
 EXIT_INCOMPLETE = 251
@@ -682,8 +680,8 @@ def validate_rows(
     # `--plane episodic` used to reduce `planes` to one entry, and coverage was then computed
     # over that list — so scanning 1 of 7 canonical collections yielded coverage=full,
     # complete=true, verdict=clean, exit 0: **the exact machine signal of a full clean
-    # production sweep.** And `test_single_plane_filter` asserted exit 0, locking it in.
-    # (Yua, rev5 review of PR #398.)
+    # production sweep.** And `test_single_plane_filter` asserted exit 0, locking it in
+    # (PR #398).
     #
     # That is the same coverage-denominator defect as accepted absence, wearing a scope flag.
     # "Full relative to what I selected" is not "full relative to production."

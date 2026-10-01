@@ -386,7 +386,7 @@ class VaultWatcher:
                 # The ONLY clean-absence outcome: no identity for this path -> observable info no-op.
                 logger.info("vault-delete-noop path=%s reason=%s", rel_path, lookup.error.code)
                 return
-            # EXHAUSTIVE fail-closed default (Yua): invalid_row (present-but-dangling/malformed) AND any
+            # EXHAUSTIVE fail-closed default: invalid_row (present-but-dangling/malformed) AND any
             # unknown/future error code warn and REFUSE to archive — a silent no-op here would leave a
             # corrupt row live, or let a newly-added typed code silently regress into a clean absence.
             logger.warning(

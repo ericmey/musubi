@@ -140,7 +140,7 @@ async def patch_curated(
     # That is a FALSE SUCCESS: the handler reported success without applying the mutation and
     # without rejecting it — the exact defect this PR exists to remove, living inside the
     # guard written to prevent it. It also conflated "field omitted" with "field explicitly
-    # set to null", which are different requests. (Yua, review of d5c7e0f.)
+    # set to null", which are different requests.
     #
     # `exclude_unset=True` preserves the caller's ACTUAL key set, so:
     #   - unknown keys are rejected whatever their value, null included;
@@ -167,7 +167,7 @@ async def patch_curated(
             detail=f"curated knowledge {object_id!r} not found in namespace {namespace!r}",
         )
 
-    # DATA-001 P2 (Yua): PATCH is not a repair path and its response uses get() — it must NOT mutate a
+    # DATA-001 P2: PATCH is not a repair path and its response uses get() — it must NOT mutate a
     # row it cannot SERVE. Resolve the committed payload with get() semantics; a present-but-dangling /
     # cross-object v2 anchor (raw_payload above found the identity row, but the committed content is
     # unresolvable) FAILS CLOSED with 409. raw_payload only distinguishes absent (404) from corrupt.

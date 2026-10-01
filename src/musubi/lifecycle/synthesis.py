@@ -139,7 +139,7 @@ def _resolve_candidate_memory(
     stats: DecodeStats | None = None,
 ) -> MemoryWithVector | None:
     """Anchor-aware resolution of an episodic scroll/fetch record to ``(EpisodicMemory, dense vector)``
-    for synthesis clustering (DATA-001 P2, Yua). Uses the caller's SINGLE anchor snapshot ``payload`` —
+    for synthesis clustering. Uses the caller's SINGLE anchor snapshot ``payload`` —
     it never re-reads the anchor — retrieves the exact ``live_point`` it names ONCE (payload+vectors),
     validates that point is this anchor's content (kind + namespace + object_id), then pairs the
     anchor-over-content payload with THAT SAME point's dense vector. A concurrent pointer swap after the

@@ -431,7 +431,7 @@ async def patch_episodic(
     # That is a FALSE SUCCESS: the handler reported success without applying the mutation and
     # without rejecting it — the exact defect this PR exists to remove, living inside the
     # guard written to prevent it. It also conflated "field omitted" with "field explicitly
-    # set to null", which are different requests. (Yua, review of d5c7e0f.)
+    # set to null", which are different requests.
     #
     # `exclude_unset=True` preserves the caller's ACTUAL key set, so:
     #   - unknown keys are rejected whatever their value, null included;

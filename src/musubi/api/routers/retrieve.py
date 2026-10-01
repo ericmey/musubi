@@ -595,7 +595,7 @@ async def retrieve(
     # The envelope's warnings are already deduped, fail-closed (allowlisted only), and counted at the
     # orchestration boundary — the router just flattens the bounded codes onto the wire.
     envelope = orchestration_result.value
-    # Per Yua 2026-07-13 12:45:46 #1: the response variants have
+    # The response variants have
     # CONCRETE row types (list[RankedResultRow] for ranked;
     # list[RecentResultRow] for recent). The router builds the
     # appropriate list per mode so the response construction type-

@@ -137,7 +137,7 @@ def _http_error_from_scope_error(error: ScopeError) -> AuthHTTPError:
 #: bearer at the edge; :func:`authenticate_request` then reuses that result instead of
 #: validating the SAME token a second time in the handler.
 #:
-#: Without this, every protected request validated twice — reproduced by Yua on the
+#: Without this, every protected request validated twice — reproduced on the
 #: first revision of #413: a valid GET /v1/namespaces returned 200 with
 #: ``validate_token`` call_count=2. ``tokens.py`` has no JWKS cache, so under RS256 that
 #: is two synchronous JWKS fetches per protected request, and it amplifies exactly the
