@@ -4,14 +4,16 @@ section: 06-ingestion
 tags: [capture, hot-path, ingestion, section/ingestion, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
-implements: ["src/musubi/ingestion/capture.py", "tests/ingestion/test_capture.py"]
+implements: ["src/musubi/api/routers/writes_episodic.py", "src/musubi/ingestion/capture.py", "tests/ingestion/test_capture.py"]
 ---
 # Capture
 
-The hot write path. An adapter calls `POST /v1/episodic` (or `POST /v1/artifacts`) and we persist the object. This happens while a user (or agent) is waiting — budget is tight.
+The hot write path. A client calls `POST /v1/episodic` (or `POST /v1/artifacts`) and Core persists the object while the caller waits. Enrichment happens later, in the lifecycle worker.
+
+The normative wire contract is the root `openapi.yaml`; this page explains the behaviour behind it.
 
 ## Endpoint
 
@@ -19,35 +21,31 @@ The hot write path. An adapter calls `POST /v1/episodic` (or `POST /v1/artifacts
 POST /v1/episodic
 Authorization: Bearer <token>
 Content-Type: application/json
+Idempotency-Key: <optional, opaque>
 
 {
   "namespace": "alex/claude-code/episodic",
-  "content": "CUDA 13.0 driver 575 installed on musubi host; reboot required.",
+  "content": "CUDA 13.0 driver installed on the build host; reboot required.",
+  "summary": "CUDA 13 driver install",
   "tags": ["cuda", "nvidia", "ops"],
-  "topics": ["infrastructure/gpu"],
-  "importance": 7,
-  "content_type": "observation",
-  "capture_source": "claude-code-session-log",
-  "source_ref": "session:ksuid-....",
-  "ingestion_metadata": {...}
+  "importance": 7
 }
 ```
 
 ## Contract
 
+`CaptureRequest` (`src/musubi/api/routers/writes_episodic.py`) accepts exactly these fields:
+
 | Field | Required | Notes |
 |---|---|---|
-| `namespace` | ✓ | Must match token scope. |
-| `content` | ✓ | 1..16000 chars. |
-| `tags` | optional | Normalized at maturation; accepted as-is now. |
-| `topics` | optional | Checked against a topic dictionary (warned, not rejected, if unknown). |
-| `importance` | optional | Default 5; LLM may re-score at maturation. |
-| `content_type` | optional | Default `observation`. |
-| `capture_source` | optional | For provenance. |
-| `source_ref` | optional | Free-form opaque back-ref. |
-| `ingestion_metadata` | optional | dict[str, Any], preserved, not indexed. |
+| `namespace` | yes | `tenant/presence/episodic`. Must be writable by the token's scopes. |
+| `content` | yes | Non-empty. At most **32,768 UTF-8 bytes**; larger content is refused with `422 CONTENT_TOO_LARGE` (use the artifact plane). |
+| `summary` | no | When present, the summary (not the content) is what gets embedded. |
+| `tags` | no | Accepted as given; normalised later by maturation. `kind:` and `staleness:` tags are validated against known values, and `kind:episode` / `staleness:episodic` are added when absent. |
+| `importance` | no | 1–10, default 5. Maturation may re-score it. |
+| `created_at` | no | Timezone-aware timestamp for migration/replay. Requires **operator scope** (403 otherwise) and may not be in the future. |
 
-The adapter does not choose the `object_id`, `state`, or `version` — Core sets those. `created_at`, `updated_at` are also server-set.
+Unknown fields are ignored (the model does not forbid extras). There is no `topics`, `content_type`, `capture_source`, `source_ref` or `ingestion_metadata` field on episodic capture. Core sets `object_id`, `state`, `version` and the server timestamps.
 
 ## Response
 
@@ -55,136 +53,112 @@ The adapter does not choose the `object_id`, `state`, or `version` — Core sets
 202 Accepted
 {
   "object_id": "2W1eP3rZaLlQ4jTuYz0Q9CkZAB1",
-  "namespace": "alex/claude-code/episodic",
   "state": "provisional",
-  "version": 1,
-  "created_at": "2026-04-17T09:00:00Z",
   "dedup": null
 }
 ```
 
-If a near-duplicate was found (dedup triggered, see below), the response is 200 with `dedup.action: "merged"` and the existing `object_id`.
+The status is always 202. On a dedup merge the response carries the **existing** row's `object_id`; the `dedup` field exists on the model but the route never populates it, so a caller cannot tell a merge from a fresh insert from the response alone.
 
 ## Hot-path steps
 
 ```
- 1. authn + authz                                      ~1ms
- 2. pydantic validate                                  ~1ms
- 3. embed content (dense + sparse, parallel)           ~40ms warm
- 4. dedup probe (cosine ≥ 0.92 within namespace)       ~20ms
-   ├─ hit + factually compatible: update existing (merge tags, refresh)
-   └─ miss or incompatible:       upsert new point
- 5. upsert to Qdrant                                    ~20ms
- 6. emit LifecycleEvent(provisional → created)         <1ms (batched)
- 7. return 202
-                                                      total: ~80-100ms
+ 1. authenticate + authorize the body namespace (write access)
+ 2. reject oversize content (32,768 UTF-8 bytes)
+ 3. idempotency lookup (if Idempotency-Key is present)
+ 4. embed summary-or-content (dense + sparse via TEI)
+ 5. dedup probe: dense cosine >= 0.92 within the namespace
+    ├─ hit + factually compatible: reinforce the existing row
+    └─ miss or incompatible:       insert a new provisional row
+ 6. return 202
 ```
 
-Here, "factually compatible" means that NFKC/case/whitespace/terminal-punctuation
-normalized content is equal and the complete participants set is equal. A
-semantic paraphrase, correction, or negation is not sufficient for a merge.
+"Factually compatible" means the NFKC/case/whitespace/terminal-punctuation normalised content is equal and the complete participants set is equal. A paraphrase, correction or negation is not enough to merge.
 
-Budget: p50 ≤ 100ms, p95 ≤ 250ms.
+No latency budget is enforced by tests; the benchmark bullets below are skipped in the unit suite.
 
 ## Step detail
 
-### Step 3 — Embedding
+### Embedding
 
-Parallel call to TEI for dense + sparse. See [[06-ingestion/embedding-strategy]]. Failures here can't be deferred — we need the vector to write the point. On TEI down, capture returns 503 with `retry-after: 5`.
+Dense and sparse vectors come from TEI (see [[06-ingestion/embedding-strategy]]). The vector is required to write the point, so an embedding failure fails the request; it is not deferred.
 
-### Step 4 — Dedup
+### Dedup
 
-Query Qdrant for cosine similarity ≥ `DUPLICATE_THRESHOLD` (0.92 default) within the same
-`namespace`. A probe hit is eligible to merge only when strict factual compatibility also passes:
-normalized content must match and structured participants must be identical. Corrections,
-negations, participant or time changes, conflicting numbers, and other incompatible near-matches
-are inserted as new points. For a compatible hit:
+`EpisodicPlane.create` (`src/musubi/planes/episodic/plane.py`) probes for the nearest neighbour in the same namespace with a default threshold of **0.92**. A hit merges only when strict factual compatibility also passes. For a compatible hit:
 
-- Merge tags (set union).
-- Update content if the new content is strictly longer (more detail wins). This `longer-wins`
-  policy applies only after factual compatibility authorizes the merge.
-- Bump `updated_at`, `updated_epoch`, `version`.
-- Increment `reinforcement_count`.
-- Emit LifecycleEvent(dedup-merged).
-- Return the existing `object_id`.
+- Tags merge (set union).
+- Content follows `longer-wins`: the strictly longer of existing/new content is kept, so more detail wins. This applies only after compatibility has authorised the merge.
+- `updated_at`, `updated_epoch` and `version` are bumped.
+- `reinforcement_count` is incremented.
+- The existing `object_id` is returned.
 
-Dedup threshold is per-plane tunable:
+Curated memory does not dedup by vector; it is keyed by `vault_path` and owned by the file.
 
-- `episodic`: 0.92
-- `curated`: dedup disabled (humans own the file)
-- `artifact_chunks`: 0.98 (very high — near-identical chunks only)
+### Write
 
-### Step 5 — Upsert
-
-Single Qdrant `upsert` call with the named vectors + full payload. We use `wait=True` so the write is durable before responding. Latency cost: 10–30ms depending on collection size.
-
-### Step 6 — LifecycleEvent
-
-Batched to the event writer. Not blocking the response. See [[04-data-model/lifecycle]].
+A fresh row is written with `state="provisional"`, `version=1`, `reinforcement_count=0`. Updates to an existing row go through the attributable mutation path rather than a full-point upsert.
 
 ## Artifact capture
 
 ```
 POST /v1/artifacts
 Content-Type: multipart/form-data
+
+namespace=alex/shared/artifact
+title=Planning session 2026-04-17
+content_type=text/vtt
+source_system=session-recorder      (optional, default "api-upload")
+chunker=markdown-headings-v1        (optional)
+file=<binary>
 ```
 
-```
-{
-  "namespace": "alex/_shared/artifact",
-  "title": "LiveKit session 2026-04-17",
-  "content_type": "text/vtt",
-  "source_system": "livekit-session",
-  "source_ref": "session:abc-123",
-  "file": <binary>
-}
-```
+The upload is streamed to disk and refused with `413 CONTENT_TOO_LARGE` past `ARTIFACT_MAX_BYTES` (default 100 MiB). The response is `202` with `{object_id, state, size_bytes, sha256}`, where `state` is the **indexing** state (`indexing`, or `failed` when the lifecycle outbox is at capacity). Chunking and embedding run in the lifecycle worker's artifact indexer; poll `GET /v1/artifacts/{id}`. See [[04-data-model/source-artifact]].
 
-Response is 202 with `artifact_state: "indexing"`; the chunking+embedding run as a background task. Caller polls `GET /v1/artifacts/{id}` for the state transition. See [[04-data-model/source-artifact]] for details.
+## What capture does not do
 
-## What capture does NOT do
+- **Does not mature.** The row lands `provisional`; see [[06-ingestion/maturation]].
+- **Does not synthesize, promote or reflect.** Those are lifecycle jobs.
+- **Does not notify.** No Thought is emitted on write.
 
-- **Does not mature.** The object lands in `provisional` state; maturation happens in the background (see [[06-ingestion/maturation]]).
-- **Does not synthesize.** Concepts come from the synthesis job, not from individual writes.
-- **Does not promote.** Promotion is LLM-assisted and slow; never on the hot path.
-- **Does not reflect.** Reflection is a daily job.
-- **Does not notify.** No cross-presence Thought emitted on write (unless explicitly requested via an optional flag).
-
-Clean separation of write vs. enrichment is what keeps the hot path under budget.
+Keeping write and enrichment separate is what keeps the hot path short.
 
 ## Idempotency
 
-The API accepts an optional `Idempotency-Key` header (UUID). If seen within the last 24h for the same token + namespace, we return the previously-written `object_id` instead of writing a duplicate.
+Write endpoints accept an optional `Idempotency-Key` header. The key is bound to the authenticated principal and the operation, and is checked **after** authorization. The same key with the same body replays the stored response (marked `X-Idempotent-Replay: true`); the same key with a different body is a `409 CONFLICT`.
 
-Idempotency keys live in a small sqlite at `/srv/musubi/idempotency.db` with a 24h TTL.
+The replay cache (`src/musubi/api/idempotency.py`) is **in-memory and process-local** with a 24h TTL. That is why `API_WORKERS` is pinned to 1. An optional durable receipt ledger (`src/musubi/api/idempotency_receipts.py`, SQLite next to the lifecycle database unless `IDEMPOTENCY_RECEIPT_SQLITE_PATH` is set) records completed responses for the routes that require it.
 
-Without idempotency keys, dedup (step 4) catches most accidental duplicates but doesn't help for "client retried after timeout, server committed but client didn't see" — the classical exactly-once problem. Idempotency keys close that gap.
+Without a key, dedup still catches most accidental duplicates, but not the "client retried after a timeout, the server had already committed" case. Idempotency keys close that gap.
 
 ## Error paths
 
 | Failure | Response |
 |---|---|
-| Token missing/invalid | 401 |
-| Namespace not in scope | 403 |
-| Content empty / too long | 400 + details |
-| TEI down | 503 + retry-after |
-| Qdrant upsert fails | 503 + retry-after (preferred: the Core catches and retries 3x with backoff before returning 503) |
-| Dedup race (two concurrent same-content writes) | Both get IDs; the maturation sweep consolidates on next pass |
+| Token missing or invalid | 401 |
+| Namespace not in scope, or `created_at` without operator scope | 403 |
+| Empty content, bad tags, naive or future `created_at` | 422 |
+| Content over 32,768 UTF-8 bytes | 422 `CONTENT_TOO_LARGE` |
+| Rate limit exceeded (`capture` bucket, 100/min; 10x for operator tokens) | 429 + `Retry-After` |
+| Durable idempotency receipt cannot be written | 503 |
+
+Branch on the error `code`, not the HTTP status: ordinary validation errors are also 422.
 
 ## Batched capture
 
-`POST /v1/episodic/batch` accepts up to 100 items at once:
+`POST /v1/episodic/batch` takes `{namespace, items: [...]}`, where each item has `content`, `summary`, `tags`, `importance` and optional `created_at`:
 
-- Embeds them in a single TEI batch (more efficient).
-- Dedups against the index but not against each other (within the batch).
-- Upserts in a single Qdrant call.
-- Returns 202 with a list of `(object_id, state, dedup)` triples.
-
-Used by Claude Code's session-end "flush these captured observations" flow.
+- Every item is size-checked before any item is written. One oversize item fails the whole batch.
+- Any `created_at` override requires operator scope for the whole batch.
+- Items are written one at a time through the same `EpisodicPlane.create` path, so each gets dedup.
+- The response is `202 {"object_ids": [...]}`, in input order.
+- The route uses the `batch-write` rate-limit bucket (50/min). The request model sets no item-count cap.
 
 ## Test Contract
 
-**Module under test:** `src/musubi/planes/episodic/` (capture entry points) + `src/musubi/api/routers/writes_episodic.py` + `src/musubi/api/routers/episodic.py`
+**Module under test:** `src/musubi/api/routers/writes_episodic.py`, `src/musubi/planes/episodic/plane.py`, `src/musubi/ingestion/capture.py`
+
+`tests/ingestion/test_capture.py` exercises `CaptureService` (`src/musubi/ingestion/capture.py`), a service layer with its own per-token idempotency cache, bounded retry and lifecycle-event emission. **The HTTP capture route does not call `CaptureService`**; it calls `EpisodicPlane.create` directly. Route behaviour is covered in `tests/api/test_api_v0_write.py`, `tests/api/test_idem*.py` and `tests/api/test_rate_limits.py`.
 
 Happy path:
 
@@ -192,8 +166,8 @@ Happy path:
 2. `test_capture_writes_provisional_state`
 3. `test_capture_writes_both_vectors`
 4. `test_capture_sets_timestamps_server_side`
-5. `test_capture_emits_lifecycle_event`
-6. `test_capture_p95_under_250ms_on_100k_corpus` (benchmark)
+5. `test_capture_emits_lifecycle_event` (skipped)
+6. `test_capture_p95_under_250ms_on_100k_corpus` (benchmark, skipped)
 
 Dedup:
 
@@ -212,17 +186,18 @@ Idempotency:
 Errors:
 
 15. `test_capture_empty_content_returns_400`
-16. `test_capture_forbidden_namespace_returns_403`
+16. `test_capture_forbidden_namespace_returns_403` (skipped here; covered at the HTTP layer)
 17. `test_capture_tei_down_returns_503`
 18. `test_capture_qdrant_retry_logic_succeeds_on_transient_failure`
 19. `test_capture_qdrant_permanent_failure_returns_503`
 
 Batch:
 
-20. `test_batch_capture_single_tei_embed_call` (instrumented)
-21. `test_batch_capture_single_qdrant_upsert` (instrumented)
-22. `test_batch_capture_100_items_under_1s` (benchmark)
+20. `test_batch_capture_single_tei_embed_call`
+21. `test_batch_capture_single_qdrant_upsert`
+22. `test_batch_capture_100_items_under_1s` (benchmark, skipped)
 
+Factual-compatibility dedup (in `tests/planes/test_episodic.py`):
 
 23. `test_semantic_dedup_merges_exact_duplicate`
 24. `test_semantic_dedup_merges_normalized_duplicate`

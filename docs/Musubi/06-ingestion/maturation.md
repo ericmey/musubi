@@ -4,112 +4,96 @@ section: 06-ingestion
 tags: [ingestion, lifecycle, maturation, section/ingestion, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
 implements: "tests/lifecycle/test_maturation.py"
 ---
 # Maturation
 
-Promoting episodic memories from `provisional` to `matured`. Hourly background job. The first enrichment step.
+Moving episodic memories from `provisional` to `matured`. An hourly lifecycle job and the first enrichment step.
+
+Code: `src/musubi/lifecycle/maturation.py` (sweeps, `MaturationConfig`, job builder) and `src/musubi/llm/ollama.py` (the LLM client).
 
 ## Why maturation exists
 
-At capture time, we have minimal information: content, tags the adapter provided, maybe a topic guess. We don't have:
+At capture time we have the content, the tags the client sent, and an uncalibrated importance guess. We do not have:
 
-- A reliable importance score (the adapter's guess is uncalibrated).
-- Normalized tags (tag sprawl would break filtering).
-- Topic inference (many captures don't come with topics).
-- Confirmation that the memory isn't noise.
+- A calibrated importance score.
+- Normalized tags (tag sprawl breaks filtering).
+- Topic inference (most captures arrive without topics).
+- Confirmation that the memory is not noise.
 
-Maturation resolves these over time. Memories that survive the sweep are considered index-worthy — retrieval filters default to `matured` only.
+Maturation resolves these over time. Retrieval defaults to `matured` rows.
 
 ## Schedule
 
-**Hourly**, at `:13` past each hour (arbitrary offset to avoid clashing with clock-edge cron jobs).
+**Hourly at `:13` UTC** (`maturation_episodic`), with the provisional-TTL sweep at **`:17`** (`provisional_ttl`). The lifecycle worker's tick loop dispatches both; see [[06-ingestion/lifecycle-engine]].
 
-Concurrency: one instance at a time, enforced by a file lock at `/srv/musubi/locks/maturation.lock`. See [[06-ingestion/lifecycle-engine]].
+Concurrency: one run at a time per job, enforced by an `flock` on `<lock dir>/maturation_episodic.lock` (and `provisional_ttl.lock`), where the lock dir is `locks/` next to `LIFECYCLE_SQLITE_PATH`. A second run that cannot take the lock logs and skips.
 
 ## Selection
 
 ```sql
--- conceptual; actual query is Qdrant scroll
+-- conceptual; the real query is a Qdrant payload-filter scroll
 SELECT * FROM musubi_episodic
 WHERE state = 'provisional'
   AND created_epoch < now - 3600
+  AND updated_epoch > <cursor>
 LIMIT 500
 ```
 
-Parameters:
+`MaturationConfig` defaults:
 
-- **Age floor**: 1 hour (`MATURATION_MIN_AGE_SEC`). We don't mature memories younger than this — they might still be getting deduped / reinforced.
-- **Batch size**: 500 (`MATURATION_BATCH`). Bounds per-run cost.
-- **Cursor**: `updated_epoch` of the last processed item — resume across crashes.
+- **Age floor**: `min_age_sec = 3600`. Younger rows may still be deduped or reinforced.
+- **Batch size**: `batch_size = 500`. Bounds per-run cost.
+- **Cursor**: the largest processed `updated_epoch`, stored in the shared lifecycle SQLite database, so a crash resumes after the last committed row.
+
+These are constructor arguments to `build_maturation_jobs(config=...)`. They are not environment settings.
 
 ## Per-memory pipeline
 
-For each selected memory:
-
 ```
- 1. fetch full content                             (in hand from the scroll)
- 2. LLM importance rescore                         ~200-500ms per item
- 3. tag normalization                              <10ms
- 4. topic inference                                ~200-500ms per item (LLM)
- 5. optional supersession detection                ~100ms
- 6. transition to matured + write                  ~5ms
- 7. emit LifecycleEvent                            <1ms
+ 1. rule-normalize tags                          (local)
+ 2. LLM importance rescore                       (batched, 10 items per call)
+ 3. LLM topic inference                          (batched, 10 items per call)
+ 4. optional supersession inference              (embedder + Qdrant)
+ 5. transition to matured                        (via transition())
+ 6. write enrichment fields                      (importance, tags, linked_to_topics)
 ```
 
-Steps 2 and 4 go through Ollama (see [[08-deployment/gpu-inference-topology]]). We **batch multiple memories per LLM call** (10 at a time in a single prompt) to amortize per-call overhead.
+Steps 2 and 3 go to the **lifecycle LLM**, which the deployment selects (ADR 0043, [[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint]]):
 
-### Step 2 — Importance
+- `LIFECYCLE_LLM_API`: `ollama` (default; native `/api/chat` with a JSON-schema `format`) or `openai` (`/v1/chat/completions` with `response_format: json_schema`).
+- `LIFECYCLE_LLM_BASE_URL`: defaults to `OLLAMA_URL`.
+- `LIFECYCLE_LLM_MODEL`: defaults to `LLM_MODEL`.
+- `LIFECYCLE_LLM_API_KEY`: optional bearer key.
 
-Prompt:
+With `openai`, base URL and model must both be set explicitly. Calls run at temperature 0 and every response is validated against a pydantic model before use.
 
-```
-You are calibrating the importance of memory items (1-10).
-Guidelines: ...
-For each of the 10 items below, output: {"id": <ksuid>, "importance": <int>, "reason": "<<=20 words>"}.
-```
+### Importance
 
-Output is JSON; parsed strictly. If parse fails, fall back to the captured importance (no update).
+Prompt: `src/musubi/llm/prompts/importance/v1.txt`. Output is strict JSON keyed by a per-row correlation id. A missing or invalid result keeps the captured importance. A rescore stamps `importance_last_scored_at` / `importance_last_scored_epoch`.
 
-### Step 3 — Tag normalization
+### Tag normalization
 
-Rule-based (no LLM):
+Rule-based, no LLM:
 
-- Lowercase.
-- Strip whitespace.
-- Convert spaces → hyphens.
-- Canonicalize against a small alias dictionary (`nvidia-gpu` → `nvidia`, `gpu-setup` → `gpu`).
-- Dedupe within the list.
+- Lowercase, strip whitespace, spaces to hyphens.
+- Apply the alias map (`DEFAULT_TAG_ALIASES` in `maturation.py`: `nvidia-gpu` to `nvidia`, `gpu-setup` to `gpu`).
+- Drop empty strings and dedupe.
 
-Alias dictionary lives in `config/tag-aliases.yaml` and is editable. Unknown tags pass through unchanged.
+The alias map is a code default overridable through `MaturationConfig.tag_aliases`. There is no file-based alias loader. Unknown tags pass through unchanged.
 
-### Step 4 — Topic inference
+### Topic inference
 
-Prompt (batch of 10):
+Prompt: `src/musubi/llm/prompts/topics/v1.txt`. The model assigns 0–3 lowercase `area/subarea` topics per item (for example `infrastructure/gpu`), prefers topics already on the item, and returns an empty list when nothing fits confidently. There is no curated topic taxonomy file; topics are free-form within that format. Results land in `linked_to_topics`.
 
-```
-Classify each memory into 0-3 topics from this taxonomy:
-<topics dictionary inline or as tool>
-If no confident topic applies, return [].
-Output JSON: {"id": <ksuid>, "topics": [<topic>, ...]}
-```
+### Supersession inference
 
-Topics are hierarchical strings (e.g., `infrastructure/gpu`). Topic taxonomy lives in the vault (`vault/_meta/topics.yaml`) — humans manage it.
+Only for content that starts with a hint prefix (`Update:`, `Correction:`, `Replacing:`, case-insensitive). The sweep looks for a previous memory in the same namespace with dense cosine similarity **≥ 0.88** that shares at least one topic, and abstains when the match is ambiguous (see [[06-ingestion/life009-semantic-supersession]]). On a match it links both sides (`supersedes` on the new row; the old row transitions to `superseded`) and records lifecycle events for both. Without a hint, nothing is inferred.
 
-### Step 5 — Optional supersession detection
-
-For memories tagged `#supersedes` or clearly marked "update" (heuristic: content starts with "Update:", "Correction:", "Replacing:"), we check for a previous memory in the same namespace with high semantic similarity (≥ 0.88) and the same topic. If found:
-
-- Set `supersedes: [old_id]` on the new memory.
-- Set `superseded_by: new_id` on the old memory (transition to `superseded`).
-- Emit LifecycleEvent for both.
-
-If not found, we don't infer supersession — it's a conservative step.
-
-### Step 6 — Transition
+### Transition
 
 Via the typed transition function (see [[04-data-model/lifecycle#transition-function]]):
 
@@ -120,69 +104,51 @@ transition(
     target_state="matured",
     actor="lifecycle-worker",
     reason="maturation-sweep",
-    lineage_updates=LineageUpdates(
-        supersedes=supersedes_inferred,
-    ),
+    lineage_updates=LineageUpdates(supersedes=supersedes_inferred),
 )
 ```
 
-Updates `importance`, `tags`, `topics` alongside state in a single `update_points` call. Batched across the current sweep iteration (see [[00-index/agent-guardrails]] on batching).
+Enrichment fields are written after the transition succeeds, through the fenced payload-patch path. They are not state changes and are not audited one by one. A row that changed or was leased after selection is refused rather than overwritten.
 
 ## Provisional TTL
 
-Memories that remain `provisional` for more than **7 days** are archived (not deleted):
+Rows still `provisional` after **7 days** (`provisional_ttl_sec`) are archived, not deleted:
 
-```python
-# Hourly, in the same worker, separate select:
+```
 WHERE state = 'provisional' AND created_epoch < now - 7*86400
-→ transition(state='archived', reason='provisional-ttl')
+-> transition(target_state='archived', reason='provisional-ttl')
 ```
 
-Rationale: 7 days is enough for maturation to have run 168 times. A memory still provisional that long is almost certainly a capture error, orphan, or Ollama-outage casualty. Archiving (not deleting) preserves it for forensic review.
+Seven days is 168 maturation runs. A row still provisional by then is almost certainly a capture error, an orphan, or an LLM-outage casualty. Archiving keeps it for review.
 
 ## Failure modes
 
-### Ollama down
+### Lifecycle LLM unavailable
 
-- Importance rescore: skip (keep the captured value).
-- Topic inference: skip (leave topics empty).
-- Supersession detection: skip.
-- State transition: **still happens** (we don't block maturation on enrichment being available — an unenriched matured memory is still better than a stuck provisional one; the next sweep will re-enrich, see below).
+The client returns `None` on any connect error, timeout, non-2xx, bad JSON or validation failure. Then:
 
-### Re-enrichment on next sweep
+- Importance keeps the captured value.
+- Topics keep whatever `linked_to_topics` the row already had.
+- Supersession inference still runs; it needs the embedder, not the LLM.
+- The state transition **still happens**. An unenriched matured memory beats a stuck provisional one.
 
-We can't re-select `matured` memories via the normal query (they'd never be picked up again). So we also run a secondary sweep:
-
-```
-WHERE state = 'matured' AND (importance_last_scored_at IS NULL OR importance_last_scored_at < now - 7d)
-LIMIT 100
-```
-
-This re-enriches older matured memories every week, catching any that went through during Ollama outages.
-
-### Parse errors
-
-LLM output JSON parse failures are logged with the raw response in a debug directory (`/srv/musubi/maturation-debug/`) for a week, then rotated. Memory is marked `matured` with the captured importance; logged as a soft failure.
+There is **no re-enrichment sweep.** `MaturationConfig.importance_reenrich_age_sec` exists but nothing reads it, so a row matured during an outage keeps its captured importance. (Not implemented.)
 
 ### Partial batch failure
 
-If the LLM returns 8 items instead of 10: match by ID, update the 8, log the missing 2, they'll be re-selected next hour (state is still `provisional`).
+Each batch of 10 is isolated. A failed batch falls back as above while every other batch's enrichment lands. Failed batches increment `musubi_lifecycle_enrichment_batch_failures_total{kind}` (`kind` is `importance` or `topics`), so sustained degradation shows up as a metric, not only as a log line. Results are matched by correlation id; an item missing from a successful response falls back the same way.
 
-If a whole batch fails (transport error, parse failure — the client returns `None` for that call): that batch is isolated — its items fall back exactly as in "Ollama down" — while every other batch's enrichment lands. Failed batches increment `musubi_lifecycle_enrichment_batch_failures_total{kind}` so sustained enrichment degradation is an operational signal, not a log line. (Historic note: the first implementation read this section as all-or-nothing and nulled the entire sweep's field on one failed batch; ADR 0043 aligned the code with this spec.)
+### Raw-response debugging
+
+`HttpxOllamaClient` can write failed raw responses to a debug directory, but no setting enables it in the shipped configuration. (Not configurable via environment.)
 
 ## Throughput
 
-At our capture rate (~500/day episodic typical, ~5000/day peak), an hourly sweep with batch=500 is well-sized. Per-run time on Ollama:
-
-- 500 items / 10 per batch = 50 LLM calls
-- ~400ms per call on Qwen2.5-7B Q4 via Ollama
-- ~20s LLM time per run, +few seconds Qdrant writes = ~25s total
-
-Well within the one-run-per-hour window.
+One run handles at most 500 rows: 50 importance calls plus 50 topic calls. Wall time depends on the model and endpoint you configure. ADR 0043 records why: structured-output reliability scales with model capability, so a deployment may trade per-call latency for a larger model.
 
 ## Test Contract
 
-**Module under test:** `musubi/lifecycle/maturation.py`
+**Module under test:** `src/musubi/lifecycle/maturation.py`, `src/musubi/llm/ollama.py`
 
 Selection:
 
@@ -224,12 +190,12 @@ Concurrency:
 
 22. `test_file_lock_prevents_double_execution`
 
-Property:
+Property (skipped, declared out of scope):
 
 23. `hypothesis: no matured memory has created_epoch in the future`
 24. `hypothesis: provisional memories older than 7d are always archived after one sweep`
 
-Integration:
+Integration (skipped, needs a live LLM endpoint):
 
-25. `integration: real Ollama, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible`
-26. `integration: ollama-offline scenario — maturation completes without enrichment, re-enrichment sweep picks them up later`
+25. `integration: real LLM, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible`
+26. `integration: LLM-offline scenario — maturation completes without enrichment`

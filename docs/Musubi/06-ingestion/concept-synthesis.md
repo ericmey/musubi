@@ -1,281 +1,204 @@
 ---
 title: Concept Synthesis
 section: 06-ingestion
-tags: [concepts, ingestion, lifecycle, section/ingestion, status/research-needed, synthesis, type/spec]
+tags: [concepts, ingestion, lifecycle, section/ingestion, status/complete, synthesis, type/spec]
 type: spec
-status: research-needed
-updated: 2026-04-17
+status: complete
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: ["src/musubi/lifecycle/synthesis.py", "tests/lifecycle/test_synthesis.py"]
 ---
 # Concept Synthesis
 
-Daily job that clusters matured episodic memories and generates `SynthesizedConcept` objects describing common themes. Inspired by Mem0's extract-consolidate pattern ([https://arxiv.org/abs/2504.19413](https://arxiv.org/abs/2504.19413)) applied at the concept layer.
+A daily job that clusters matured episodic memories and generates `SynthesizedConcept` objects describing their common themes. It follows Mem0's extract-consolidate pattern ([https://arxiv.org/abs/2504.19413](https://arxiv.org/abs/2504.19413)), applied at the concept layer.
 
-See [[04-data-model/synthesized-concept]] for the concept schema; this doc describes how they're made.
+See [[04-data-model/synthesized-concept]] for the concept schema; this page covers how concepts are made. Code: `src/musubi/lifecycle/synthesis.py`.
 
 ## When it runs
 
-- **Daily**, 03:00 local (configurable, `SYNTHESIS_SCHEDULE`).
-- Also runs on-demand via `musubi-cli synthesis run --namespace <ns>`.
+- **Daily at 03:00 UTC** (`synthesis` job). The time is fixed in code; there is no schedule setting.
+- **On demand:** `scripts/force_synthesis.py` runs the same `synthesis_run` path for every identity family, or one family via `MUSUBI_FORCE_FAMILY`. Run it inside the core container. Without `MUSUBI_FORCE_SYNTHESIS_CONFIRM=1` it is a dry run that only lists families.
+- `POST /v1/ops/debug/trigger-synthesis` (operator scope) is an **integration-test hook**. It only runs with `simulate_ollama_offline: true` and returns `501` otherwise, so it cannot produce real concepts.
 
-Concurrency: one synthesis run per namespace at a time. A file lock per `<ns>` in `/srv/musubi/locks/synthesis-<hash>.lock`.
+Concurrency: one sweep at a time, via `<lock dir>/synthesis.lock`. Inside a sweep, identity families run one after another.
+
+## Scope: identity families
+
+Synthesis runs per **identity family**, the tenant segment of a namespace (`alex` for `alex/voice/episodic` and `alex/claude-code/episodic`). Each tick discovers families from the episodic collection's `identity_family` payload, falling back to the namespace prefix for rows not yet backfilled. A family's memories cluster together regardless of which presence captured them.
+
+New concepts are written to `<family>/shared/concept`. Matching against existing concepts covers the whole family, so a concept in another presence's concept namespace can be reinforced.
+
+One family's failure does not stop the others. It increments `musubi_lifecycle_synthesis_family_failures_total{family}`.
 
 ## Inputs
 
-Per namespace:
+Per family, the shared lifecycle SQLite database holds two things:
 
-```
-matured episodic memories with updated_epoch > last_synthesis_run_epoch[ns]
-```
+1. **Cursor:** the high-water mark of `updated_epoch` already scanned. It is a performance shortcut, not a correctness gate.
+2. **Candidate pool:** memories seen but not yet clustered. They stay eligible for `candidate_ttl_sec` (30 days), so slow-forming patterns can still cluster when peer memories arrive later. A successful cluster removes its members from the pool; rows past the TTL are pruned.
 
-We track the last run per-namespace in sqlite (`/srv/musubi/lifecycle-state/synthesis-cursor.db`).
+Each run pulls matured episodics above the cursor, plus the current candidates. With fewer than 3 memories in total, it records them as candidates and stops.
 
 ## Steps
 
 ```
- 1. select memories                           ~seconds (Qdrant scroll)
- 2. cluster                                    ~seconds (vector + tag)
+ 1. select new matured memories + carried-forward candidates     Qdrant scroll
+ 2. cluster: group by topic/tag, then dense-similarity components
  3. for each cluster of >= 3:
-     a. generate title + summary via LLM      ~2-4s per cluster
-     b. check match vs existing concept        ~100ms
-     c. create new OR reinforce existing
- 4. contradiction detection                    LLM, batched
- 5. write concepts in synthesized state        batch upsert
- 6. advance cursor
+     a. generate title/content/rationale/tags/importance via LLM
+     b. match against existing concepts in the family
+     c. reinforce the existing concept OR create a new one
+ 4. contradiction check across this run's concepts               LLM
+ 5. maintain the candidate pool
+ 6. advance the cursor
 ```
 
-Budget: a typical run processes ~50–500 new matured memories and produces 5–30 concepts. Total wall time 1–5 minutes.
+### Clustering
 
-### Step 1 — Selection
+Two stages:
 
-```python
-memories = list(
-    scroll(
-        client, "musubi_episodic",
-        filter=must(
-            namespace==ns,
-            state=="matured",
-            updated_epoch > cursor,
-        ),
-    )
-)
+1. **Group** by `linked_to_topics`, or by the first two tags when a memory has no topics. A memory with several keys joins several groups, so it can feed more than one concept.
+2. **Within each group**, connect pairs with dense cosine ≥ `cluster_threshold` (**0.70**) and take connected components (transitive closure). Components smaller than `min_cluster_size` (3) are dropped. A concept, by definition, is a pattern across at least three observations.
+
+Threshold clustering was chosen over HDBSCAN for interpretability.
+
+### Concept generation
+
+Prompt: `src/musubi/llm/prompts/synthesis/v1.txt`. The model returns:
+
+```json
+{"title": "3-8 words", "content": "one or two sentences", "rationale": "why these cluster",
+ "tags": ["area/sub", "..."], "importance": 1, "contradicts_notice": ""}
 ```
 
-If fewer than 3 new memories: skip (nothing to cluster).
+The call goes to the **lifecycle LLM** that the deployment selects (ADR 0043): `LIFECYCLE_LLM_API` is `ollama` (native, JSON-schema `format`) or `openai` (any OpenAI-compatible endpoint with strict `json_schema` output), with `LIFECYCLE_LLM_BASE_URL`, `LIFECYCLE_LLM_MODEL` and `LIFECYCLE_LLM_API_KEY`. Temperature is 0, and output is validated strictly.
 
-### Step 2 — Clustering
+Choose a model that reliably produces this schema. ADR 0043 records that a small (4B-class) local model produced zero valid synthesis outputs over two nightly passes. This is the hardest structured-output task in the lifecycle, so a deployment may need a larger model here. A parse failure or `None` skips that cluster and the run continues.
 
-Two-stage:
+An oversized cluster (more than `max_llm_cluster_members`, default 20) is synthesized from a deterministic importance-first sample (KSUID tiebreak), not sent whole. Threshold clustering has no size ceiling, and a mega-cluster's prompt would overrun a small model's context on every attempt.
 
-**a. Pre-cluster by shared tags/topics** (cheap):
+### Match against existing concepts
 
-```python
-groups = defaultdict(list)
-for m in memories:
-    key = frozenset(m.topics or m.tags[:2])
-    groups[key].append(m)
-```
+The new concept's title and rationale are embedded and compared with existing concepts in the same family (`state IN ("matured", "promoted")`). If the top match has similarity ≥ `match_threshold` (**0.85**), the existing concept is **reinforced** with each cluster member (`ConceptPlane.reinforce`): sources are merged, `reinforcement_count` and `last_reinforced_at` are updated, and the existing wording is kept.
 
-**b. Within each tag/topic group, cluster by dense similarity**:
+### Create new
 
-- Compute pairwise cosine.
-- Threshold-cluster at 0.80 (configurable). Transitive closure; min_cluster_size=3.
-- Alternative: HDBSCAN with `min_cluster_size=3`. We prefer threshold clustering for interpretability; HDBSCAN is a future option.
+Otherwise a new `SynthesizedConcept` is created in `<family>/shared/concept` in state `synthesized`, with `merged_from` set to the cluster's memory ids (at least 3), the LLM's `synthesis_rationale`, `tags` and `importance`.
 
-A memory may land in multiple clusters (if it spans topics); that's fine — it'll feed multiple concepts.
+### Contradiction detection
 
-### Step 3 — Concept generation
+For each pair of concepts created or reinforced **in this run** whose content embeddings fall in `0.75 <= cosine < 0.85`, the LLM is asked whether they are consistent or contradictory. If contradictory, `contradicts` links are written on both sides. Both concepts are then blocked from maturing and from promotion until the contradiction is resolved (see [[04-data-model/synthesized-concept#contradiction-detection]]).
 
-For each cluster with ≥ 3 memories, ask the LLM:
+## Concept maturation
 
-```
-Below are {N} related memories (title + content). What common theme emerges?
+A separate daily job (`concept_maturation`, 03:30 UTC, in `src/musubi/lifecycle/maturation.py`) moves a concept from `synthesized` to `matured` when:
 
-Return JSON:
-{
-  "title": "3-10 words, noun phrase",
-  "content": "100-500 words of summary. Should be factual and represent the shared theme, NOT restate each memory. Use neutral voice.",
-  "rationale": "20-60 words: why these belong together",
-  "tags": ["tag1", "tag2", ...],
-  "importance": 1-10,
-  "contradicts_notice": "" or "<brief note if these memories contradict each other>"
-}
-```
+- it was created more than **24 hours** ago;
+- `reinforcement_count >= 3`;
+- `contradicts` is empty.
 
-The LLM backend is deployment-selected per ADR 0043 (`LIFECYCLE_LLM_API`): Ollama-native or any OpenAI-compatible endpoint with strict `json_schema` output. Pick a model that reliably produces strict structured output for this schema: a co-located 4B model measured 0% structured-output success here across two nightly passes, so the deployment target moved to a larger model behind an OpenAI-compatible gateway (Qwen 3.6 35B A3B, 131K context). That target has not yet completed a successful schema run; treat it as a target, not verified current state. Temperature 0 — we want consistent synthesis. Output parsed strictly. Parse failure → skip this cluster, log, continue. An oversized cluster (more than `max_llm_cluster_members`, default 20) is synthesized from a deterministic importance-first sample rather than sent whole — threshold clustering has no size ceiling, and a degenerate mega-cluster's serialized prompt would overrun a local model's context on every attempt.
-
-### Step 3b — Match vs existing
-
-Before creating a new concept, check for an existing concept in the same namespace that's semantically similar:
-
-```python
-existing = query_points(
-    "musubi_concept",
-    filter=must(namespace == ns, state in ("matured", "promoted")),
-    query=new_concept.dense_vector,
-    using="dense_bge_m3_v1",
-    limit=5,
-)
-```
-
-If the top result has similarity ≥ 0.85: **reinforce** the existing concept instead of creating a new one.
-
-Reinforcement updates:
-
-- `merged_from`: union with new memory IDs.
-- `reinforcement_count`: +1.
-- `last_reinforced_at`: now.
-- `importance`: max(existing, new).
-- No content change (the existing phrasing is kept; new evidence just reinforces it).
-
-### Step 3c — Create new
-
-Otherwise, insert a new `SynthesizedConcept` in `synthesized` state with:
-
-- `merged_from = [m.object_id for m in cluster]` (must be ≥ 3).
-- `merged_from_planes = ["episodic"]` (today; future mix).
-- `synthesis_rationale = rationale from LLM`.
-- `state = "synthesized"` (matures later — see below).
-
-### Step 4 — Contradiction detection
-
-After all concepts are generated in a run, we look at pairs of concepts that overlap semantically but not identically:
-
-```
-0.75 <= cosine(A, B) < 0.85 AND namespace(A) == namespace(B)
-```
-
-For each such pair, ask the LLM:
-
-```
-Are these two concepts CONSISTENT (complementary) or CONTRADICTORY (mutually exclusive)?
-Output: {"verdict": "consistent" | "contradictory", "reason": "..."}
-```
-
-If contradictory: write `contradicts` links on both concepts; both blocked from promotion until human resolves (see [[04-data-model/synthesized-concept#contradiction-detection]]).
-
-### Step 5 — Write
-
-Batched upsert into `musubi_concept`. Single Qdrant call per run (not per concept).
-
-### Step 6 — Cursor
-
-Update `synthesis-cursor.db`: `last_run_epoch[ns] = max(memory.updated_epoch for memory in selected)`.
-
-## Maturation of concepts
-
-A separate daily job (`concept_maturation`) advances concepts from `synthesized → matured` when:
-
-- `created_epoch < now - 24h` (24 hours since synthesis), AND
-- No `contradicts` entries are active.
-
-This gives human review a day to surface objections before a concept becomes queryable in the default-state filter.
+This gives review a day to surface objections before the concept appears under the default state filter.
 
 ## Demotion
 
-Concept demotion job, daily:
-
-- Select `state == "matured"` AND `last_reinforced_at < now - 30d`.
-- Transition to `demoted`. Reason: `decay-rule:no-reinforcement`.
-- Emit Thought to operator: "Concept X demoted after 30 days without reinforcement."
-
-Demoted concepts are excluded from default retrieval but kept for lineage.
+Concept demotion (`demotion_concept`, daily 05:00 UTC) demotes matured concepts with no reinforcement in 30 days. See [[06-ingestion/demotion]].
 
 ## Idempotency
 
-Running synthesis twice with no new memories → cursor doesn't move, no cluster re-fires, no writes. Idempotent.
-
-Running synthesis twice with the same new memories (cursor reset) → same clusters form, match-vs-existing triggers reinforcement rather than duplication. Non-duplicating.
-
-We test both.
+- Running twice with no new memories: nothing new above the cursor, the candidates have already been tried, no writes.
+- Re-running over the same memories (for example after a cursor reset): the same clusters form, and match-against-existing reinforces rather than duplicates.
 
 ## Failure handling
 
-| Failure | Behavior |
+| Failure | Behaviour |
 |---|---|
-| LLM down (Ollama) | Each failing cluster is skipped and the run continues; the cursor advances. Eligibility is owned by the candidates pool (v1.5.5+): every member of a skipped cluster is upserted as a candidate and re-pulled on the next run. **Deliberate contract change (2026-08-12):** the pre-candidates-pool behavior ("entire run skipped; cursor NOT advanced") let one permanently-failing cluster livelock a family forever — rebuilt first every night, failing the same way, cursor frozen. A whole-service outage and a single cluster's failure now share the skip path on purpose; the accepted consequence is that an outage longer than `candidate_ttl_sec` (30 days) ages the affected candidates out. If that exposure ever matters in practice, the escape hatch is a cheap Ollama liveness probe that pauses cursor advance only on a confirmed outage — filed as a possible follow-up, not required now. |
-| LLM returns invalid JSON / `None` for a cluster | That cluster skipped; members stay candidates; cursor advances past it (we tried); re-evaluated next run. Same path as the outage row above. |
-| Candidate row fails model validation (schema drift) | Skipped per row, never raised: both resolve branches strip Phase-2 layout-only keys before validating, and a row that still fails is logged with its id and counted on the report (`candidates_decode_failed`). A non-zero count is a DEGRADED run, not a failed one — one drifted row must never cost an identity family its daily pass (2026-08-12 production incident: an inline-vector row stamped with `committed_operation_id` aborted all eight families at the resolve seam). |
-| Cluster exceeds `max_llm_cluster_members` (20) | Synthesized from a deterministic importance-first sample (KSUID tiebreak); unsampled members stay candidates and reinforce the concept on later runs via match-vs-existing. |
-| Qdrant write fails | Current behavior: concepts write one-at-a-time per cluster. A mid-run Qdrant failure leaves earlier clusters persisted; the cursor still advances for memories consumed before the failure, so re-run is safe but not atomic. Batch-atomic write is a deferred optimization to be filed as a follow-up slice. |
-| Contradiction detection LLM fails | Concepts written WITHOUT contradiction links; a separate daily "contradiction-rerun" job re-evaluates. |
+| LLM unavailable, or invalid JSON / `None` for a cluster | That cluster is skipped and the run continues. Its members stay in the candidate pool and are retried next run; the cursor still advances. This is deliberate: when a failure froze the cursor, one permanently failing cluster could livelock a family. The accepted consequence is that an outage longer than `candidate_ttl_sec` (30 days) ages candidates out. |
+| Candidate row fails model validation (schema drift) | Skipped per row and logged with its id, counted as `candidates_decode_failed` on the run report and in `musubi_lifecycle_synthesis_decode_skips_total`. A non-zero count means a degraded run, not a failed one. |
+| Cluster larger than `max_llm_cluster_members` | Synthesized from the importance-first sample; unsampled members can reinforce the concept on later runs. |
+| Qdrant write fails mid-run | Concepts are written one at a time, so earlier clusters stay persisted. The run is safe to repeat but not atomic. |
+| Contradiction LLM call fails | The pair is left unlinked. No separate job re-checks it. |
+| Unexpected exception for a family | The family is aborted, the failure metric is incremented, and the remaining families run. |
 
 ## Cost
 
-Per run, typical small-team scale:
+LLM calls per run are roughly one per cluster plus one per in-band concept pair. Wall time depends on the configured model and endpoint. Qdrant writes are one per created or reinforced concept.
 
-- ~500 memories → ~30 clusters → ~30 LLM calls for generation + ~60 for contradiction pairs = 90 LLM calls × ~2s = ~3 minutes of Qwen2.5-7B Q4 inference.
-- ~30 Qdrant writes (one per cluster). A batched-write optimization is deferred.
+## Test Contract
 
-Well within an hour's window. Scales linearly with cluster count.
+**Module under test:** `src/musubi/lifecycle/synthesis.py`
 
-## Test contract
-
-**Module under test:** `musubi/lifecycle/synthesis.py`
-
-Selection:
+Selection and cursor:
 
 1. `test_selects_only_matured_since_cursor`
 2. `test_skips_when_fewer_than_3_new_memories`
 3. `test_cursor_per_namespace_tracked_separately`
+4. `test_cursor_get_set_accepts_namespace_or_family`
+
+Candidate pool:
+
+5. `test_candidates_upsert_and_get_within_ttl`
+6. `test_candidates_filtered_by_ttl_window`
+7. `test_candidates_remove_on_successful_cluster`
+8. `test_candidates_pruned_after_ttl`
+9. `test_candidates_per_family_isolation`
+10. `test_cursor_skip_fix_unclustered_memories_carry_forward`
 
 Clustering:
 
-4. `test_cluster_by_shared_tags_first`
-5. `test_cluster_by_dense_similarity_within_tag_group`
-6. `test_cluster_min_size_3_enforced`
-7. `test_memory_can_appear_in_multiple_clusters`
+11. `test_cluster_by_shared_tags_first`
+12. `test_cluster_by_dense_similarity_within_tag_group`
+13. `test_cluster_min_size_3_enforced`
+14. `test_memory_can_appear_in_multiple_clusters`
 
 Concept generation:
 
-8. `test_llm_prompt_receives_all_cluster_memories`
-9. `test_llm_json_parse_failure_skips_cluster`
-10. `test_concept_has_min_3_merged_from`
-11. `test_concept_starts_in_synthesized_state`
+15. `test_llm_prompt_receives_all_cluster_memories`
+16. `test_llm_json_parse_failure_skips_cluster`
+17. `test_concept_has_min_3_merged_from`
+18. `test_concept_starts_in_synthesized_state`
 
-Match vs existing:
+Match against existing:
 
-12. `test_high_similarity_match_reinforces_existing`
-13. `test_low_similarity_creates_new_concept`
-14. `test_reinforcement_increments_count_and_merges_sources`
+19. `test_high_similarity_match_reinforces_existing`
+20. `test_low_similarity_creates_new_concept`
+21. `test_reinforcement_increments_count_and_merges_sources`
 
 Contradictions:
 
-15. `test_overlapping_concepts_checked_for_contradiction`
-16. `test_contradictory_concepts_link_both_sides`
-17. `test_contradicted_concept_blocked_from_promotion`
+22. `test_overlapping_concepts_checked_for_contradiction`
+23. `test_contradictory_concepts_link_both_sides`
+24. `test_contradiction_updates_are_isolated_by_namespace`
+25. `test_contradicted_concept_blocked_from_promotion` (skipped here; covered by `tests/lifecycle/test_promotion.py::test_gate_blocks_on_active_contradiction`)
 
 Lifecycle:
 
-18. `test_synthesized_matures_after_24h_without_contradiction`
-19. `test_synthesized_blocked_from_maturing_with_contradiction`
-20. `test_concept_demotes_after_30d_no_reinforcement`
+26. `test_synthesized_matures_after_24h_without_contradiction`
+27. `test_synthesized_blocked_from_maturing_with_contradiction`
+28. `test_concept_demotes_after_30d_no_reinforcement`
 
-Failures:
+Failures and robustness:
 
-21. `test_ollama_down_keeps_memories_eligible_via_candidates` — superseded
-    `test_ollama_down_does_not_advance_cursor` on 2026-08-12 with the
-    candidates-pool outage contract (see Failure handling): cursor advances,
-    affected memories carry forward as candidates, next run with a
-    recovered LLM synthesizes them.
-22. `test_qdrant_batch_fails_no_partial_state`
-23. `test_invalid_json_for_cluster_skipped_not_failed_run`
+29. `test_ollama_down_keeps_memories_eligible_via_candidates`
+30. `test_llm_none_skips_cluster_not_entire_run`
+31. `test_invalid_json_for_cluster_skipped_not_failed_run`
+32. `test_mega_cluster_sampled_to_llm_cap`
+33. `test_oversized_clusters_deduplicate_after_sampling`
+34. `test_inline_vector_row_with_layout_fields_synthesizes`
+35. `test_one_undecodable_row_degrades_run_without_aborting_family`
+36. `test_family_exception_increments_failure_metric_without_reraise`
+37. `test_qdrant_batch_fails_no_partial_state` (skipped; writes are not batch-atomic)
 
-Robustness (added 2026-08-12):
+Family discovery:
 
-28. `test_llm_none_skips_cluster_not_entire_run`
-29. `test_inline_vector_row_with_layout_fields_synthesizes`
-30. `test_one_undecodable_row_degrades_run_without_aborting_family`
-31. `test_mega_cluster_sampled_to_llm_cap`
-32. `test_oversized_clusters_deduplicate_after_sampling`
+38. `test_discover_returns_identity_families_not_full_namespaces`
+39. `test_discover_paginates_until_offset_none`
+40. `test_discover_returns_empty_on_scroll_exception`
+41. `test_discover_falls_back_to_namespace_prefix_when_identity_family_missing`
 
-Property:
+Skipped (property and integration):
 
-24. `hypothesis: synthesis is idempotent across runs with no new memories`
-25. `hypothesis: re-running synthesis with same inputs produces same number of concepts (not duplicated)`
-
-Integration:
-
-26. `integration: real Ollama, 100 synthetic memories in 5 clusters → 5 concepts, each ≥ 3 merged_from`
-27. `integration: contradiction flow — inject two contradictory memory clusters, both concepts end up with symmetric contradicts links`
+42. `hypothesis: synthesis is idempotent across runs with no new memories`
+43. `hypothesis: re-running synthesis with same inputs produces same number of concepts (not duplicated)`
+44. `integration: real LLM, 100 synthetic memories in 5 clusters → 5 concepts, each ≥ 3 merged_from`
+45. `integration: contradiction flow — inject two contradictory memory clusters, both concepts end up with symmetric contradicts links`

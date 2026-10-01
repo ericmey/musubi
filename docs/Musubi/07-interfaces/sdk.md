@@ -4,49 +4,51 @@ section: 07-interfaces
 tags: [interfaces, python, sdk, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-19
+updated: 2026-10-01
 up: "[[07-interfaces/index]]"
 reviewed: false
 implements: ["src/musubi/sdk/", "tests/sdk/"]
 ---
 # Python SDK
 
-`musubi.sdk` — the Python package every adapter uses. A thin, typed, typed-error-returning wrapper around the canonical API.
+There are two Python clients for the canonical API. Pick by where your code lives.
 
-The SDK is ours. Adapters (MCP, LiveKit, OpenClaw) consume it. End-user programs can use it too.
+| Package | Where | For |
+|---|---|---|
+| **`musubi-sdk`** (`import musubi_sdk`) | separate repository [`sourceblender/musubi-sdk`](https://github.com/sourceblender/musubi-sdk), published to PyPI | Your own programs and integrations. Depends only on `httpx`. See [Connect](../../guide/connect.md) and [Use it](../../guide/use.md). |
+| **`musubi.sdk`** | this repository, `src/musubi/sdk/` | Code inside Core, mainly the in-repo MCP adapter ([[07-interfaces/mcp-adapter]]) and tests. Not published separately. |
 
-> **Layout note (ADR-0015 / ADR-0016):** the SDK ships as a sub-package
-> of the monorepo (`src/musubi/sdk/`), not the pre-monorepo sibling
-> `musubi-client/` package. Imports are `from musubi.sdk import …`.
+The rest of this page documents the **in-repo** `musubi.sdk`. For the external package, its own repository is the reference.
+
+Both are thin wrappers over the HTTP API in [[07-interfaces/canonical-api]]. Where this page and `openapi.yaml` disagree, `openapi.yaml` wins.
 
 ## Package
 
 ```
 src/musubi/sdk/
-  __init__.py            # re-exports MusubiClient, AsyncMusubiClient, exceptions, RetryPolicy, SDKResult
-  client.py              # MusubiClient class
-  async_client.py        # AsyncMusubiClient class
-  exceptions.py          # typed errors
-  result.py              # SDKResult[T] wrapper
-  retry.py               # retry policy
-  testing.py             # FakeMusubiClient
+  __init__.py       # re-exports MusubiClient, AsyncMusubiClient, exceptions, RetryPolicy, SDKResult
+  client.py         # MusubiClient (httpx.Client)
+  async_client.py   # AsyncMusubiClient (httpx.AsyncClient), same surface
+  exceptions.py     # typed errors
+  result.py         # SDKResult[T]
+  retry.py          # RetryPolicy
+  tracing.py        # optional OpenTelemetry spans
+  testing.py        # FakeMusubiClient, AsyncFakeMusubiClient
 ```
 
-Import path: `musubi.sdk` (sub-package of `musubi`). Version tracks the
-monorepo's release; SDK-only changes still bump that release.
+Import path: `from musubi.sdk import ...`. It is versioned with the Core release. Responses are returned as plain `dict`s (parsed JSON); there are no response model classes.
 
-## Public surface
-
-### Construction
+## Construction
 
 ```python
-from musubi.sdk import MusubiClient
+from musubi.sdk import MusubiClient, RetryPolicy
 
 client = MusubiClient(
-    base_url="https://musubi.example.local.example.com/v1",
+    base_url="http://127.0.0.1:8100/v1",   # include /v1
     token="eyJhbGc...",
-    timeout=30,                         # seconds, overall; per-call timeouts override
+    timeout=30.0,
     retry=RetryPolicy.default(),
+    strict_version=False,
 )
 ```
 
@@ -55,64 +57,88 @@ Async variant:
 ```python
 from musubi.sdk import AsyncMusubiClient
 
-async with AsyncMusubiClient(...) as client:
-    res = await client.retrieve(...)
+async with AsyncMusubiClient(base_url=..., token=...) as client:
+    res = await client.retrieve(namespace="alex/claude-code", query_text="...", planes=["episodic"])
 ```
 
-The async variant uses `httpx.AsyncClient`; sync uses `httpx.Client`. Shared `models.py` between them.
+## Methods
 
-### Common methods
+The full surface (sync shown; async is the same with `await`):
 
 ```python
-# Capture
-memory = client.episodic.capture(
-    namespace="alex/claude-code/episodic",
-    content="...",
-    tags=["cuda"],
-    topics=["infrastructure/gpu"],
-    importance=7,
-)
+# Top level
+client.retrieve(namespace=None, query_text="", mode="fast", limit=10,
+                planes=None, since=None, tags=None, request_id=None) -> dict
+client.retrieve_stream(namespace=None, query_text=..., mode="fast", limit=10,
+                       request_id=None) -> Iterator[dict]      # NDJSON rows
+client.probe_version() -> str
+client.close()                                                # or use as a context manager
 
-# Retrieve — 2-segment cross-plane per ADR-0028
-results = client.retrieve(
-    RetrievalQuery(
-        namespace="alex/claude-code",
-        query_text="...",
-        mode="fast",
-        limit=5,
-        planes=["curated", "concept", "episodic"],
-    )
-)
+# Episodic
+client.episodic.capture(namespace=..., content=..., tags=None, topics=None,
+                        importance=5, idempotency_key=None, created_at=None) -> dict
+client.episodic.capture_result(**kw) -> SDKResult[dict]
+client.episodic.get(namespace=..., object_id=...) -> dict
+client.episodic.batch(namespace=...)                          # context manager, see below
+
+# Other planes (read only)
+client.curated.get(namespace=..., object_id=...) -> dict
+client.concepts.get(namespace=..., object_id=...) -> dict
+client.artifacts.get(namespace=..., object_id=...) -> dict
+client.artifacts.blob(namespace=..., object_id=...) -> bytes
 
 # Thoughts
-client.thoughts.send(
-    from_presence="claude-code",
-    to_presence="livekit-voice",
-    content="...",
-)
+client.thoughts.send(namespace=..., from_presence=..., to_presence=..., content=...,
+                     channel="default", importance=5) -> dict
+client.thoughts.check(namespace=..., presence=...) -> dict
 
-unread = client.thoughts.check(my_presence="livekit-voice")
-client.thoughts.read(my_presence="livekit-voice", ids=[t.object_id for t in unread])
+# Lifecycle and ops
+client.lifecycle.events(namespace=None) -> dict               # needs an operator token
+client.ops.health() -> dict
+client.ops.status() -> dict
 ```
 
-### Resource modules
+Notes:
 
-- `client.episodic` — capture, get, batch, archive
-- `client.curated` — get, patch-metadata, list
-- `client.concepts` — get, reinforce, promote, reject, list
-- `client.artifacts` — upload, get, blob, chunks, archive
-- `client.thoughts` — send, check, read, history
-- `client.lifecycle` — events, transition (operator), reconcile (operator)
-- `client.ops` — health, status
+- `thoughts.send` **requires** `namespace` (the sender's 3-segment thought namespace).
+- `episodic.capture` sends a `topics` field, which the server ignores. Topics are inferred during maturation.
+- `created_at` must be timezone-aware and needs an operator-scoped token.
+- `retrieve` does not expose `state_filter`, `include_archived` or `include_lineage`; call the HTTP API directly for those.
+- Not covered by this SDK: thought read/history/stream, curated/concept/artifact writes and lists, uploads, lifecycle transitions, context packs and idempotency receipts. Use HTTP for these, or the external `musubi-sdk`.
 
-Each resource is a typed namespace on the client; methods mirror the canonical endpoints.
+Example:
+
+```python
+client.episodic.capture(
+    namespace="alex/claude-code/episodic",
+    content="Switched the build to uv; lockfile committed.",
+    tags=["build"],
+    importance=6,
+)
+
+results = client.retrieve(
+    namespace="alex/claude-code",
+    query_text="how is the build managed",
+    planes=["curated", "concept", "episodic"],
+    limit=5,
+)
+for row in results["results"]:
+    print(row["plane"], row["score"], row["content"][:80])
+
+client.thoughts.send(
+    namespace="alex/claude-code/thought",
+    from_presence="claude-code",
+    to_presence="voice",
+    content="Build switched to uv.",
+)
+```
 
 ## Errors
 
 ```python
-from musubi.sdk.exceptions import (
-    MusubiError,           # base
-    BadRequest,            # 400
+from musubi.sdk import (
+    MusubiError,           # base: .code, .detail
+    BadRequest,            # 400 (a 422 maps to the base MusubiError)
     Unauthorized,          # 401
     Forbidden,             # 403
     NotFound,              # 404
@@ -120,117 +146,106 @@ from musubi.sdk.exceptions import (
     RateLimited,           # 429
     BackendUnavailable,    # 503
     InternalError,         # 500
-    NetworkError,          # lower-level (DNS, connect)
+    NetworkError,          # transport failure after retries
 )
 
 try:
     client.episodic.capture(...)
 except Forbidden as e:
-    logger.warning("namespace %s out of scope", e.detail.namespace)
+    log.warning("out of scope: %s", e.detail)
 except BackendUnavailable:
-    # retry is handled inside SDK; surface only if retries exhausted
-    pass
+    pass  # retries already exhausted
 ```
 
-Errors carry structured `detail` fields matching the API's error schema. No bare strings.
+Errors carry the API's `code` and `detail` strings.
 
-## Result[T, E] pattern
+## Result pattern
 
-The SDK also offers a Result-oriented surface for adapters that prefer typed errors over exceptions:
+For callers that prefer values to exceptions:
 
 ```python
-res = client.episodic.capture_result(...)
+res = client.episodic.capture_result(namespace=..., content=...)
 if res.is_err():
     log.warning("capture failed: %s", res.err.code)
-    return
-memory = res.ok
+else:
+    memory = res.ok
 ```
 
-Both styles wrap the same underlying HTTP call. Pick per adapter preference.
+`capture_result` is the only `*_result` method.
 
 ## Retry policy
 
-Default retry policy:
+`RetryPolicy.default()`:
 
-- Retries on: 429, 503, 504, `NetworkError`.
-- Exponential backoff: 0.5s, 1s, 2s, 4s (max 4 attempts).
-- Honors `Retry-After` header on 429/503.
-- Idempotency key auto-generated for POST operations unless the caller provides one.
+- Retries on HTTP 429, 503, 504 and on transport errors.
+- Exponential backoff: 0.5 s, 1 s, 2 s, capped at 4 s; at most **4 attempts** in total.
+- Honours `Retry-After`, capped at 30 s.
+- `RetryPolicy.none()` disables retries.
 
-Override:
-
-```python
-client = MusubiClient(retry=RetryPolicy(max_attempts=6, base_backoff=0.3))
-```
+Every POST gets an auto-generated `Idempotency-Key` unless the caller passes one, so retried writes are replay-safe for 24 hours. `retrieve_stream` bypasses the retry loop.
 
 ## Connection pooling
 
-One `httpx.Client` per SDK instance. Connection pool sized to max concurrency on the adapter's workload. Default pool: 20 connections / host. Tunable.
+One `httpx.Client` (or `AsyncClient`) per SDK instance, with httpx's default pool limits. Reuse one client per process.
 
-## Telemetry hooks
+## Request ids and tracing
 
-The SDK emits OpenTelemetry spans (when OTel is configured in the adapter) for each call. Span name matches the method (`musubi.episodic.capture`). Default attributes: `http.method`, `http.url`, `musubi.namespace`, `musubi.duration_ms`.
+Pass `request_id=` to `retrieve` / `retrieve_stream` to send `X-Request-Id`; Core echoes it and logs it.
 
-If the adapter sets `X-Request-Id` in the caller's context, the SDK propagates it as a header for end-to-end tracing.
+With `opentelemetry-api` installed (the `otel` extra), every call runs inside a span named `musubi.<operation>` (for example `musubi.episodic.capture`) with attributes `http.method`, `http.url` (credentials scrubbed), `musubi.namespace`, `musubi.request_id` and `musubi.duration_ms`. Without OpenTelemetry the helpers are no-ops.
 
-## Batch helpers
-
-Pack multiple operations that the API supports in batch form:
+## Batch capture
 
 ```python
-with client.episodic.batch() as batch:
-    batch.capture(...)
-    batch.capture(...)
-    batch.capture(...)
-# on exit, one POST /v1/episodic/batch call; results attached to local references
+with client.episodic.batch(namespace="alex/claude-code/episodic") as batch:
+    batch.capture(content="...")
+    batch.capture(content="...", importance=7)
+# on exit: one POST /v1/episodic/batch
 ```
+
+An empty batch makes no call.
 
 ## Streaming retrieval
 
 ```python
-for result in client.retrieve_stream(RetrievalQuery(limit=500, ...)):
-    handle(result)
+for row in client.retrieve_stream(namespace="alex/claude-code/episodic", query_text="...", limit=200):
+    handle(row)
 ```
 
-Uses `POST /v1/retrieve/stream` (NDJSON). Generator yields `RetrievalResult` objects one at a time.
+Uses `POST /v1/retrieve/stream` and yields one dict per NDJSON line.
 
-## Version compatibility
+## Version check
 
-The SDK pins a minimum Musubi Core version it supports. On first use, it probes `GET /v1/ops/status` and logs a warning if the Core version is below the minimum. Adapters can configure this to be a hard error.
+`probe_version()` reads `GET /v1/ops/status` and compares the reported version with the SDK's minimum (`0.1.0`). It logs a warning when Core is older, or raises when the client was built with `strict_version=True`. It is not called automatically.
 
 ## Mocking for tests
-
-Adapters' unit tests mock the SDK:
 
 ```python
 from musubi.sdk.testing import FakeMusubiClient
 
 fake = FakeMusubiClient(
-    retrieve_returns=[
-        RetrievalResult(...),
-    ],
-    thoughts_check_returns=[],
+    retrieve_returns={"mode": "fast", "limit": 5, "warnings": [], "results": []},
+    thoughts_check_returns={"items": []},
 )
 adapter = MyAdapter(client=fake)
 ...
+assert fake.calls[0][0] == "retrieve"
 ```
 
-`FakeMusubiClient` matches the real client's signature + return types, using pydantic models for fixtures.
-
-Integration tests against a real Musubi instance use a shared test-container fixture (see [[07-interfaces/contract-tests]]).
+`FakeMusubiClient` (and `AsyncFakeMusubiClient`) accept the real client's constructor arguments plus one canned return per method (`capture_returns`, `retrieve_returns`, `thoughts_send_returns`, and so on). An unconfigured method raises `NotImplementedError`. Every call is recorded in `.calls`.
 
 ## Packaging
 
 - Python 3.12+.
-- Runtime deps: `httpx`, `pydantic>=2.0`, `orjson`.
-- Optional extras: `grpcio` for gRPC support (re-exported from the parent monorepo's `[grpc]` extra).
-- Test deps (dev extra): `pytest`, `pytest-asyncio`, `respx`.
+- Runtime dependency: `httpx`, which ships with the `musubi` package.
+- Optional: `opentelemetry-api` via the `otel` extra.
+- There is no gRPC extra.
 
 ## Test Contract
 
 **Module under test:** `src/musubi/sdk/*.py`
 
-Happy path:
+Happy path (`tests/sdk/test_sdk.py`):
 
 1. `test_capture_returns_memory_model`
 2. `test_retrieve_returns_list_of_results`
@@ -257,7 +272,7 @@ Connection:
 14. `test_connection_pool_reused_across_calls`
 15. `test_async_client_context_manager_cleanup`
 
-Telemetry:
+Telemetry (`tests/sdk/test_tracing.py` as well):
 
 16. `test_otel_span_emitted_per_call`
 17. `test_request_id_propagated`
@@ -272,6 +287,10 @@ Mocking:
 20. `test_fake_client_accepts_same_args_as_real`
 21. `test_fake_client_returns_configured_fixtures`
 
-Integration:
+Warnings (`tests/sdk/test_ret007_sdk_warnings.py`):
 
-22. `integration: SDK against a real Musubi container — 20-case contract suite passes`
+22. degraded-retrieval `warnings` pass through unchanged
+
+Integration (skipped; needs a running stack):
+
+23. `integration: SDK against a real Musubi container — 20-case contract suite passes`

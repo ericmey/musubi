@@ -4,266 +4,188 @@ section: 06-ingestion
 tags: [ingestion, lifecycle, scheduler, section/ingestion, status/complete, type/spec, worker]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
-implements: ["tests/lifecycle/__init__.py", "tests/lifecycle/test_lifecycle.py"]
+implements: ["tests/lifecycle/__init__.py", "tests/lifecycle/test_lifecycle.py", "tests/lifecycle/test_runner.py"]
 ---
 # Lifecycle Engine
 
-The Lifecycle Worker process — the background brain of Musubi. Runs maturation, synthesis, promotion, demotion, reflection, reconciliation on schedule, on top of shared primitives (locks, transitions, LifecycleEvent emission).
+The lifecycle worker is Musubi's background process. It runs maturation, synthesis, promotion, demotion, reflection and reconciliation on a schedule, on top of shared primitives: file locks, the typed `transition()` function, the lifecycle transition coordinator and LifecycleEvent recording.
 
 ## Process identity
 
-- Container: `musubi-lifecycle` (see [[03-system-design/components]]).
-- Python entry point: `musubi.lifecycle.worker:main`.
-- Connects to: Qdrant, TEI (for re-embedding on reconcile), Ollama (for enrichment), sqlite state dir.
+- Compose service: `lifecycle-worker`. It uses the same image as `core` with a different command.
+- Entry point: `python -m musubi.lifecycle.runner` (`src/musubi/lifecycle/runner.py`, `main()`).
+- Connects to Qdrant, TEI (dense, sparse, reranker), the lifecycle LLM endpoint, the vault directory, the artifact blob directory and the shared lifecycle SQLite database.
+- Exposes Prometheus `/metrics` on `LIFECYCLE_METRICS_PORT` (default `8101`). There is no HTTP API.
+- Traces are emitted under `service.name=lifecycle-worker`.
 
-Runs independently of Core. If Core goes down, the Worker keeps batching; if Worker goes down, Core keeps serving queries.
+It runs independently of Core. If Core goes down, the worker keeps working; if the worker goes down, Core keeps serving reads and writes. Writes that need lifecycle follow-up (artifact indexing, pending transitions) wait durably in the coordinator's outbox.
 
 ## Scheduler
 
-**APScheduler** (Python), using the `BlockingScheduler` variant — single process, multiple job types, persistent job store.
+The worker uses a **tick loop**, not APScheduler. APScheduler was the original design but was never added as a dependency. `LifecycleRunner` implements the subset the engine needs:
 
-Job store: sqlite at `/srv/musubi/lifecycle-state/scheduler.db`. Survives restarts; missed jobs (while Worker was down) are either replayed (if idempotent and within grace) or skipped per job config.
+- Every tick (`min(60, LIFECYCLE_RECONCILE_INTERVAL_S)` seconds, so 5 s by default) it evaluates every job against the current **UTC** time.
+- **Cron** jobs fire when the tick falls in the matching minute (`minute`, `hour`, `day`, `month`, `day_of_week`), at most once per minute. An unknown cron field raises instead of being silently ignored.
+- **Interval** jobs fire once at boot and then whenever the interval has elapsed since their last dispatch.
+- A job runs in a worker thread (`asyncio.to_thread`) and is not awaited by the loop, so a long sweep never blocks the next tick.
+- SIGTERM and SIGINT stop the loop after the current tick.
+
+There is **no persistent job store** and **no misfire catch-up**. If the worker is down during a job's minute, that occurrence is skipped; the next scheduled occurrence runs normally. `Job.grace_time_s` and `Job.coalesce` exist in `src/musubi/lifecycle/scheduler.py` and are exercised against the test harness (`TestingScheduler`), but the production runner does not consult them.
 
 ## Job registry
 
-```python
-# musubi/lifecycle/jobs.py
+`src/musubi/lifecycle/scheduler.py` (`build_default_jobs`) declares the names and triggers. Each sweep module supplies a real `build_*_jobs` builder, and `build_lifecycle_jobs` in `runner.py` merges them. All times are UTC.
 
-JOBS = [
-    Job(
-        name="maturation_episodic",
-        trigger=CronTrigger(minute=13),            # hourly
-        func=maturation.run_episodic,
-        grace_time_s=900,                          # if we missed by < 15m, run it
-        coalesce=True,                             # if we missed several, run once
-    ),
-    Job(
-        name="provisional_ttl",
-        trigger=CronTrigger(minute=17),            # hourly, offset
-        func=maturation.run_provisional_ttl,
-    ),
-    Job(
-        name="synthesis",
-        trigger=CronTrigger(hour=3, minute=0),     # daily 03:00
-        func=synthesis.run_all_namespaces,
-        grace_time_s=3600,
-    ),
-    Job(
-        name="concept_maturation",
-        trigger=CronTrigger(hour=3, minute=30),
-        func=concept_maturation.run,
-    ),
-    Job(
-        name="promotion",
-        trigger=CronTrigger(hour=4, minute=0),
-        func=promotion.run_all_namespaces,
-    ),
-    Job(
-        name="demotion_concept",
-        trigger=CronTrigger(hour=5, minute=0),
-        func=demotion.run_concept,
-    ),
-    Job(
-        name="demotion_episodic",
-        trigger=CronTrigger(day_of_week="sun", hour=3, minute=45),
-        func=demotion.run_episodic,
-    ),
-    Job(
-        name="reflection_digest",
-        trigger=CronTrigger(hour=6, minute=0),
-        func=reflection.run,
-    ),
-    Job(
-        name="vault_reconcile",
-        trigger=IntervalTrigger(hours=6),
-        func=reconcile.run,
-    ),
-]
-```
+| Job | Trigger | Builder |
+|---|---|---|
+| `maturation_episodic` | hourly at :13 | `lifecycle/maturation.py` |
+| `provisional_ttl` | hourly at :17 | `lifecycle/maturation.py` |
+| `synthesis` | daily 03:00 | `lifecycle/synthesis.py` |
+| `concept_maturation` | daily 03:30 | `lifecycle/maturation.py` |
+| `promotion` | daily 04:00 | `lifecycle/promotion.py` |
+| `demotion_concept` | daily 05:00 | `lifecycle/demotion.py` |
+| `demotion_episodic` | Sundays 03:45 | `lifecycle/demotion.py` |
+| `demotion_artifact` | Sundays 04:15 (no-op unless `MUSUBI_ARTIFACT_ARCHIVAL_ENABLED=true`) | `lifecycle/demotion.py` |
+| `reflection_digest` | daily 06:00 | `lifecycle/reflection.py` |
+| `vault_reconcile` | every 6 h (and once at boot) | `vault/reconciler.py` |
+| `lifecycle_reconcile` | every `LIFECYCLE_RECONCILE_INTERVAL_S` (default 5 s, and once at boot) | `runner.py` |
 
-Schedule tunables live in `config.py` (`LIFECYCLE_SCHEDULE_*`) and override the defaults.
+The schedule is fixed in code. There are no `LIFECYCLE_SCHEDULE_*` settings; changing a cadence is a code change.
+
+`lifecycle_reconcile` drives the transition coordinator: it applies pending lifecycle transitions and custom intents (immutable-vector publishes, artifact indexing) and cleans up terminal outbox rows older than `LIFECYCLE_CLEANUP_RETENTION_S` (30 days by default). The worker runs one reconcile pass synchronously at boot. After `LIFECYCLE_READINESS_MAX_RECONCILE_FAILURES` consecutive failures (default 3), the `musubi_lifecycle_coordinator_ready` gauge drops to 0.
 
 ## Locking
 
-Every job acquires a file-lock before executing:
+Every sweep job takes a non-blocking `fcntl.flock` before it runs:
 
 ```python
-# musubi/lifecycle/locks.py
-
-with file_lock(f"/srv/musubi/locks/{job.name}.lock", timeout=0) as acquired:
+lock_path = lock_dir / f"{name}.lock"
+with file_lock(lock_path) as acquired:
     if not acquired:
-        log.info(f"{job.name} already running; skipping")
+        log.info("lifecycle-job=%s lock-held; skipping run", name)
         return
-    try:
-        job.func()
-    finally:
-        pass  # lock released on context exit
+    asyncio.run(sweep())
 ```
 
-Rationale: APScheduler has its own concurrency control (`max_instances`), but a crash-restart while a job is running can bypass it. A file lock (via `fcntl.flock`) is inherited + reset on process death, making it robust.
+`lock_dir` is `<parent of LIFECYCLE_SQLITE_PATH>/locks`. With the documented default `LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite`, that is `/var/lib/musubi/lifecycle/locks/`, holding one lock file per job (`maturation_episodic.lock`, `synthesis.lock`, `promotion.lock`, `reflection.lock`, `vault_reconcile.lock`, and so on).
 
-For namespace-scoped jobs (synthesis, promotion), the lock is `/srv/musubi/locks/{job.name}-{ns_hash}.lock` — allows parallel namespaces.
+Why flock: the kernel releases it when the process dies, so a crash-restart cannot leave a stale lock behind. `NamespaceLock` (one lock file per job and namespace hash) exists in `scheduler.py` for namespace-partitioned work, but the shipped jobs use one lock per job.
 
-## State: cursors + attempt tracking
+## State
 
-Each job reads/writes a small state blob:
+All durable worker state lives in the shared lifecycle SQLite database at `LIFECYCLE_SQLITE_PATH` (WAL mode, `LIFECYCLE_SQLITE_BUSY_TIMEOUT_MS`, default 5000). Core opens the same database:
 
-```
-/srv/musubi/lifecycle-state/
-├── scheduler.db          (APScheduler)
-├── synthesis-cursor.db   (last-run per namespace)
-├── maturation-cursor.db  (last-seen object_id + epoch)
-├── reflection-cursor.db
-├── reconcile-cursor.db
-└── events.db             (LifecycleEvent local store)
-```
+- lifecycle transition coordinator outbox (pending transitions and intents);
+- LifecycleEvent rows;
+- maturation and synthesis cursors.
 
-These are small sqlite files; easy to back up / inspect.
+Next to it:
 
-## LifecycleEvent emission
+- `locks/`: job lock files;
+- `vault-writelog.db`: the vault write-log shared with the vault watcher (echo filter);
+- the idempotency receipt ledger, unless `IDEMPOTENCY_RECEIPT_SQLITE_PATH` overrides it.
 
-Every state transition goes through `transition()` in `musubi/lifecycle/transitions.py` (see [[04-data-model/lifecycle#transition-function]]). Events are batched:
+Back up the whole directory. See [[09-operations/backup-restore]].
 
-- Up to 100 events or 5 seconds, whichever comes first.
-- Flushed to `events.db` (sqlite).
-- Asynchronously mirrored to `musubi_lifecycle_events` Qdrant collection (optional — for semantic search over audit, used by reflection).
+## LifecycleEvent recording
 
-On crash: unflushed events are lost. Mitigation: we flush after every `transition()` call inside lifecycle jobs (more pessimistic than the generic API write path, because lifecycle does more state changes).
+State transitions made through the coordinator go through `transition()` in `src/musubi/lifecycle/transitions.py` (see [[04-data-model/lifecycle#transition-function]]), and each records an event. **One exception today:** curated supersession by the vault watcher sets `state` to `superseded` through `owned_update`, with no `transition()` and no event (`src/musubi/planes/curated/plane.py:298-350`). For transitions that do record one, `LifecycleEventSink` (`src/musubi/lifecycle/events.py`) commits each event **synchronously** to SQLite and returns `Ok` only after the commit. There is no in-memory buffer to lose on a crash. A refused write is a typed error and increments `musubi_lifecycle_event_write_failures_total`.
+
+A Qdrant mirror collection (`musubi_lifecycle_events`) is declared in the store layer but not populated. (Not implemented.)
 
 ## Failure handling
 
-Each job is wrapped in `try/except`:
+The runner wraps every dispatch:
 
-```python
-try:
-    job.func()
-except Exception as e:
-    log.exception(f"job {job.name} failed")
-    metrics.lifecycle_job_failure.labels(job=job.name).inc()
-    emit_thought(
-        to_presence="all",
-        channel="ops-alerts",
-        content=f"Lifecycle job {job.name} failed: {e}",
-        importance=8,
-    )
-```
-
-A failed job does not tear down the scheduler. The next run picks up where the cursor left off (idempotent design).
+- A crashed job increments `musubi_lifecycle_job_errors_total{job}` and logs the traceback.
+- It emits an ops-alert Thought (channel `ops-alerts`, `to_presence="all"`, from `lifecycle-worker`) whose body holds the job name, the exception **class** (never the message), a UTC timestamp and the trace id. Emission is bounded to 5 s. A failed emission increments `musubi_lifecycle_job_alert_errors_total{job}` and never crashes the runner.
+- The loop keeps going. The next run resumes from the job's persisted cursor.
 
 ### Crash recovery
 
-If the Worker container crashes mid-job:
+If the worker dies mid-job:
 
-1. File lock is released (flock is process-scoped).
-2. APScheduler on restart: checks `misfire_grace_time` — if within grace, runs the job; else skips.
-3. Job runs with its persisted cursor — resumes from last successful batch.
+1. The kernel releases the job's flock.
+2. On restart, the boot reconcile pass drives any durable pending intents, and interval jobs fire immediately.
+3. Cron jobs wait for their next scheduled minute; the missed occurrence is not replayed. Each sweep then resumes from its cursor or re-selects by state, which is why every sweep must be idempotent.
 
-### Cascade failure
+### Lifecycle LLM unavailable
 
-If Ollama is down:
+- **Maturation** still transitions rows to `matured` and keeps captured values. See [[06-ingestion/maturation#Failure modes]].
+- **Synthesis** skips the clusters whose LLM call failed and retries them on the next run.
+- **Promotion** skips concepts whose render failed; they stay `matured`.
+- **Reflection** still writes the day's file, with the patterns section replaced by a skip notice.
 
-- Maturation: still transitions to `matured`, skips enrichment. Re-enrichment sweep handles it later.
-- Synthesis: skips entire run (needs LLM to generate). Cursor does not advance.
-- Promotion: skips entire run (needs LLM to render). Concepts stay `matured`.
-- Reflection: skips.
+There is no CLI status command for the worker. Use the metrics and logs below.
 
-All emit `ops-alerts` Thoughts. A status check (`musubi-cli ops status`) shows which jobs were skipped recently.
+## Concurrency within a job
 
-## Concurrency model within a job
-
-Each job is internally asynchronous where it helps:
-
-- Maturation batch: async LLM calls parallelized (limit 4 in flight to avoid OOM on Ollama).
-- Synthesis: parallel cluster-gen (limit 4).
-- Promotion: sequential per concept (1 at a time; safer given vault writes).
-- Reconciler: parallel file reads (limit 32).
-
-Configured via `LIFECYCLE_CONCURRENCY_*` keys.
+Jobs run their work sequentially inside the sweep. Maturation batches 10 items per LLM call but issues the calls one after another. There are no `LIFECYCLE_CONCURRENCY_*` settings.
 
 ## Observability
 
-Metrics per job:
+Metrics on the worker's `/metrics`:
 
-- `lifecycle.job.duration_seconds{job}` histogram
-- `lifecycle.job.failures{job,reason}` counter
-- `lifecycle.job.items_processed{job}` counter
-- `lifecycle.job.skipped{job,reason}` counter
-- `lifecycle.job.last_success_epoch{job}` gauge
+- `musubi_lifecycle_job_duration_seconds{job}`: histogram, observed on every dispatch;
+- `musubi_lifecycle_job_errors_total{job}`: crashed dispatches;
+- `musubi_lifecycle_job_alert_errors_total{job}`: failed ops-alert emissions;
+- `musubi_lifecycle_coordinator_ready`: 1 when the shared store is open and reconcile is healthy;
+- `musubi_lifecycle_enrichment_batch_failures_total{kind}`: maturation;
+- `musubi_lifecycle_synthesis_decode_skips_total`, `musubi_lifecycle_synthesis_family_failures_total`: synthesis;
+- `musubi_lifecycle_event_write_failures_total`: event sink.
 
-Grafana dashboard: per-job run history, duration trends, failure rate.
-
-Alerts:
-
-- No successful run of `maturation_episodic` in last 3 hours.
-- No successful run of `synthesis` in last 48 hours.
-- Any job's failure rate > 30% over 24h.
-
-See [[09-operations/alerts]].
+Alerting on these metrics is an operator concern; no alert rules for them ship in this repository. See [[09-operations/alerts]].
 
 ## Testing
 
-Each job function is pure over its injected clients — testable in isolation:
-
-```python
-def test_maturation_run_pure_function():
-    fake_client = FakeQdrant([...])
-    fake_ollama = FakeOllama(...)
-    result = maturation.run_episodic(fake_client, fake_ollama, now=FIXED_TIME)
-    assert result.processed == 10
-```
-
-Scheduler tests use `APScheduler`'s in-memory job store and `FakeTimer`:
-
-```python
-def test_scheduler_misfires_handled():
-    scheduler = build_scheduler(jobs=[...], time_travel=True)
-    scheduler.advance(hours=4)
-    assert scheduler.runs_count("maturation_episodic") == 4
-```
+Sweep functions take their clients as arguments, so each is testable with fakes. The runner's trigger evaluation is pure (`_cron_matches`, `_interval_due`), and `LifecycleRunner` can be driven with a short `tick_seconds`. `TestingScheduler` in `scheduler.py` is the harness for grace/coalesce semantics and file-lock behaviour.
 
 ## Test Contract
 
-**Module under test:** `musubi/lifecycle/worker.py`, `musubi/lifecycle/locks.py`, `musubi/lifecycle/transitions.py`
+**Module under test:** `src/musubi/lifecycle/runner.py`, `src/musubi/lifecycle/scheduler.py`, `src/musubi/lifecycle/transitions.py`, `src/musubi/lifecycle/events.py`
 
-Scheduler:
+Scheduler (`tests/lifecycle/test_lifecycle.py`, `tests/lifecycle/test_runner.py`):
 
 1. `test_jobs_registered_with_documented_triggers`
-2. `test_missed_job_within_grace_runs`
-3. `test_missed_job_outside_grace_skipped`
-4. `test_coalesce_multiple_misfires_run_once`
+2. `test_missed_job_within_grace_runs` (test harness only)
+3. `test_missed_job_outside_grace_skipped` (test harness only)
+4. `test_coalesce_multiple_misfires_run_once` (test harness only)
+5. `test_cron_matches_minute_only_fires_each_hour_at_that_minute`
+6. `test_cron_matches_day_of_week`
+7. `test_cron_matches_unknown_field_raises`
+8. `test_interval_due_fires_on_first_tick`
+9. `test_runner_dispatches_matching_job_once_per_minute`
+10. `test_runner_isolates_job_exception`
 
 Locking:
 
-5. `test_file_lock_acquires_and_releases`
-6. `test_second_lock_attempt_fails_fast`
-7. `test_lock_released_on_process_death`
-8. `test_namespace_scoped_lock_allows_parallel_namespaces`
+11. `test_file_lock_acquires_and_releases`
+12. `test_second_lock_attempt_fails_fast`
+13. `test_lock_released_on_process_death`
+14. `test_namespace_scoped_lock_allows_parallel_namespaces`
 
-Failure isolation:
+Failure isolation (`tests/lifecycle/test_life006_alerts.py`, `tests/lifecycle/test_runner_metrics.py`):
 
-9. `test_job_failure_does_not_stop_scheduler`
-10. `test_job_failure_emits_thought`
-11. `test_job_failure_metric_incremented`
+15. `test_job_failure_does_not_stop_scheduler`
+16. `test_job_failure_emits_exactly_one_durable_alert`
+17. `test_alert_emission_timeout_is_bounded_and_does_not_crash_runner`
+18. `test_runner_dispatch_observes_job_duration_and_errors_on_crash`
 
-State:
+State and events:
 
-12. `test_cursor_advances_on_successful_batch`
-13. `test_cursor_persists_across_worker_restart`
-14. `test_scheduler_db_persists_job_history`
+19. `test_cursor_advances_on_successful_batch`
+20. `test_cursor_persists_across_worker_restart`
+21. `test_lifecycle_events_batched_and_flushed`
+22. `test_events_survive_worker_restart`
 
-Events:
+Integration (not implemented):
 
-15. `test_lifecycle_events_batched_and_flushed`
-16. `test_events_survive_worker_restart` (sqlite is committed)
-
-Integration:
-
-17. `integration: full day simulation — seed corpus, advance clock 24h, assert each scheduled job ran once`
-18. `integration: crash recovery — kill worker mid-synthesis, restart, synthesis completes from cursor`
-19. `integration: ollama-outage scenario — synthesis skips cleanly, maturation skips enrichment, alerts emit`
+23. `full day simulation: seed corpus, advance clock 24h, assert each scheduled job ran once`
+24. `crash recovery: kill worker mid-synthesis, restart, synthesis completes from cursor`
+25. `LLM-outage scenario: synthesis skips cleanly, maturation skips enrichment, alerts emit`
 
 ## Pitfalls
 

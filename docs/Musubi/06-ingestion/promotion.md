@@ -4,219 +4,156 @@ section: 06-ingestion
 tags: [curated, ingestion, lifecycle, promotion, section/ingestion, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
-implements: ["src/musubi/lifecycle/demotion.py", "src/musubi/lifecycle/promotion.py", "tests/lifecycle/test_demotion.py", "tests/lifecycle/test_promotion.py"]
+implements: ["src/musubi/lifecycle/promotion.py", "src/musubi/llm/promotion_client.py", "tests/lifecycle/test_promotion.py"]
 ---
 # Promotion
 
-Turning a well-reinforced concept into a durable curated-knowledge file in the Obsidian vault. The crown jewel of the write path.
+Turning a well-reinforced concept into a durable curated-knowledge file in the vault. It is the last step of the write path, and the one a human is expected to review.
 
 See [[04-data-model/synthesized-concept#promotion-gate]] and [[04-data-model/curated-knowledge]].
 
 ## When it runs
 
-- **Daily**, 04:00 local (after synthesis at 03:00).
-- On-demand via `musubi-cli promotion run --namespace <ns> --concept <id>`.
+- **Daily at 04:00 UTC** (`promotion` job), after synthesis (03:00) and concept maturation (03:30).
+- **Operator force:** `musubi promote force <concept-id> --namespace <ns> --curated-id <curated-id>` wraps `POST /v1/concepts/{id}/promote`. It links the concept to a curated row that **already exists** (create one first with `POST /v1/curated`). It does not call the LLM.
 
-Concurrency: one promotion sweep at a time.
+Concurrency: one sweep at a time (`<lock dir>/promotion.lock`). Each sweep promotes at most `batch_size` concepts (default 1), one after another.
 
 ## Gate
 
-A concept is eligible when all are true:
+A concept is eligible when all of these hold (`_is_eligible` in `src/musubi/lifecycle/promotion.py`):
 
-- `state == "matured"` (not synthesized, not demoted).
+- `state == "matured"`.
 - `reinforcement_count >= 3` (`PROMOTION_REINFORCEMENT_THRESHOLD`).
 - `importance >= 6` (`PROMOTION_IMPORTANCE_THRESHOLD`).
-- `created_at < now - 48h` (buffer for contradictions).
-- No active `contradicts` entries of equal-or-higher `provenance_strength`.
-- `promotion_attempts < 3` (anti-infinite-retry).
-- No existing curated in same namespace with `promoted_from == concept.object_id` (already promoted).
+- Created at least **48 hours** ago (a buffer for contradictions to surface).
+- `contradicts` is empty. Any recorded contradiction blocks promotion.
+- `promotion_attempts < 3` (`PROMOTION_MAX_ATTEMPTS`).
+- `promoted_to` is unset (not already promoted).
 
-The sweep selects candidates via Qdrant payload filters; checks the remaining conditions in Python.
+These are module constants, not settings. The sweep selects candidates with Qdrant payload filters and checks the rest in Python.
 
 ## The write path
 
 ```
- 1. select eligible concepts                  Qdrant scroll
+ 1. select eligible concepts                      Qdrant scroll
  2. for each:
-     a. render markdown body via LLM          ~3s
-     b. validate rendering                    strict pydantic
-     c. compute vault path                    deterministic from tags/topics
-     d. check for path conflict               vault file system
-     e. write write-log entry (core-wrote)    sqlite
-     f. write markdown file                    vault fs
-     g. write body_hash + frontmatter id      in step f
-     h. upsert musubi_curated Qdrant point     direct
-     i. transition concept to 'promoted'       typed transition
-     j. set concept.promoted_to = new KSUID    payload
-     k. set curated.promoted_from = concept_id payload (already in step h)
-     l. emit LifecycleEvent (both sides)
-     m. emit Thought to alex/* on channel ops-alerts
+     a. render a markdown body via the LLM
+     b. validate the rendering                    pydantic (PromotionRender)
+     c. compute the vault path                    deterministic from namespace/topic/title
+     d. resolve path conflicts                    read existing frontmatter
+     e. create (or re-adopt) the curated point    CuratedPlane.create
+     f. write the vault file                      VaultWriter: write-log first, then file
+     g. transition the concept to 'promoted'      typed transition (promoted_to, promoted_at)
+     h. emit an ops-alerts Thought
 ```
 
-Steps a–m are per-concept; concurrency within a sweep is bounded (1 at a time by default — promotion is a careful, human-reviewable action). Configurable to 4-way parallel (`PROMOTION_CONCURRENCY`).
+The curated point is created **before** the file is written, so an unrelated-lineage conflict fails closed before any vault path is overwritten. A retry after a failed file write is safe: `CuratedPlane.create` returns the existing row and the file is written with its `object_id`.
 
-### Step 2a — Rendering
+### Rendering
 
-LLM prompt (Qwen2.5-7B, low temperature):
+Prompt: `src/musubi/llm/prompts/promotion-render/v1.txt`, at temperature 0.2. The model returns JSON `{body, wikilinks, sections}`: a self-contained markdown body with at least one H2, no frontmatter, and no AI disclaimers. Concept fields and supporting memories are passed as untrusted data, not as instructions.
 
-```
-You are writing a curated knowledge note for an Obsidian vault. 
-Source: a synthesized concept derived from {N} episodic memories.
+The rendering is separate from the concept's `content`: the concept is a machine summary, the curated note is prose for people.
 
-Concept title: {title}
-Concept content: {content}
-Synthesis rationale: {rationale}
-Top contributing memories (summaries): {...}
+**LLM endpoint:** the promotion client (`HttpxPromotionClient`) posts to `{OLLAMA_URL}/api/chat` with `LLM_MODEL`. It does **not** use the `LIFECYCLE_LLM_*` settings that maturation and synthesis use (ADR 0043).
 
-Write a markdown document suitable for a long-lived curated knowledge file.
-Guidelines:
-- Title as H1.
-- 200-800 word body, markdown formatted.
-- Include a "Background" section summarizing why this is worth recording.
-- Include a "Details" section with the key facts.
-- Use [[wikilinks]] to other topics when relevant (list provided).
-- Do NOT invent facts. Only state what's in the provided material.
-- Do NOT include frontmatter — we add that separately.
-
-Output the markdown body only.
-```
-
-The rendering is distinct from the concept's `content` — the concept is a machine summary; the curated doc is human-consumable prose.
-
-### Step 2b — Validate rendering
+### Validation
 
 ```python
 class PromotionRender(BaseModel):
     body: str = Field(min_length=100, max_length=20000)
     wikilinks: list[str]
-    sections: list[str]               # heading titles
+    sections: list[str]
 ```
 
-Validation:
+The validator rejects a body with no H2, or one containing "as an AI model" / "as a language model". There is **no corrective-prompt retry**: a policy failure is recorded as a rejection (below), and the concept is tried again on a later sweep while it has attempts left.
 
-- Body length bounds.
-- Must contain at least one H2 ("proper document structure").
-- Doesn't contain "As an AI model" or other meta disclaimers (regex blacklist).
-- Wikilink targets are in the allowed topic set.
-
-If validation fails: retry up to 2 times with corrective prompts, then abort this concept's promotion (increments `promotion_attempts`).
-
-### Step 2c — Vault path
+### Vault path
 
 ```python
 def compute_path(concept) -> str:
-    primary_topic = concept.topics[0] if concept.topics else "_misc"
+    topics = concept.topics or concept.linked_to_topics
+    primary_topic = (slugify(topics[0]) or "_misc") if topics else "_misc"
     slug = slugify(concept.title)
     return f"curated/{namespace_to_dir(concept.namespace)}/{primary_topic}/{slug}.md"
 ```
 
-E.g., for namespace `alex/_shared/concept` and primary topic `infrastructure/gpu`, title "CUDA 13 driver 575":
+`namespace_to_dir` keeps the first two segments (`tenant/presence`). `slugify` reduces to `[a-z0-9-]`, so a topic like `infrastructure/gpu` becomes `infrastructure-gpu`, and LLM-supplied topics cannot traverse paths. `VaultWriter.write_curated` also refuses any path that resolves outside the vault root.
+
+Example: namespace `alex/shared/concept`, primary topic `infrastructure/gpu`, title "CUDA 13 driver 575":
 
 ```
-curated/alex/_shared/infrastructure/gpu/cuda-13-driver-575.md
+curated/alex/shared/infrastructure-gpu/cuda-13-driver-575.md
 ```
 
-Path is deterministic from concept metadata. Renames happen later (human rename in Obsidian).
+### Path conflicts
 
-### Step 2d — Path conflict
+If the target file already exists, its frontmatter is parsed:
 
-If the target path already exists:
+- Corrupt frontmatter: deterministic failure, recorded as a rejection. The file is not overwritten.
+- `musubi-managed: true` and `promoted_from` is this concept: rewrite in place, reusing the file's `object_id` (idempotent re-promotion).
+- `musubi-managed: true` and a different concept: write a sibling `<slug>-v2.md` and emit an ops-alerts Thought.
+- `musubi-managed: false` (human-authored): write a sibling `<slug>-promoted-<first 8 chars of concept id>.md` and emit an ops-alerts Thought.
 
-- If the file's `musubi-managed: true` and `promoted_from == this concept`: re-write (idempotent re-promotion).
-- If the file's `musubi-managed: true` and `promoted_from != this concept`: conflict. Write sibling: `<slug>-v2.md`. Log a warning Thought.
-- If the file's `musubi-managed: false` (human-authored): conflict. Write sibling: `<slug>-promoted-<short-ksuid>.md`. Log; operator can merge later.
+### Write-log and file write
 
-### Step 2e–f — Write-log + file write
+`VaultWriter` (`src/musubi/vault/writer.py`) records `(path, body_hash)` in the write-log **before** writing the file, so the vault watcher recognises Musubi's own write and does not re-ingest it. See [[06-ingestion/vault-sync]]. The write-log lives at `vault-writelog.db` next to the lifecycle database.
 
-Write-log prevents the Vault Watcher from re-indexing our own write:
+### Linkage
 
-```python
-with write_log.session() as sess:
-    sess.add(WriteLogEntry(
-        file_path=path,
-        body_hash=body_hash,
-        written_by="core",
-        written_at=time.time(),
-    ))
-    sess.commit()
-    # Now write the file
-    write_file_atomically(path, frontmatter + "\n" + body)
-```
+- Curated point: `promoted_from=<concept id>`, `promoted_at=now`, `state="matured"`, `musubi-managed: true` in the file.
+- Concept: transitioned to `promoted` with `promoted_to=<curated id>` and `promoted_at`, via the lifecycle coordinator. If the transition is durably **pending**, the sweep reports the concept as not promoted this run and the reconciler finishes it.
 
-Atomic file write: write to `<path>.tmp`, then `os.rename()` to `<path>`. No half-written files.
+### Operator notification
 
-### Step 2h — Qdrant upsert
-
-Direct insert of the `musubi_curated` point (not via Vault Watcher). This avoids a race where the caller polls for the promotion result before the Watcher gets around to indexing.
-
-The Vault Watcher will eventually see the filesystem event for our write, look up the write-log, find our entry, and skip re-indexing. See [[06-ingestion/vault-sync#echo-prevention]].
-
-### Step 2i-k — Bidirectional linkage
-
-Atomic-ish in a single `batch_update_points` call:
-
-- Concept: `state=promoted`, `promoted_to=<curated ksuid>`, `promoted_at=now`.
-- Curated: `promoted_from=<concept ksuid>`, `promoted_at=now`. (Set at step h, this is just a safety re-set.)
-
-If Qdrant updates succeed but the file write failed (unlikely given step f's atomicity): detected at reconcile time; the reconciler drops the orphan Qdrant point.
-
-### Step 2m — Operator notification
-
-A Thought on channel `ops-alerts`:
+A Thought from `lifecycle-worker` on channel `ops-alerts`, `to_presence="all"`, in namespace `lifecycle-worker/ops/thought`, importance 5:
 
 ```
-to_presence: "all"
-from_presence: "lifecycle-worker"
-channel: "ops-alerts"
-content: "Promoted concept '{title}' to curated/... Please review."
-importance: 7
+[Concept Promoted] Promoted concept '{title}' to curated/... Please review.
 ```
 
-The operator (human) sees this in their Obsidian vault's inbox or via any presence checking ops-alerts.
+A failed notification is logged and does not undo the promotion.
 
-## Rejection / Promotion failure
+## Rejection and failure
 
-If promotion fails deterministically for a concept (rendered-body policy validation,
-path policy, or curated model validation):
+**Deterministic failures** (render policy validation, path computation, corrupt frontmatter at the target, curated model validation) call `ConceptPlane.record_promotion_rejection`:
 
-- `promotion_attempts += 1`.
-- `promotion_rejected_at = now`.
+- `promotion_attempts += 1`;
+- `promotion_rejected_at = now`;
 - `promotion_rejected_reason = "..."`.
-- Emit Thought on `ops-alerts` with the reason.
-- Concept remains in `matured` state, still eligible for retry on next run — unless `promotion_attempts == 3`, in which case it stays "matured" forever until human intervention (we stop trying).
 
-Transient transport, malformed-envelope, vault, Qdrant, transition, and other
-infrastructure failures do not modify rejection fields or consume an attempt; the
-next sweep retries them and logs the exception with traceback.
+The concept stays `matured`. After three attempts the gate stops selecting it until an operator intervenes.
 
-## Human override
+**Transient failures** (LLM transport errors, malformed LLM envelopes, vault I/O, Qdrant, transition errors) do not touch the rejection fields or use up an attempt. They are logged with a traceback and retried on the next sweep.
 
-```bash
-# Force promotion with custom rendering
-musubi-cli promotion write --concept <id> --body-file ./draft.md
+## Operator actions
 
-# Reject permanently
-musubi-cli concept reject --concept <id> --reason "superseded by existing curated"
-```
+| Action | CLI | API |
+|---|---|---|
+| Force-promote to an existing curated row | `musubi promote force <id> --namespace <ns> --curated-id <cid>` | `POST /v1/concepts/{id}/promote?namespace=<ns>` `{promoted_to, reason}` |
+| Record a rejection (one strike) | `musubi promote reject <id> --namespace <ns> --reason "..."` | `POST /v1/concepts/{id}/reject?namespace=<ns>` `{reason}` |
+| Archive a curated row | (none) | `DELETE /v1/curated/{id}?namespace=<ns>` (transitions the point to `archived`; the vault file is not moved) |
+| Move a concept to another state | (none) | `POST /v1/lifecycle/transition` `{object_id, to_state, actor, reason}` |
 
-`concept reject` marks `promotion_attempts = MAX`, sets `promotion_rejected_at`, and demotes the concept to `demoted` (not queryable by default).
+All of these require an **operator-scoped** token, except `DELETE /v1/curated`, which requires write access to the namespace. `musubi promote reject` records a rejection only; it does not demote the concept.
 
 ## Rollback
 
-If we promoted the wrong concept (bad synthesis), manual rollback:
+To undo a bad promotion:
 
-1. `musubi-cli curated archive <curated-id>` — soft-deletes the file (moves to `_archive/`), marks point `state=archived`.
-2. `musubi-cli concept demote <concept-id>` — transitions back to `demoted`.
-3. Both emit LifecycleEvents.
+1. Archive the curated row (`DELETE /v1/curated/{id}`).
+2. Transition the concept with `POST /v1/lifecycle/transition`.
+3. Remove or edit the vault file by hand if needed. The vault watcher or the 6-hourly `vault_reconcile` job picks up the change.
 
-Rollback is purely metadata + file-move. The audit log keeps the full history.
+Every transition records a LifecycleEvent, so the audit trail keeps the full history.
 
 ## Test Contract
 
-**Module under test:** `musubi/lifecycle/promotion.py` + `musubi/vault/writer.py`
+**Module under test:** `src/musubi/lifecycle/promotion.py`, `src/musubi/llm/promotion_client.py`, `src/musubi/vault/writer.py`
 
 Gate:
 
@@ -233,7 +170,7 @@ Rendering:
 8. `test_llm_renders_markdown_body`
 9. `test_rendering_validation_rejects_short_body`
 10. `test_rendering_validation_rejects_missing_h2`
-11. `test_rendering_retry_corrective_prompt`
+11. `test_rendering_retry_corrective_prompt` (skipped; no retry is implemented)
 
 Path:
 
@@ -241,58 +178,51 @@ Path:
 13. `test_path_conflict_with_same_concept_rewrites_in_place`
 14. `test_path_conflict_with_other_concept_writes_sibling`
 15. `test_path_conflict_with_human_file_writes_sibling_and_logs`
+16. `test_path_sanitizes_topics_against_traversal`
+17. `test_vault_writer_rejects_path_escape`
 
-Write-log:
+Write-log (skipped in this file; the write-log echo filter is covered by `tests/vault/test_sync.py`):
 
-16. `test_writelog_entry_precedes_file_write`
-17. `test_file_written_atomically`
-18. `test_watcher_sees_writelog_and_skips_reindex`
+18. `test_writelog_entry_precedes_file_write`
+19. `test_file_written_atomically`
+20. `test_watcher_sees_writelog_and_skips_reindex`
 
 Replay identity:
 
-38. `test_idempotent_replay_reuses_existing_vault_object_id`
-39. `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
-40. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
-41. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
-42. `test_idempotent_replay_adopts_persisted_qdrant_identity`
-43. `test_idempotent_replay_fails_closed_on_unrelated_lineage`
+21. `test_idempotent_replay_reuses_existing_vault_object_id`
+22. `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
+23. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
+24. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
+25. `test_idempotent_replay_adopts_persisted_qdrant_identity`
+26. `test_idempotent_replay_fails_closed_on_unrelated_lineage`
 
 Qdrant:
 
-19. `test_curated_point_upserted_with_promoted_from`
-20. `test_concept_state_set_to_promoted`
-21. `test_bidirectional_links_set_in_single_batch`
+27. `test_curated_point_upserted_with_promoted_from`
+28. `test_concept_state_set_to_promoted`
+29. `test_bidirectional_links_set_in_single_batch`
 
 Notification:
 
-22. `test_lifecycle_events_emitted_for_both_sides`
-23. `test_thought_emitted_to_ops_alerts`
+30. `test_lifecycle_events_emitted_for_both_sides`
+31. `test_thought_emitted_to_ops_alerts`
 
 Failure:
 
-24. `test_promotion_rejected_after_3_attempts_stops_retrying`
-25. `test_deterministic_rendering_failure_increments_attempts`
-26. `test_transient_rendering_failure_leaves_attempts_unchanged`
-27. `test_deterministic_post_render_failure_increments_attempts`
-28. `test_transient_post_render_failure_leaves_attempts_unchanged`
-29. `test_deterministic_model_validation_failure_increments_attempts`
+32. `test_promotion_rejected_after_3_attempts_stops_retrying`
+33. `test_deterministic_rendering_failure_increments_attempts`
+34. `test_transient_rendering_failure_leaves_attempts_unchanged`
+35. `test_deterministic_post_render_failure_increments_attempts`
+36. `test_transient_post_render_failure_leaves_attempts_unchanged`
+37. `test_deterministic_model_validation_failure_increments_attempts`
 
-Concurrency:
+Skipped (concurrency, CLI, property and integration):
 
-30. `test_concurrent_promotion_of_different_concepts_ok`
-31. `test_concurrent_promotion_of_same_concept_one_wins`
-
-Human override:
-
-32. `test_cli_force_promote_with_custom_body`
-33. `test_cli_reject_sets_rejected_fields_and_demotes`
-
-Property:
-
-34. `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
-
-Integration:
-
-35. `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
-36. `integration: path conflict with human file — sibling created, no human file modified`
-37. `integration: rollback flow — promote then archive, vault file in _archive/, Qdrant state=archived`
+38. `test_concurrent_promotion_of_different_concepts_ok`
+39. `test_concurrent_promotion_of_same_concept_one_wins`
+40. `test_cli_force_promote_with_custom_body`
+41. `test_cli_reject_sets_rejected_fields_and_demotes`
+42. `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
+43. `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
+44. `integration: path conflict with human file — sibling created, no human file modified`
+45. `integration: rollback flow — promote then archive`
