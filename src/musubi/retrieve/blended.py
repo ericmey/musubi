@@ -74,10 +74,7 @@ def _jaccard(tags1: list[str], tags2: list[str]) -> float:
     return len(s1 & s2) / len(s1 | s2)
 
 
-async def _cosine_sim(embedder: Embedder, content1: str, content2: str) -> float:
-    # Use embedder to get dense vectors
-    vecs = await embedder.embed_dense([content1[:500], content2[:500]])
-    v1, v2 = vecs[0], vecs[1]
+def _cosine_sim(v1: list[float], v2: list[float]) -> float:
     dot = sum(a * b for a, b in zip(v1, v2, strict=True))
     mag1 = sum(a * a for a in v1) ** 0.5
     mag2 = sum(a * a for a in v2) ** 0.5
@@ -218,14 +215,31 @@ async def run_blended_retrieve(
     # Sort hits by provenance desc, then score desc, so we KEEP the best one
     all_hits.sort(key=lambda h: (_hit_provenance(h), h.score), reverse=True)
 
+    contents = [str(hit.payload.get("content", "")) for hit in all_hits]
+    hashes = [_content_hash(content) for content in contents]
+    tags = [hit.payload.get("tags", []) for hit in all_hits]
+    vectors: dict[str, list[float]] = {}
+    if query.mode == "deep":
+        semantic_candidates: set[int] = set()
+        for i in range(len(all_hits)):
+            for j in range(i):
+                if hashes[i] != hashes[j] and _jaccard(tags[i], tags[j]) >= 0.5:
+                    semantic_candidates.update((i, j))
+        if semantic_candidates:
+            texts = list(dict.fromkeys(contents[i][:500] for i in sorted(semantic_candidates)))
+            embedded = await embedder.embed_dense(texts)
+            if len(embedded) != len(texts):
+                raise ValueError("dense embedder returned the wrong number of vectors")
+            vectors = dict(zip(texts, embedded, strict=True))
+
     for i in range(len(all_hits)):
         h1 = all_hits[i]
         if h1.object_id in dropped_by_content:
             continue
 
-        c1 = str(h1.payload.get("content", ""))
-        hash1 = _content_hash(c1)
-        tags1 = h1.payload.get("tags", [])
+        c1 = contents[i]
+        hash1 = hashes[i]
+        tags1 = tags[i]
 
         is_duplicate = False
         for j in range(i):
@@ -233,15 +247,15 @@ async def run_blended_retrieve(
             if h2.object_id in dropped_by_content:
                 continue
 
-            c2 = str(h2.payload.get("content", ""))
-            if _content_hash(c2) == hash1:
+            c2 = contents[j]
+            if hashes[j] == hash1:
                 is_duplicate = True
                 break
 
             if query.mode == "deep":
-                tags2 = h2.payload.get("tags", [])
+                tags2 = tags[j]
                 if _jaccard(tags1, tags2) >= 0.5:
-                    sim = await _cosine_sim(embedder, c1, c2)
+                    sim = _cosine_sim(vectors[c1[:500]], vectors[c2[:500]])
                     if sim >= 0.92:
                         is_duplicate = True
                         break
