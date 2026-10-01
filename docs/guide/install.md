@@ -60,8 +60,9 @@ git clone https://github.com/sourceblender/musubi && cd musubi
 cp .env.example .env && chmod 600 .env   # .env is gitignored; fill in the values below
 ```
 
-In `.env`, set the secrets (see [Secrets and settings](#secrets-and-settings))
-and tell Core where the models are:
+`.env.example` leaves the required values blank on purpose. Fill them all in
+before you run `docker compose config` or `up`: the secrets (see
+[Secrets and settings](#secrets-and-settings)) and where the models are:
 
 - **Remote models (the default stack):** `TEI_DENSE_URL`, `TEI_SPARSE_URL`,
   `TEI_RERANKER_URL` and `OLLAMA_URL`, plus `TEI_BASIC_AUTH_USERNAME` and
@@ -80,6 +81,14 @@ and tell Core where the models are:
 
   ```bash
   docker compose -f docker-compose.yml -f deploy/docker/compose.local-gpu.yml up -d --wait
+  ```
+
+  The override starts Ollama but does not download a model. Pull the one
+  `LLM_MODEL` names in `.env`:
+
+  ```bash
+  docker compose -f docker-compose.yml -f deploy/docker/compose.local-gpu.yml \
+    exec ollama ollama pull <LLM_MODEL from .env>
   ```
 
 The lifecycle jobs use Ollama by default. To use an OpenAI-compatible endpoint
