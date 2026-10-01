@@ -10,7 +10,11 @@ reviewed: false
 ---
 # Backup & Restore
 
-How we back up, where copies live, and how we restore. Practiced quarterly.
+> **Warning (2026-10-01): `deploy/backup/restore.yml` does not work, and `drill.yml` (which imports it) fails with it.** It stops `core` and `lifecycle-worker` (`restore.yml:100-106`), then runs `docker compose exec -T lifecycle-worker` against the stopped container to recover Qdrant (`restore.yml:152-153`), so no snapshot is restored. It also stops services before checking that the backup is complete, chooses "latest" by directory name without reading the manifest's status, and never checks `SHA256SUMS`. A fix is being designed. Until it lands, do not rely on these playbooks for recovery.
+
+> This page predates the current deployment and is being rewritten. Its paths and scripts have not been re-verified against the shipped stack.
+
+How we back up, where copies live, and how we restore.
 
 ## Scope
 

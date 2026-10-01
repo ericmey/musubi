@@ -230,7 +230,8 @@ Cycle through one operations drill each quarter so recovery paths stay fresh:
 1. Q1 — `Qdrant down`: restore a Qdrant snapshot into a scratch environment and
    verify `/v1/ops/status`.
 2. Q2 — `Restore from snapshot`: run the full restore playbook against a scratch
-   target and execute `deploy/smoke/verify.sh`.
+   target and execute `deploy/smoke/verify.sh`. **Blocked:** `restore.yml` does not
+   work today; see the warning in [[09-operations/backup-restore]].
 3. Q3 — `Backup failure 24h`: simulate a missing snapshot target and verify the
    manual backup path.
 4. Q4 — `First deploy`: rehearse the rollback section from

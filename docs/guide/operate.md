@@ -53,7 +53,7 @@ schedule (the backup README describes this). Also copy the backup directory
 off the host. A restore needs all three: Qdrant snapshots, the lifecycle
 database and the vault.
 
-Test a restore before you need one:
+Test a restore before you need one. **The repo's `deploy/backup/restore.yml` playbook does not work today**; see the warning at the top of the page below:
 [backup and restore](../Musubi/09-operations/backup-restore.md) and the
 [manual recovery runbook](../../deploy/runbooks/manual-recovery.md).
 
