@@ -82,6 +82,8 @@ not silently become a Qdrant identifier.
 
 ## Playbooks
 
+> **Warning (2026-10-01): `deploy/backup/restore.yml` does not work, and `drill.yml` (which imports it) fails with it.** It stops `core` and `lifecycle-worker` (`restore.yml:100-106`), then runs `docker compose exec -T lifecycle-worker` against the stopped container to recover Qdrant (`restore.yml:152-153`), so no snapshot is restored. It also stops services before checking that the backup is complete, chooses "latest" by directory name without reading the manifest's status, and never checks `SHA256SUMS`. A fix is being designed. Until it lands, do not rely on these playbooks for recovery.
+
 - `backup.yml` performs on-demand or scheduled backups.
 - `restore.yml` restores filesystem stores, recovers Qdrant snapshots, rebuilds curated vectors, and verifies artifact chunk counts.
 - `drill.yml` composes bootstrap + restore + smoke validation for quarterly restore drills.
@@ -92,4 +94,4 @@ Keep real values in Ansible Vault, not git. The expected variable names are docu
 
 ## RPO and RTO
 
-Software-level restore targets roughly 30 minutes once a host is already provisioned. Hardware-level disaster recovery is bounded by the Ansible bootstrap plus data restore time.
+Software-level restore targets roughly 30 minutes once a host is already provisioned. These are targets, not measurements: no successful run of `restore.yml` is recorded (see the warning above). Hardware-level disaster recovery is bounded by the Ansible bootstrap plus data restore time.
