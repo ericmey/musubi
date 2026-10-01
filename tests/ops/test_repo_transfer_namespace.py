@@ -27,7 +27,10 @@ RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
 # The user-facing verify command lives in the user guide; README links to it.
 GUIDE_INSTALL = ROOT / "docs" / "guide" / "install.md"
 PUBLIC_DOCS = (GUIDE_INSTALL, ROOT / "SECURITY.md")
-PUBLIC_IDENTITY = r"^https://github\.com/(ericmey|sourceblender)/musubi/.*"
+PUBLIC_IDENTITY = (
+    "https://github.com/sourceblender/musubi/.github/workflows/publish-core-image.yml"
+    "@refs/tags/<version>"
+)
 
 CANONICAL_IDENTITY = (
     r"^https://github\.com/(ericmey|sourceblender)/musubi/"
@@ -65,15 +68,14 @@ def test_readme_reaches_the_public_verify_instructions() -> None:
     assert GUIDE_INSTALL.exists()
 
 
-def test_public_verify_docs_accept_both_owners_anchored() -> None:
+def test_public_verify_docs_pin_the_exact_release_identity() -> None:
+    # Public verify commands bind the signature to one release tag's publish workflow:
+    # an exact --certificate-identity, never a regexp that accepts other workflows or refs.
     for path in PUBLIC_DOCS:
-        assert set(_identities(path.read_text())) == {PUBLIC_IDENTITY}, path.name
-    pattern = re.compile(PUBLIC_IDENTITY)
-    for owner in ("ericmey", "sourceblender"):
-        assert pattern.search(f"https://github.com/{owner}/musubi/{WORKFLOW}@refs/tags/v1.0.0")
-    assert not pattern.search(
-        f"https://github.com/evil/x/{WORKFLOW}@refs/heads/https://github.com/ericmey/musubi/"
-    )
+        text = path.read_text()
+        assert "--certificate-identity-regexp" not in text, path.name
+        exact = re.findall(r"--certificate-identity '([^']+)'", text)
+        assert set(exact) == {PUBLIC_IDENTITY}, (path.name, exact)
 
 
 def test_identity_accepts_both_owners_release_tags() -> None:

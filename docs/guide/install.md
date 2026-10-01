@@ -100,7 +100,7 @@ before you run `docker compose config` or `up`: the secrets (see
 
   ```bash
   docker compose -f docker-compose.yml -f deploy/docker/compose.local-gpu.yml \
-    exec ollama ollama pull <LLM_MODEL from .env>
+    exec ollama ollama pull "$(sed -n 's/^LLM_MODEL=//p' .env)"
   ```
 
 The lifecycle jobs use Ollama by default. To use an OpenAI-compatible endpoint
@@ -117,10 +117,13 @@ then verify it:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/(ericmey|sourceblender)/musubi/.*' \
+  --certificate-identity 'https://github.com/sourceblender/musubi/.github/workflows/publish-core-image.yml@refs/tags/<version>' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/sourceblender/musubi-core@sha256:<digest>
 ```
+
+`<version>` is the release tag you are installing (for example `v1.27.12`), so
+the signature must come from exactly that release's publish workflow.
 
 The root `docker-compose.yml` carries the current release's pin on one shared
 image line (the `x-core-image` anchor), used by Core, the lifecycle worker and
@@ -138,7 +141,8 @@ manager, never in the repo or in shell history:
 - `QDRANT_API_KEY`: authenticates Core to Qdrant.
 
 `OAUTH_AUTHORITY` is the token issuer: every token's `iss` claim must match
-it. Models, ports and data paths have working defaults.
+it. Core's bind address and port, the model names and the data volumes have
+defaults; the secrets and the model endpoint URLs do not.
 
 ### Check it
 

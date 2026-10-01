@@ -5,8 +5,8 @@
 - `GET /v1/ops/health`: is Core up.
 - `GET /v1/ops/status`: per-dependency status (Qdrant, the TEI services,
   Ollama), for dashboards and smoke checks.
-- `GET /v1/ops/metrics`: Prometheus metrics. The stack's local Prometheus
-  scrapes it; point `remote_write` at your own long-term store if you have
+- `GET /v1/ops/metrics`: Prometheus metrics. Scrape it with your own
+  Prometheus; point `remote_write` at your own long-term store if you have
   one.
 
 ## Upgrades
