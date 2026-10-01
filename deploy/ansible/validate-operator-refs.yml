@@ -88,3 +88,14 @@
   run_once: true
   no_log: true
   when: musubi_require_transition_consumers | default(false)
+
+- name: Require distinct transition consumer names
+  ansible.builtin.assert:
+    that:
+      - >-
+        musubi_shared_inference_transition_consumers | map(attribute='name') |
+        unique | list | length == musubi_shared_inference_transition_consumers | length
+    fail_msg: "Transition consumer names must be distinct"
+  delegate_to: localhost
+  run_once: true
+  when: musubi_require_transition_consumers | default(false)
