@@ -46,13 +46,45 @@ firewall: the host is yours.
 
 ### Network exposure
 
-Core listens on `127.0.0.1` by default, so a fresh install is reachable only
-from the host itself. Exposing it on a network is an explicit setting you
-choose, and you own what protects it: put TLS and access control in front of
-Core before any agent reaches it over a network you don't fully control.
+Core listens on `127.0.0.1:8100` by default (`MUSUBI_CORE_BIND`,
+`MUSUBI_CORE_PORT`), so a fresh install is reachable only from the host itself.
+Setting `MUSUBI_CORE_BIND` to a LAN address is a choice you make deliberately,
+and you own what protects it: put TLS and access control in front of Core
+before any agent reaches it over a network you don't fully control. No model
+service publishes a port on the host.
 
-<!-- TODO(compose-first): steps to fetch, configure and start the production
-Compose stack go here once its path, env file and bind settings are final. -->
+### Start the stack
+
+```bash
+git clone https://github.com/sourceblender/musubi && cd musubi
+cp .env.example .env && chmod 600 .env   # .env is gitignored; fill in the values below
+```
+
+In `.env`, set the secrets (see [Secrets and settings](#secrets-and-settings))
+and tell Core where the models are:
+
+- **Remote models (the default stack):** `TEI_DENSE_URL`, `TEI_SPARSE_URL`,
+  `TEI_RERANKER_URL` and `OLLAMA_URL`, plus `TEI_BASIC_AUTH_USERNAME` and
+  `TEI_BASIC_AUTH_PASSWORD` if your endpoints need them. Then:
+
+  ```bash
+  docker compose up -d --wait
+  ```
+
+  This runs Core, the lifecycle worker and Qdrant, with data in named Docker
+  volumes.
+
+- **Models on this host's GPU:** add the GPU override, which also runs the three
+  embedding services and Ollama. Set the text-embeddings-inference image in
+  `.env` for your GPU's architecture; the override does not assume one.
+
+  ```bash
+  docker compose -f docker-compose.yml -f deploy/docker/compose.local-gpu.yml up -d --wait
+  ```
+
+The lifecycle jobs use Ollama by default. To use an OpenAI-compatible endpoint
+instead, set `LIFECYCLE_LLM_API`, `LIFECYCLE_LLM_BASE_URL`,
+`LIFECYCLE_LLM_MODEL` and `LIFECYCLE_LLM_API_KEY`.
 
 ### Pin and verify the image
 
@@ -69,13 +101,13 @@ cosign verify \
   ghcr.io/sourceblender/musubi-core@sha256:<digest>
 ```
 
-<!-- TODO(compose-first): name the file that carries the current release's
-pin once the release PR targets the production Compose stack. -->
+The root `docker-compose.yml` carries the current release's pin for Core and
+the lifecycle worker. An automatic PR updates it (and the quickstart's) after
+each release.
 
 ### Secrets and settings
 
-[`deploy/docker/.env.production.example`](../../deploy/docker/.env.production.example)
-lists every setting Core reads. Two are secrets and belong in your secret
+[`.env.example`](../../.env.example) lists every setting Core reads. Two are secrets and belong in your secret
 manager, never in the repo or in shell history:
 
 - `JWT_SIGNING_KEY`: signs and verifies agent tokens (see

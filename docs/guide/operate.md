@@ -11,41 +11,28 @@
 
 ## Upgrades
 
-The full procedure is the [image upgrade runbook](../../deploy/runbooks/upgrade-image.md).
-Its shape:
-
 1. **A release publishes a signed image,** and an automatic PR proposes the new
-   digest for `deploy/ansible/group_vars/all.yml`. That PR never merges itself.
+   digests for the Core and lifecycle-worker lines in `docker-compose.yml`.
+   That PR never merges itself.
 2. **Verify the digest** with `cosign verify`, as in
    [Install](install.md#pin-and-verify-the-image), and read the release notes
    in [CHANGELOG.md](../../CHANGELOG.md).
 3. **Run the credential preflight** the PR describes. It starts the candidate
-   image against your live tokens and must pass before you merge.
-4. **Dry-run, then deploy.** `scripts/musubi-deploy core,lifecycle-worker`
-   runs the playbook with `--check --diff` by default; only the image and
-   version lines should change. Add `--apply` to deploy.
+   image against your live tokens and must pass before you upgrade.
+4. **Upgrade:** pull the new pin, then `docker compose pull` and
+   `docker compose up -d --wait` (with the same `-f` files you started with).
 5. **Check your agents** before calling the upgrade done: a real capture and
    recall from each integration you run, not only a health check.
-6. **Roll back** by reverting the pin commit and deploying again.
+6. **Roll back** by returning `docker-compose.yml` to the previous pin and
+   running `docker compose up -d --wait` again.
 
 ## Backups
 
-[`deploy/backup/musubi-backup.sh`](../../deploy/backup/musubi-backup.sh) is a
-host-local job, run by a systemd timer every six hours. It snapshots each
-Qdrant collection and copies the lifecycle database and the artifact blobs
-into `/var/lib/musubi/backups/<timestamp>/`, keeping 14 days.
+<!-- TODO(compose-first): document the backup job for the Compose stack's
+named volumes once deploy/backup supports them. -->
 
-It is written for the Ansible-deployed layout. It needs:
-
-- a Compose project named `musubi` (set `COMPOSE_PROJECT` otherwise);
-- exactly one running `lifecycle-worker` container;
-- `QDRANT_API_KEY` in that container's environment, because the script calls
-  Qdrant from inside it.
-
-[Its README](../../deploy/backup/README.md) describes one deployment, where
-1Password Connect injects that key at startup. Any method that sets the
-variable in the container works; the script never reads secrets from host
-files.
+Back up three things: Qdrant snapshots (Qdrant's snapshot API), the lifecycle
+database and the artifact blobs, all from the stack's named volumes.
 
 **That job does not cover the vault.** The curated plane is Markdown in the
 vault directory; keep it in git and push it to a private remote on a

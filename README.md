@@ -58,7 +58,7 @@ Design choices are captured as ADRs in [`docs/Musubi/13-decisions/`](docs/Musubi
 - **TEI (text-embeddings-inference)** for BGE-M3 dense + SPLADE sparse + BGE-reranker — all GPU-hostable, CPU-fallback OK.
 - **Ollama** for LLM calls (maturation scoring, synthesis, promotion rendering, reflection). Defaults to Qwen 2.5 7B; any Ollama-tagged model works.
 - **FastAPI + HTTPX** HTTP surface; **gRPC** generated from `proto/` (partial). Both exposed on the same port.
-- **Docker Compose** for local / single-box deploy. **Ansible** playbooks for a managed-host rollout (`deploy/ansible/`). Every published image is [cosign](https://github.com/sigstore/cosign)-signed by digest, Trivy-scanned, and ships with a CycloneDX SBOM attestation.
+- **Docker Compose** for local / single-box deploy. the same Compose stack runs a single production host you have prepared. Every published image is [cosign](https://github.com/sigstore/cosign)-signed by digest, Trivy-scanned, and ships with a CycloneDX SBOM attestation.
 
 ## Try it
 
@@ -110,7 +110,7 @@ src/musubi/                 importable package
 tests/                      mirrors src/musubi/ path-for-path
 docs/guide/                 user guide: install, connect agents, use, operate
 docs/Musubi/                the architecture vault (Obsidian) — source of truth for design
-deploy/                     ansible, prometheus, grafana, docker-compose templates
+deploy/                     docker overrides, smoke checks, backup, runbooks
 ```
 
 ## Status
@@ -128,12 +128,12 @@ In v1.0:
 - ✅ `Last-Event-ID` replay on `/v1/thoughts/stream` — reconnect without losing thoughts
 - ✅ MCP + LiveKit + OpenClaw adapters (external repos), static-bearer auth model with per-agent token support
 - ✅ Supply-chain: cosign + SBOM + Trivy on every published image
-- ✅ Fully automated release chain — conventional commit → release PR auto-merges → tag → signed image → digest pin PR auto-merges. Operator runs `ansible-playbook update.yml` from the control host and that is the only human step.
+- ✅ Release chain: conventional commit → reviewed release PR → tag → signed, scanned image with SBOM → digest pin PR. Pin PRs never merge themselves; an operator verifies the digest, runs the credential preflight and upgrades.
 - ✅ Operator tooling: `musubi promote force|reject` CLI, vault large-file skip-with-warning, rate-limited vault watcher
 
 Post-v1.0:
 - ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will need its own ADR
-- ⏳ Auto-deploy pipeline (image publish is automated; host rollout is still operator-driven via ansible)
+- ⏳ Auto-deploy pipeline (image publish is automated; host rollout is operator-driven)
 - ⏳ gRPC transport ADR ([#98](https://github.com/sourceblender/musubi/issues/98)) — priority-low, not a 1.0 blocker
 - ⏳ Vault-wide sweep to update illustrative `eric/...` examples to agent-as-tenant (normative specs already flipped; docs carry a banner pointing at [ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
 
