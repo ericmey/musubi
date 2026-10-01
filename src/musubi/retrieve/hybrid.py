@@ -398,37 +398,44 @@ async def _encode_query(
     sparse_vector: dict[int, float] = {}
     sparse_degraded = False
 
-    if dense_task is not None:
-        try:
-            dense_vector = (await dense_task)[0]
-        except Exception as exc:
-            return Err(
-                error=RetrievalError(
-                    code="dense_embedding_failed",
-                    detail=f"{type(exc).__name__}: {exc}",
+    try:
+        if dense_task is not None:
+            try:
+                dense_vector = (await dense_task)[0]
+            except Exception as exc:
+                return Err(
+                    error=RetrievalError(
+                        code="dense_embedding_failed",
+                        detail=f"{type(exc).__name__}: {exc}",
+                    )
                 )
-            )
 
-    if sparse_task is not None:
-        try:
-            sparse_vector = (await sparse_task)[0]
-        except TimeoutError:
-            sparse_vector = {}
-            sparse_degraded = True
-        except Exception as exc:
-            return Err(
-                error=RetrievalError(
-                    code="sparse_embedding_failed",
-                    detail=f"{type(exc).__name__}: {exc}",
+        if sparse_task is not None:
+            try:
+                sparse_vector = (await sparse_task)[0]
+            except TimeoutError:
+                sparse_vector = {}
+                sparse_degraded = True
+            except Exception as exc:
+                return Err(
+                    error=RetrievalError(
+                        code="sparse_embedding_failed",
+                        detail=f"{type(exc).__name__}: {exc}",
+                    )
                 )
-            )
 
-    embedding = _QueryEmbedding(
-        dense=dense_vector, sparse=sparse_vector, sparse_degraded=sparse_degraded
-    )
-    if cache is not None and dense_vector and sparse_vector:
-        cache.put(query, embedding)
-    return Ok(value=embedding)
+        embedding = _QueryEmbedding(
+            dense=dense_vector, sparse=sparse_vector, sparse_degraded=sparse_degraded
+        )
+        if cache is not None and dense_vector and sparse_vector:
+            cache.put(query, embedding)
+        return Ok(value=embedding)
+    finally:
+        tasks = [task for task in (dense_task, sparse_task) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _namespace_condition(namespace: Namespace) -> models.FieldCondition:

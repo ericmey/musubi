@@ -164,14 +164,29 @@ async def run_fast_retrieve(
             return Ok(value=cached)
 
     cache = embedding_cache or QueryEmbeddingCache(model_version=_DEFAULT_CACHE_MODEL_VERSION)
-    encoding = await _encode_query(
-        embedder,
-        query=query,
-        cache=cache,
-        dense_enabled=True,
-        sparse_enabled=any(collection_has_sparse(name) for name in resolved_collections.value),
-        sparse_timeout_s=sparse_timeout_s,
-    )
+    try:
+        encoding = await asyncio.wait_for(
+            _encode_query(
+                embedder,
+                query=query,
+                cache=cache,
+                dense_enabled=True,
+                sparse_enabled=any(
+                    collection_has_sparse(name) for name in resolved_collections.value
+                ),
+                sparse_timeout_s=sparse_timeout_s,
+            ),
+            timeout=plane_timeout_s,
+        )
+    except TimeoutError:
+        return Err(
+            error=FastRetrievalError(
+                code="embeddings_unavailable",
+                detail="query encoding timed out",
+                status_code=503,
+                retry_after_s=5,
+            )
+        )
     if isinstance(encoding, Err):
         return Err(error=_map_error(encoding.error))
     prefetch = prefetch_limit if prefetch_limit is not None else max(20, limit * 2)

@@ -53,9 +53,10 @@ For each plane in the query (default: `[curated, concept, episodic]`):
 - `limit = K_pre` where `K_pre = max(20, query.limit * 2)` so we have headroom for merge/dedup.
 - Timeout: 250ms per-collection.
 
-The query is encoded once before the plane fan-out. The 250ms per-collection
-timer covers that collection's search and hydration, while the 400ms whole-call
-timer still covers encoding and all plane work together.
+The query is encoded once before the plane fan-out, with its own 250ms bound.
+The 250ms per-collection timer covers that collection's search and hydration,
+while the 400ms whole-call timer still covers encoding and all plane work
+together.
 
 All plane queries run **concurrently** via `asyncio.gather(return_exceptions=True)`. A failed or slow plane doesn't block others.
 
@@ -181,3 +182,4 @@ Cold-query budget:
 
 20. `test_fast_path_encodes_once_before_per_plane_timeout`
 21. `test_fast_path_shares_encoding_with_real_hybrid_search`
+22. `test_fast_path_bounds_cold_encoding_before_fanout`
