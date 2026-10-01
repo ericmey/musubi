@@ -42,7 +42,27 @@ INFRA_FOLDERS = {
 # ---------- Frontmatter parsing ------------------------------------------------
 
 FM_START = re.compile(r"\A---\s*\n")
+# Which parser read each file. The verdict must not silently depend on whether
+# PyYAML happens to be importable, so main() prints this and a YAML parse failure
+# is reported rather than quietly handed to the fallback.
+FM_PARSER = "pyyaml" if yaml is not None else "fallback (PyYAML not importable)"
+FM_YAML_FAILURES: list[tuple[str, str]] = []
 FM_END = re.compile(r"\n---\s*\n")
+
+
+def _fallback_scalar(raw: str) -> str:
+    """Unquote one scalar the way YAML would for the simple cases we accept.
+
+    A balanced double-quoted value unescapes ``\\"`` and ``\\\\``; a balanced
+    single-quoted value unescapes ``''``. Anything else keeps the old behaviour
+    (strip stray quotes), so unquoted values read exactly as before.
+    """
+    v = raw.strip()
+    if len(v) >= 2 and v[0] == v[-1] == '"':
+        return v[1:-1].replace('\\\\', "\x00").replace('\\"', '"').replace("\x00", "\\")
+    if len(v) >= 2 and v[0] == v[-1] == "'":
+        return v[1:-1].replace("''", "'")
+    return v.strip('"').strip("'")
 
 
 def read_frontmatter(path: Path) -> tuple[dict, str]:
@@ -59,8 +79,8 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
         try:
             data = yaml.safe_load(block) or {}
             return data, body
-        except Exception:
-            pass
+        except Exception as exc:
+            FM_YAML_FAILURES.append((str(path.relative_to(VAULT)), str(exc).splitlines()[0]))
     # Fallback: key: value and key: [a, b] only.
     out: dict = {}
     for line in block.splitlines():
@@ -68,7 +88,7 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
             continue
         k, _, v = line.partition(":")
         key = k.strip()
-        val = v.strip().strip('"').strip("'")
+        val = _fallback_scalar(v)
         if val.startswith("[") and val.endswith("]"):
             out[key] = [s.strip().strip('"').strip("'") for s in val[1:-1].split(",") if s.strip()]
         else:
@@ -351,6 +371,8 @@ def main() -> int:
         check_specs(rep)
     if args.command in ("wikilinks", "all"):
         check_wikilinks(rep)
+    for rel, msg in FM_YAML_FAILURES:
+        rep.warn(rel, f"frontmatter is not valid YAML, read with the fallback parser: {msg}")
 
     if args.json:
         print(
@@ -358,11 +380,13 @@ def main() -> int:
                 {
                     "errors": [{"path": p, "message": m} for (p, m) in rep.errors],
                     "warnings": [{"path": p, "message": m} for (p, m) in rep.warnings],
+                    "frontmatter_parser": FM_PARSER,
                 },
                 indent=2,
             )
         )
     else:
+        print(f"frontmatter parser: {FM_PARSER}")
         if rep.errors:
             print(f"\x1b[31m{len(rep.errors)} error(s):\x1b[0m")
             for p, m in rep.errors:
