@@ -4,45 +4,57 @@ section: 08-deployment
 type: index
 status: complete
 tags: [section/deployment, status/complete, type/index, agents]
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[08-deployment/index]]"
 reviewed: true
 ---
 
 # Agent Rules — Deployment (08)
 
-Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong route config`. Supplements [[CLAUDE]]. (Per [[13-decisions/0033-centralize-observability-on-shiori]], `deploy/grafana/` was removed — visualization lives on the shiori observability host outside this repo.)
+Local rules for the root `docker-compose.yml`, `deploy/docker/compose.local-gpu.yml`
+and `.env.example`. Supplements [[CLAUDE]].
 
 ## Must
 
-- **Ansible is the source of truth.** Every step to stand up a host is in a playbook. "Run this one command and then…" is a bug.
-- **Docker Compose for service topology.** Single file at repo root or `deploy/docker/docker-compose.yml`. Health checks on every service. Startup order via `depends_on: condition: service_healthy`.
-- **One host profile at a time.** v1 targets the reference host in [[08-deployment/host-profile]]. Multi-host is explicitly out of scope; see [[13-decisions/0010-single-host-v1]].
-- **GPU VRAM is a hard budget.** See [[08-deployment/gpu-inference-topology]]. Adding a model requires updating the budget table. No silent co-residency.
-- **Secrets via `ansible-vault encrypt_string`.** Never commit plaintext secrets. `.env` files are templated.
+- **The Compose stack is the install path.** The root `docker-compose.yml` (plus the
+  optional GPU overlay) is the source of truth for what runs. Preparing the host
+  (Docker, GPU drivers, OS updates, firewall) is the operator's job; Musubi does not
+  provision hosts. See [[08-deployment/host-profile]].
+- **Health checks on every long-running service.** Startup order uses
+  `depends_on` with `service_healthy` / `service_completed_successfully`.
+- **Pin every image by digest.** The Core image is pinned once on the
+  `x-core-image` anchor; Qdrant is pinned by tag and digest; the GPU overlay
+  refuses to start without operator-supplied TEI and Ollama digests.
+- **One host.** v1 targets a single host; see [[13-decisions/0010-single-host-v1]].
+- **GPU VRAM is a budget.** For the GPU overlay, see
+  [[08-deployment/gpu-inference-topology]] before adding or resizing a model.
+- **Secrets stay out of the repo.** They go in the operator's private `.env` or
+  secret manager. `.env.example` keeps secret values blank.
 
 ## Must not
 
-- Introduce Kubernetes, Nomad, Swarm, systemd-nspawn, Podman, or any orchestrator other than Docker Compose in v1.
-- Mount the Obsidian vault writable by more than one process. One serialized writer.
-- Pin a model version outside [[08-deployment/gpu-inference-topology]] — the table is the budget.
+- Introduce Kubernetes, Nomad, Swarm, Podman or any orchestrator other than
+  Docker Compose in v1.
+- Publish Qdrant, TEI or Ollama on a host port. Only Core publishes a port, and it
+  defaults to `127.0.0.1:8100`.
+- Add host-provisioning steps (package installs, firewall rules, users) to the
+  public stack.
 
-## Host profile (v1 reference host)
+## Reference host
 
-- Ryzen 5, 32 GB RAM, single NVIDIA RTX 3080 (10 GB VRAM), NVMe SSD.
-- Ubuntu Server LTS.
-- Docker + NVIDIA Container Toolkit.
-- Public network via Kong reverse proxy + Tailscale for remote.
+The latency and capacity figures in these docs were measured on one reference host:
+AMD Ryzen 5 (6c/12t), 32 GB RAM, one NVIDIA RTX 3080 (10 GB VRAM), NVMe SSD. It is a
+point of comparison, not a requirement.
 
 ## Container roster
 
-| Container        | Image                       | Role                      | GPU |
-|------------------|-----------------------------|---------------------------|-----|
-| `qdrant`         | `qdrant/qdrant:1.17+`       | vector DB                 | no  |
-| `tei-dense`      | `ghcr.io/huggingface/text-embeddings-inference:*` | BGE-M3 dense | yes |
-| `tei-sparse`     | `ghcr.io/huggingface/text-embeddings-inference:*` | SPLADE++ sparse | yes |
-| `tei-rerank`     | `ghcr.io/huggingface/text-embeddings-inference:*` | BGE-reranker | yes |
-| `ollama`         | `ollama/ollama:*`           | Qwen2.5-7B Q4             | yes |
-| `musubi-core`    | built in repo               | API + planes              | no  |
-| `musubi-lifecycle` | built in repo             | scheduler + jobs          | no  |
-| `kong`          | `kong (managed outside this repo)`                   | TLS + reverse proxy       | no  |
+| Service | Image | Role | GPU |
+|---|---|---|---|
+| `volume-init` | Core image (one-shot) | chowns fresh volumes to UID 999/GID 985 | no |
+| `qdrant` | `qdrant/qdrant:v1.17.1@sha256:…` | vector DB | no |
+| `core` | `ghcr.io/sourceblender/musubi-core@sha256:…` | API + planes | no |
+| `lifecycle-worker` | same Core image, `python -m musubi.lifecycle.runner` | scheduled lifecycle jobs | no |
+| `tei-dense` (overlay) | operator-chosen TEI image, by digest | BGE-M3 dense | yes |
+| `tei-sparse` (overlay) | same | SPLADE v3 sparse | yes |
+| `tei-reranker` (overlay) | same | BGE-reranker-v2-m3 | yes |
+| `ollama` (overlay) | operator-chosen Ollama image, by digest | lifecycle LLM (`LLM_MODEL`; `qwen3:4b` in `.env.example`) | yes |

@@ -16,7 +16,7 @@
 		{"id":"retrieval","type":"file","file":"05-retrieval/scoring-model.md","x":40,"y":320,"width":600,"height":120,"color":"5"},
 		{"id":"qdrant","type":"file","file":"08-deployment/qdrant-config.md","x":-600,"y":500,"width":380,"height":100,"color":"3"},
 		{"id":"gpu","type":"file","file":"08-deployment/gpu-inference-topology.md","x":-180,"y":500,"width":380,"height":100,"color":"3"},
-		{"id":"deploy","type":"file","file":"08-deployment/ansible-layout.md","x":240,"y":500,"width":380,"height":100,"color":"3"},
+		{"id":"deploy","type":"file","file":"08-deployment/compose-stack.md","x":240,"y":500,"width":380,"height":100,"color":"3"},
 		{"id":"ops","type":"file","file":"09-operations/runbooks.md","x":-600,"y":660,"width":380,"height":100,"color":"2"},
 		{"id":"security","type":"file","file":"10-security/index.md","x":-180,"y":660,"width":380,"height":100,"color":"2"},
 		{"id":"migration","type":"file","file":"11-migration/index.md","x":240,"y":660,"width":380,"height":100,"color":"2"},

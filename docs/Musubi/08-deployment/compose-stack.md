@@ -38,9 +38,16 @@ ports. Qdrant uses HTTP only on the Compose network with its API key; Core's
 
 ## Data and startup
 
-Named volumes persist Qdrant storage and snapshots, vault files, artifact
-blobs, lifecycle state and logs. The optional GPU stack adds model-cache
-volumes. The published Core image runs as UID 999/GID 985, so a one-shot
+Named volumes persist Qdrant storage (`qdrant-storage`) and snapshots
+(`qdrant-snapshots`), vault files (`vault`), artifact blobs
+(`artifact-blobs`), lifecycle state (`lifecycle`) and logs (`logs`). The
+optional GPU stack adds model-cache volumes. Core and the worker log JSON to
+container output (`docker compose logs`); `LOG_DIR` is a required setting
+and the `logs` volume is mounted, but no code writes files there today.
+The stack does not run a real-time vault watcher; the worker's
+`vault_reconcile` job walks the vault every 6 hours.
+
+The published Core image runs as UID 999/GID 985, so a one-shot
 `volume-init` service grants that account the roots of fresh application
 volumes. Core and the worker stay non-root. Core waits for Qdrant health and
 volume initialization; the worker waits for Core health. Core itself probes
@@ -55,8 +62,10 @@ does not deploy to any host. Operators review and apply pins themselves.
 ## Backups
 
 All named volumes must be backed up and restored as one consistent set.
-The previous `/var/lib/musubi` backup script is for the private Ansible
-layout and is not this stack's backup procedure. Back up cold: stop the
+The scripts and playbooks under `deploy/backup/` target a different host
+layout (`/var/lib/musubi` bind mounts) and are not this stack's backup
+procedure; `deploy/backup/restore.yml` and `drill.yml` do not work (see
+[[09-operations/backup-restore]]). Back up cold: stop the
 stack (`docker compose stop`), archive all six volumes at the same point
 in time, then start it again (`docker compose up -d --wait`). Restore all
 six from one backup set, never a mix. The GPU override's `tei-models` and
