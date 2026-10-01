@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.28.0](https://github.com/sourceblender/musubi/compare/v1.27.13...v1.28.0) (2026-10-01)
+
+
+### Features
+
+* **deploy:** make public Compose runnable without host provisioning ([#902](https://github.com/sourceblender/musubi/issues/902)) ([d7178af](https://github.com/sourceblender/musubi/commit/d7178afcdee8d01539af884b6164f7cf23a27202))
+
+
+### Bug Fixes
+
+* **docs-check:** same verdict with or without PyYAML ([#916](https://github.com/sourceblender/musubi/issues/916)) ([ff45d6d](https://github.com/sourceblender/musubi/commit/ff45d6ddfb8f3065552d5c9e500b000600038ef1))
+* **ops:** move runtime references and inference consumers to operator config ([#897](https://github.com/sourceblender/musubi/issues/897)) ([cee0a2e](https://github.com/sourceblender/musubi/commit/cee0a2ed514e85b2ed21de84ee40d1d379087ca9))
+* **ops:** require explicit smoke and firewall targets ([#893](https://github.com/sourceblender/musubi/issues/893)) ([d9198bd](https://github.com/sourceblender/musubi/commit/d9198bd44d0318e95146c96d3a73da245da21bb2))
+
 ## [1.27.13](https://github.com/sourceblender/musubi/compare/v1.27.12...v1.27.13) (2026-10-01)
 
 
