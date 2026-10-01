@@ -3,9 +3,11 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from jinja2 import Environment, StrictUndefined
 
-TEMPLATES = Path(__file__).resolve().parents[2] / "deploy" / "ansible" / "templates"
+ANSIBLE = Path(__file__).resolve().parents[2] / "deploy" / "ansible"
+TEMPLATES = ANSIBLE / "templates"
 REF_KEYS = (
     "jwt_signing_key",
     "qdrant_api_key",
@@ -82,3 +84,57 @@ def test_missing_or_empty_operator_config_fails_render(
 ) -> None:
     with pytest.raises(ValueError):
         _render(template, **vars)
+
+
+MUTATING_MODULES = {
+    "ansible.builtin.apt",
+    "ansible.builtin.apt_repository",
+    "ansible.builtin.copy",
+    "ansible.builtin.file",
+    "ansible.builtin.get_url",
+    "ansible.builtin.group",
+    "ansible.builtin.systemd_service",
+    "ansible.builtin.template",
+    "ansible.builtin.tempfile",
+    "ansible.builtin.user",
+    "community.general.ufw",
+}
+
+
+def _assert_gate_before_mutation(tasks: list[dict[str, object]]) -> None:
+    gate_indexes = [
+        i
+        for i, task in enumerate(tasks)
+        if task.get("ansible.builtin.import_tasks") == "validate-operator-refs.yml"
+    ]
+    assert len(gate_indexes) == 1
+    first_mutation = next(i for i, task in enumerate(tasks) if MUTATING_MODULES.intersection(task))
+    assert gate_indexes[0] < first_mutation
+
+
+@pytest.mark.parametrize(
+    "playbook",
+    (
+        "bootstrap.yml",
+        "config.yml",
+        "deploy.yml",
+        "update.yml",
+        "shared-inference-migrate.yml",
+        "shared-inference-auth-migrate.yml",
+    ),
+)
+def test_operator_ref_gate_precedes_host_mutation(playbook: str) -> None:
+    play = yaml.safe_load((ANSIBLE / playbook).read_text())[0]
+    tasks = [*play.get("pre_tasks", []), *play["tasks"]]
+    _assert_gate_before_mutation(tasks)
+
+    # A gate moved after the first mutating task must make this test red.
+    late = [
+        task
+        for task in tasks
+        if task.get("ansible.builtin.import_tasks") != "validate-operator-refs.yml"
+    ]
+    first_mutation = next(i for i, task in enumerate(late) if MUTATING_MODULES.intersection(task))
+    late.insert(first_mutation + 1, {"ansible.builtin.import_tasks": "validate-operator-refs.yml"})
+    with pytest.raises(AssertionError):
+        _assert_gate_before_mutation(late)

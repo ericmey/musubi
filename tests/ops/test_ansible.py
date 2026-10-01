@@ -43,9 +43,12 @@ def _iter_yaml_files() -> Iterator[Path]:
 
 def _iter_tasks(playbook: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
     for play in playbook:
-        yield from play.get("pre_tasks", [])
-        yield from play.get("tasks", [])
-        yield from play.get("handlers", [])
+        for task in [*play.get("pre_tasks", []), *play.get("tasks", []), *play.get("handlers", [])]:
+            yield task
+            if imported_path := task.get("ansible.builtin.import_tasks"):
+                imported = _load_yaml(ANSIBLE / imported_path)
+                assert isinstance(imported, list)
+                yield from imported
 
 
 def _task_module(task: dict[str, Any]) -> str | None:
@@ -111,6 +114,7 @@ def test_playbook_idempotent_on_clean_vm() -> None:
         "ansible.builtin.file",
         "ansible.builtin.get_url",
         "ansible.builtin.group",
+        "ansible.builtin.import_tasks",
         "ansible.builtin.lineinfile",
         "ansible.builtin.service",
         "ansible.builtin.service_facts",
