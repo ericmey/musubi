@@ -68,9 +68,9 @@ def _normalize_get_namespace(namespace: str, plane: str) -> str:
     """Resolve the namespace ``musubi_get`` needs from what an agent realistically passes.
 
     Objects are stored under the canonical 3-part namespace
-    ``tenant/presence/plane`` (e.g. ``aoi/command-chair/episodic``), and
+    ``tenant/presence/plane`` (e.g. ``example/assistant/episodic``), and
     ``get`` filters on it exactly. But ``musubi_search`` accepts — and is
-    usually called with — the **2-part presence root** (``aoi/command-chair``),
+    usually called with — the **2-part presence root** (``example/assistant``),
     because a 2-part namespace is a *blended* cross-plane query. Search result
     rows then render the full 3-part namespace, so an agent passing "namespace +
     plane straight from a search row" naturally splits off the 2-part root and a
@@ -127,8 +127,8 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
             "Use after `musubi_search` when a snippet looks load-bearing "
             "and you need the underlying source. Pass `plane`, `namespace`, "
             "and `object_id` straight from a search result row — `namespace` "
-            "may be the 2-part presence root (e.g. `aoi/command-chair`) or the "
-            "full 3-part namespace (`aoi/command-chair/episodic`); the 2-part "
+            "may be the 2-part presence root (e.g. `example/assistant`) or the "
+            "full 3-part namespace (`example/assistant/episodic`); the 2-part "
             "form is composed with `plane` automatically."
         ),
     )
@@ -190,7 +190,7 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
         description=(
             "Send a presence-to-presence thought. The recipient's next turn "
             "sees the message as inbound context. Use when the user wants you "
-            "to tell another agent (Aoi, Nyla, voice, …) something."
+            "to tell another assistant or voice worker something."
         ),
     )
     async def musubi_think(
@@ -223,9 +223,9 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
         description=(
             "Recent activity in a namespace, newest first — no query needed. "
             "Use to orient ('what's happened lately') rather than to search. "
-            "A 2-part presence root (e.g. `aoi/command-chair`) returns recent "
+            "A 2-part presence root (e.g. `example/assistant`) returns recent "
             "episodic memories (the default plane); pass a full 3-part "
-            "namespace (e.g. `aoi/command-chair/curated`) to see another "
+            "namespace (e.g. `example/assistant/curated`) to see another "
             "plane's recents. Optional `tags` is an AND-filter (e.g. "
             "`src:mcp-agent-remember` for captures from coding-agent sessions)."
         ),

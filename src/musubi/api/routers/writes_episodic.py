@@ -237,8 +237,8 @@ class PatchEpisodicRequest(BaseModel):
     summary/tags/importance), and it is the fleet's only mechanism for neutralising
     a falsehood. An earlier revision of this allowlist omitted ``content`` and would
     have returned 400 to every retraction — shipping a memory-integrity fix that
-    disabled the tool for fixing memory. Caught by Yua in review of PR #398, and the
-    reason this docstring now spells the contract out instead of leaving it implied.
+    disabled the tool for fixing memory. This docstring spells out why ``content``
+    remains part of the public PATCH contract.
 
     Note on vectors: ``content`` is patched via ``set_payload``, which does NOT
     re-embed. A retracted row keeps the embedding of its original text — which is
@@ -575,8 +575,6 @@ async def delete_episodic(
     route the fleet and operators actually use.** Rev3 hardened the SDK method with
     deterministic point-ID addressing and left this route on the old contract: the path
     nobody calls was fixed, and the path that actually failed in production was not.
-    (Yua, rev3 review of PR #398.)
-
     ``plane.delete()`` addresses the point by its deterministic ID, enforces the stored
     namespace when the payload can state one, normalizes an unreadable prior state for the
     audit record, and emits the LifecycleEvent. One hardened contract, one place.
