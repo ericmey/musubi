@@ -4,20 +4,20 @@ section: 04-data-model
 type: index
 status: complete
 tags: [section/data-model, status/complete, type/index, agents]
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[04-data-model/index]]"
 reviewed: true
 ---
 
 # Agent Rules — Data Model (04)
 
-Local rules for any change to `musubi/types/`, `musubi/schema/`, `musubi/models.py`, or `musubi/planes/**`. Supplements [[CLAUDE]] and [[00-index/conventions]].
+Local rules for any change to `src/musubi/types/`, `src/musubi/store/specs.py`, or `src/musubi/planes/**`. Supplements [[CLAUDE]] and [[00-index/conventions]].
 
 ## Must
 
 - **Pydantic v2 for every data shape.** No TypedDicts, no dataclasses for payloads. Pydantic models only.
 - **Named vectors from day one.** Even a single-model collection declares `vectors={"dense_<model>_<version>": ...}`. Never unnamed.
-- **Bitemporal fields on every memory object:** `event_at`, `ingested_at`, `valid_from`, `valid_until` (the last two nullable). See [[04-data-model/temporal-model]].
+- **Validity fields on every memory object:** `valid_from`, `valid_until` (nullable, on `MemoryObject`, `src/musubi/types/base.py:154-157`). Episodic memories also carry `event_at` and `ingested_at` (`src/musubi/types/episodic.py:108-109`). See [[04-data-model/temporal-model]].
 - **Lineage fields on every mutable object:** `supersedes`, `superseded_by`, `merged_from`, `version`, `state`. See [[04-data-model/lifecycle]].
 - **KSUID object ids.** Qdrant point-id stays UUID; KSUID lives in payload as `object_id`. See [[00-index/conventions#IDs]].
 - **Schema version on every payload.** `schema_version: int`, forward-readable. Writer always writes latest.
@@ -25,8 +25,8 @@ Local rules for any change to `musubi/types/`, `musubi/schema/`, `musubi/models.
 ## Must not
 
 - Use `datetime.now()` without `tz=UTC`.
-- Store plane-crossing references as raw ids. Use the `{plane}/{object_id}` citation form.
-- Mutate a memory in place. Mutations create a new version with `supersedes` pointing at the old.
+- Cite artifact evidence as a bare id. Use `ArtifactRef` (`artifact_id`, optional `chunk_id`, optional `quote`; `src/musubi/types/common.py:140-150`) in `supported_by`.
+- Change a memory without bumping `version`, or change its `state` without a `LifecycleEvent`. Replacing a memory's meaning uses `supersedes` / `superseded_by` pointing at the old one.
 - Introduce a new top-level field without bumping `schema_version` and updating the reader.
 
 ## Plane truth models (don't conflate)

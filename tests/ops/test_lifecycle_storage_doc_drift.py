@@ -27,9 +27,7 @@ CURRENT_STATE_DOCS = (
     "docs/Musubi/09-operations/asset-matrix.md",
     "docs/Musubi/09-operations/backup-restore.md",
     "docs/Musubi/10-security/data-handling.md",
-    "docs/Musubi/11-migration/phase-2-hybrid-search.md",
     "docs/Musubi/11-migration/re-embedding.md",
-    "docs/Musubi/11-migration/phase-6-lifecycle.md",
 )
 
 

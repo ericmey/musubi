@@ -33,7 +33,7 @@ That last jump (+5 nDCG) is large and underused.
 
 The cost of doing this later instead of now:
 
-- Dense only → hybrid = re-embed or add a second vector, a migration ([[11-migration/phase-2-hybrid-search]]).
+- Dense only → hybrid = re-embed or add a second vector, a migration ([[11-migration/re-embedding]]).
 - Adding rerank = easy code-side, but you miss its benefits until it ships.
 
 Since re-embedding is a relatively heavy operation and the tooling to avoid it (named vectors, additive rollout) is exactly what we're building, the v1 target includes all three.
@@ -76,5 +76,4 @@ Trade-offs:
 - [[13-decisions/0006-pluggable-embeddings]]
 - [[05-retrieval/hybrid-search]]
 - [[05-retrieval/reranker]]
-- [[11-migration/phase-2-hybrid-search]]
 - `phase-3-reranker`
