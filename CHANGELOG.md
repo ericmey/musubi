@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.8](https://github.com/sourceblender/musubi/compare/v1.27.7...v1.27.8) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deploy:** require operator-owned credential preflight manifest ([#866](https://github.com/sourceblender/musubi/issues/866)) ([262c585](https://github.com/sourceblender/musubi/commit/262c585369139611e09b94cceff539bd124f2da5))
+
 ## [1.27.7](https://github.com/sourceblender/musubi/compare/v1.27.6...v1.27.7) (2026-09-30)
 
 
