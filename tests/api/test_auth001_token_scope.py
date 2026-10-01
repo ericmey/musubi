@@ -117,7 +117,7 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
     _seed_qdrant(client, token, "eric/command-chair/episodic", "hello chair")
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     _seed_qdrant(client, token, "eric/other/episodic", "hello other")
 
     res = client.post(
@@ -130,7 +130,7 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
 
     assert "eric/command-chair/episodic" in namespaces
     assert "eric/other/episodic" in namespaces
-    assert "eric/salesai/episodic" not in namespaces
+    assert "eric/private/episodic" not in namespaces
 
 
 def test_default_read_returns_authorized_subset_instead_of_failing_on_other_targets(
@@ -175,7 +175,7 @@ def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
     )
     _seed_qdrant(client, token, "eric/command-chair/episodic", "chair continuity memory")
     _seed_qdrant(client, token, "eric/other/episodic", "other continuity memory")
-    _seed_qdrant(client, token, "eric/salesai/episodic", "sales continuity memory")
+    _seed_qdrant(client, token, "eric/private/episodic", "sales continuity memory")
 
     res = client.post(
         "/v1/context",
@@ -187,7 +187,7 @@ def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
     namespaces = {item["namespace"] for group in res.json()["groups"] for item in group["items"]}
     assert "eric/command-chair/episodic" in namespaces
     assert "eric/other/episodic" in namespaces
-    assert "eric/salesai/episodic" not in namespaces
+    assert "eric/private/episodic" not in namespaces
 
 
 def test_context_empty_wildcard_still_flows_through_namespace_policy(
@@ -291,46 +291,56 @@ def test_stream_empty_wildcard_still_flows_through_namespace_policy(
     assert res.content == b""
 
 
-def test_salesai_cannot_be_reenabled_by_empty_settings_override(
+def test_default_exclusion_not_bypassed_by_empty_settings_override(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
-    # A request with no per-agent exclusions configured still cannot bypass the mandatory baseline.
+    # With no per-agent exclusions configured, the operator baseline still applies.
     from tests.api.conftest import mint_token
 
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/salesai/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/private/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
     assert res.json()["results"] == []
 
 
-def test_salesai_cannot_be_reenabled_by_settings_subtract(
+def test_default_exclusion_not_bypassed_by_settings_subtract(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
-    # Settings-only validation: mandatory exclusions cannot be subtracted.
+    # A wildcard read cannot reach a namespace the baseline excludes.
     from tests.api.conftest import mint_token
 
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/*/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/*/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/salesai/episodic" not in namespaces
+    assert "eric/private/episodic" not in namespaces
 
 
-def test_salesai_cannot_be_reenabled_by_direct_target(
+def test_default_exclusion_not_bypassed_by_direct_target(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
@@ -338,17 +348,22 @@ def test_salesai_cannot_be_reenabled_by_direct_target(
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/salesai/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/private/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
     assert res.json()["results"] == []
 
 
-def test_salesai_cannot_be_reenabled_by_wildcard(
+def test_default_exclusion_not_bypassed_by_wildcard(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
@@ -356,18 +371,23 @@ def test_salesai_cannot_be_reenabled_by_wildcard(
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/*/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/*/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
-    assert "eric/salesai/episodic" not in namespaces
+    assert "eric/private/episodic" not in namespaces
 
 
-def test_salesai_cannot_be_reenabled_by_recent_lane(
+def test_default_exclusion_not_bypassed_by_recent_lane(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
@@ -375,17 +395,17 @@ def test_salesai_cannot_be_reenabled_by_recent_lane(
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/salesai/episodic", "mode": "recent", "query_text": "hello"},
+        json={"namespace": "eric/private/episodic", "mode": "recent", "query_text": "hello"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
     assert res.json()["results"] == []
 
 
-def test_salesai_cannot_be_reenabled_by_streaming(
+def test_default_exclusion_not_bypassed_by_streaming(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
@@ -393,17 +413,22 @@ def test_salesai_cannot_be_reenabled_by_streaming(
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve/stream",
-        json={"namespace": "eric/salesai/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/private/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
-    assert b"eric/salesai/episodic" not in res.content
+    assert b"eric/private/episodic" not in res.content
 
 
-def test_salesai_cannot_be_reenabled_by_adapter_path(
+def test_default_exclusion_not_bypassed_by_adapter_path(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
@@ -411,20 +436,25 @@ def test_salesai_cannot_be_reenabled_by_adapter_path(
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
     _patch_auth(monkeypatch, ("*/*/*:r", "*/*/*:w"), subject="eric", presence="eric/command-chair")
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/salesai/episodic", "mode": "deep", "query_text": "hello"},
+        json={
+            "namespace": "eric/private/episodic",
+            "mode": "deep",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
     assert res.json()["results"] == []
 
 
-def test_settings_exclusions_add_to_mandatory_not_subtract(
+def test_per_agent_exclusions_add_to_default_baseline(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
-    # Test that setting custom exclusions doesn't remove the mandatory 'salesai'
+    # Per-agent exclusions add to the configured baseline; they never remove it.
     from tests.api.conftest import mint_token
 
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
@@ -439,7 +469,7 @@ def test_settings_exclusions_add_to_mandatory_not_subtract(
 
     cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     _seed_qdrant(client, token, "eric/custom/episodic", "hello custom")
     _seed_qdrant(client, token, "eric/command-chair/episodic", "hello chair")
 
@@ -457,10 +487,10 @@ def test_settings_exclusions_add_to_mandatory_not_subtract(
     namespaces = [r["namespace"] for r in res.json()["results"]]
     assert "eric/command-chair/episodic" in namespaces
     assert "eric/custom/episodic" not in namespaces
-    assert "eric/salesai/episodic" not in namespaces
+    assert "eric/private/episodic" not in namespaces
 
 
-def test_per_agent_settings_adds_to_mandatory(
+def test_per_agent_settings_adds_to_default(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
@@ -545,7 +575,7 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    # Missing read scope for salesai
+    # Missing read scope for private
     token = mint_token(
         api_settings, scopes=["eric/command-chair/*:r"], presence="eric/command-chair"
     )
@@ -553,7 +583,7 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
     res = client.post(
         "/v1/retrieve",
         json={
-            "namespace": "eric/salesai/episodic",
+            "namespace": "eric/private/episodic",
             "mode": "fast",
             "query_text": "hello",
             "state_filter": ["provisional"],
@@ -585,11 +615,11 @@ def test_canonical_config_source_is_single_no_scattered_exceptions(
     cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
     # Using context to prove the single seam propagates cleanly to all routes
-    _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
+    _seed_qdrant(client, token, "eric/private/episodic", "hello private")
     res = client.post(
         "/v1/context",
         json={
-            "namespace": "eric/salesai/episodic",
+            "namespace": "eric/private/episodic",
             "planes": ["episodic"],
             "mode": "startup",
             "query_text": "hello",
@@ -626,16 +656,16 @@ def test_explicit_narrowing_still_narrows(
     assert "eric/other/episodic" not in namespaces
 
 
-def test_write_to_active_salesai_namespace_permitted_under_existing_write_scope(
+def test_write_to_excluded_namespace_permitted_under_existing_write_scope(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["eric/salesai/*:w"], presence="eric/salesai")
-    _patch_auth(monkeypatch, ("eric/salesai/*:w",))
+    token = mint_token(api_settings, scopes=["eric/private/*:w"], presence="eric/private")
+    _patch_auth(monkeypatch, ("eric/private/*:w",))
     res = client.post(
         "/v1/episodic",
-        json={"namespace": "eric/salesai/episodic", "content": "test write", "importance": 5},
+        json={"namespace": "eric/private/episodic", "content": "test write", "importance": 5},
         headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "test2"},
     )
     assert res.status_code == 202
@@ -657,7 +687,7 @@ def test_direct_matcher_unit_tests_does_not_break_auth001() -> None:
     )
     s = Settings(
         **{  # type: ignore[arg-type]
-            "default_excluded_namespaces": frozenset({"salesai"}),
+            "default_excluded_namespaces": frozenset({"private"}),
             "log_dir": "/",
             "jwt_signing_key": "a",
             "oauth_authority": "http://a",
@@ -679,20 +709,20 @@ def test_direct_matcher_unit_tests_does_not_break_auth001() -> None:
     )
 
     targets = [
-        ("tenant/salesai/episodic", "episodic"),
-        ("tenant/salesai2/episodic", "episodic"),
+        ("tenant/private/episodic", "episodic"),
+        ("tenant/private2/episodic", "episodic"),
         ("tenant/custom1/episodic", "episodic"),
-        ("salesai/agent/episodic", "episodic"),
+        ("private/agent/episodic", "episodic"),
     ]
 
     res = enforce_namespace_policy(ctx, targets=targets, settings=s)
     assert isinstance(res, Ok)
     val = [ns for ns, p in res.value]
 
-    assert "tenant/salesai/episodic" not in val
-    assert "tenant/salesai2/episodic" in val
+    assert "tenant/private/episodic" not in val
+    assert "tenant/private2/episodic" in val
     assert "tenant/custom1/episodic" not in val
-    assert "salesai/agent/episodic" in val
+    assert "private/agent/episodic" in val
 
 
 def test_implicit_discovery_does_not_audit_each_unauthorized_candidate(
@@ -1074,3 +1104,12 @@ def test_context_three_segment_wildcard_plane_dedup_planes(
     assert sorted(q.get("planes") or []) == ["curated", "episodic"], (
         f"planes must be deduped to {{'curated', 'episodic'}}; got: {q.get('planes')!r}"
     )
+
+
+def test_unconfigured_baseline_excludes_nothing(api_settings: Settings) -> None:
+    """No namespace is excluded unless an operator configures one."""
+    from musubi.settings import Settings as RuntimeSettings
+
+    args = api_settings.model_dump()
+    args.pop("default_excluded_namespaces")
+    assert RuntimeSettings(**args).default_excluded_namespaces == frozenset()
