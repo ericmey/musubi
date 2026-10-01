@@ -59,7 +59,7 @@ def _fallback_scalar(raw: str) -> str:
     """
     v = raw.strip()
     if len(v) >= 2 and v[0] == v[-1] == '"':
-        return v[1:-1].replace('\\\\', "\x00").replace('\\"', '"').replace("\x00", "\\")
+        return v[1:-1].replace("\\\\", "\x00").replace('\\"', '"').replace("\x00", "\\")
     if len(v) >= 2 and v[0] == v[-1] == "'":
         return v[1:-1].replace("''", "'")
     return v.strip('"').strip("'")
