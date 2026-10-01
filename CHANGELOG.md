@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.12](https://github.com/sourceblender/musubi/compare/v1.27.11...v1.27.12) (2026-10-01)
+
+
+### Bug Fixes
+
+* configure fast retrieval deadlines per deployment ([#885](https://github.com/sourceblender/musubi/issues/885)) ([d214a06](https://github.com/sourceblender/musubi/commit/d214a0626e8b2dcf612cc80461916a1ab9204d17))
+
 ## [1.27.11](https://github.com/sourceblender/musubi/compare/v1.27.10...v1.27.11) (2026-10-01)
 
 
