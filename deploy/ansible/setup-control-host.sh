@@ -56,6 +56,11 @@ musubi_ip: "" # e.g. 10.0.0.45
 # also becomes its private Docker-network alias; it is not a password.
 musubi_inference_hostname: "" # e.g. inference.example.local
 
+# Required for bootstrap's firewall. Use your actual admin source and either
+# a gateway IP or a bounded internal subnet for Core ingress.
+musubi_admin_ssh_cidr: "" # e.g. 192.0.2.0/24
+musubi_vlan_cidr: "" # e.g. 192.0.2.0/24; not needed when musubi_kong_ip is set
+
 # Kong API gateway — only needed if/when Kong re-enters the deploy path
 # (see docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md).
 # Leave empty for VLAN-internal v1 deploys.
@@ -99,7 +104,8 @@ be committed anywhere.
 
 ## Files
 
-- \`inventory-vars.yml\` — non-secret operator overrides (hostnames, IPs, ssh user).
+- \`inventory-vars.yml\` — non-secret operator overrides (hostnames, IPs, ssh user,
+ firewall source networks).
 - \`vault.yml\` — ansible-vault-encrypted secrets. See \`$ANSIBLE_DIR/vault.example.yml\`
  for the key list. Encrypt with:
  \`\`\`
@@ -133,7 +139,7 @@ echo
 echo "=== Next steps ==="
 
 if [[ "$INVENTORY_VARS_CREATED" -eq 1 ]]; then
- echo "1. Edit $INVENTORY_VARS — fill in musubi_host, musubi_ip, musubi_inference_hostname, operator_ssh_user."
+ echo "1. Edit $INVENTORY_VARS — fill in host, SSH user, inference hostname and firewall source networks."
 fi
 
 if [[ "$VAULT_CREATED" -eq 1 ]]; then

@@ -42,11 +42,14 @@ def test_read_only_ops_exception_stays_bounded() -> None:
 def test_core_ingress_is_default_deny_and_source_restricted() -> None:
     text = BOOTSTRAP.read_text()
     assert "policy: deny\n        direction: incoming" in text
+    assert 'from_ip: "{{ musubi_admin_ssh_cidr }}"' in text
+    assert "musubi_admin_ssh_cidr is defined" in text
     assert 'from_ip: "{{ musubi_kong_ip }}"' in text
     assert "when: musubi_kong_ip | default('') | length > 0" in text
-    assert "from_ip: \"{{ musubi_vlan_cidr | default('10.0.0.0/24') }}\"" in text
+    assert 'from_ip: "{{ musubi_vlan_cidr }}"' in text
     assert "when: musubi_kong_ip | default('') | length == 0" in text
-    assert "0.0.0.0/0" not in text
+    assert "musubi_vlan_cidr | default('') | length > 0" in text
+    assert "musubi_admin_ssh_cidr | default('') not in ['0.0.0.0/0', '::/0']" in text
 
 
 def test_prometheus_scrapes_core_privately_and_stays_loopback_only() -> None:

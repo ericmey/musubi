@@ -461,7 +461,7 @@ async def patch_episodic(
     # mistakes someone already imagined.
     #
     # Lived, not theorised: on 2026-07-10 a `retracted_original` key sent through this
-    # endpoint permanently bricked aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th.
+    # endpoint permanently bricked a production episodic row.
     # Note the shape of that failure — `set_payload` SUCCEEDS, then the refresh `get()`
     # raises, so the caller sees a 500 and believes the write failed while the row has
     # already been destroyed.

@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
+require_thought_namespace
 
 content="musubi first-deploy smoke thought"
 send_payload="$(
@@ -10,9 +11,9 @@ send_payload="$(
 import json
 import os
 
-presence = os.environ.get("MUSUBI_PRESENCE", "eric/ops-smoke")
+presence = os.environ["MUSUBI_PRESENCE"]
 print(json.dumps({
-    "namespace": os.environ.get("MUSUBI_THOUGHT_NAMESPACE", "eric/ops/thought"),
+    "namespace": os.environ["MUSUBI_THOUGHT_NAMESPACE"],
     "from_presence": presence,
     "to_presence": presence,
     "content": os.environ["CONTENT"],
@@ -29,8 +30,8 @@ import json
 import os
 
 print(json.dumps({
-    "namespace": os.environ.get("MUSUBI_THOUGHT_NAMESPACE", "eric/ops/thought"),
-    "presence": os.environ.get("MUSUBI_PRESENCE", "eric/ops-smoke"),
+    "namespace": os.environ["MUSUBI_THOUGHT_NAMESPACE"],
+    "presence": os.environ["MUSUBI_PRESENCE"],
 }))
 PY
 )"

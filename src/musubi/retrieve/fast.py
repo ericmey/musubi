@@ -485,7 +485,7 @@ def _cache_key(
 
     Retrieval of a concrete target is presence-exact (see
     ``musubi.retrieve.hybrid._build_filter``), so two queries from different presences of the
-    same identity — e.g. ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — resolve
+    same identity — e.g. ``alex/assistant/episodic`` vs ``alex/voice/episodic`` — resolve
     DIFFERENT rows and must NOT share a cache entry. Keying on ``family_of`` here was the
     second half of the cross-presence leak: even with an exact query filter, fast mode would
     serve one presence's cached rows to another presence's query.

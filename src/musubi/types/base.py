@@ -43,9 +43,9 @@ class MusubiObject(BaseModel):
     object_id: KSUID = Field(default_factory=generate_ksuid)
     namespace: Namespace
     # `identity_family` is the load-bearing field for cross-substrate
-    # federation: aoi/command-chair, aoi/voice, aoi/shared all carry
-    # identity_family="aoi", which lets retrieval, ranking, and synthesis
-    # treat them as one continuous Aoi memory stream regardless of which
+    # federation: alex/assistant, alex/voice, alex/shared all carry
+    # identity_family="alex", which lets retrieval, ranking, and synthesis
+    # treat them as one continuous identity stream regardless of which
     # substrate captured a given memory. See `family_of` in musubi.types.common.
     #
     # Contract:

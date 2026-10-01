@@ -605,8 +605,8 @@ def test_delete_episodic_hard_requires_operator(
 # cannot be deleted *because it is too broken to read* can teach a falsehood
 # forever. These three tests are the proof it cannot happen again.
 #
-# Lived instance: aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th, bricked
-# 2026-07-10 by a `retracted_original` key sent through PATCH.
+# A production row was bricked on 2026-07-10 by a `retracted_original` key
+# sent through PATCH; this fixture reproduces that failure without its identity.
 # ---------------------------------------------------------------------------
 
 

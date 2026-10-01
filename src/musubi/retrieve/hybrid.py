@@ -528,10 +528,10 @@ def _build_filter(
     **Decision (RET-011 / #510 supersedes #332, for retrieval of a CONCRETE target
     only).** This filter previously scoped to ``identity_family`` (the namespace's first
     path component), making every presence of one identity — e.g.
-    ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — visible from any other. With
+    ``alex/assistant/episodic`` vs ``alex/voice/episodic`` — visible from any other. With
     similar vectors that silently crossed presences. Cross-presence (identity-family)
     retrieval is now authorized ONLY when the request explicitly resolves multiple concrete
-    targets: a wildcard like ``aoi/*/episodic`` is expanded to concrete per-presence
+    targets: a wildcard like ``alex/*/episodic`` is expanded to concrete per-presence
     ``namespace_targets`` upstream (``retrieve._expand_wildcard_targets``), each of which is
     exact-filtered here and unioned. Synthesis family federation
     (``lifecycle/synthesis.py``) is unchanged and out of scope.

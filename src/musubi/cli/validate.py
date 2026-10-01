@@ -23,9 +23,8 @@ the stripped logical object against the unchanged domain model, and checks every
 pointer identity and generation binding. Historical content snapshots that no current
 anchor names are reported separately; their existence is not, by itself, corruption.
 
-At least one row is known to be in this state:
-``aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th``. **Nobody knows how many
-others are**, because nothing has ever looked. This command is what looks.
+At least one production row was known to be in this state. **Nobody knew how many
+others there were**, because nothing had looked. This command performs that sweep.
 
 ## "Clean" is a claim, and this command must earn it
 

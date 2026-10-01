@@ -56,7 +56,9 @@ After it prints the next-steps banner:
  re-enabled per [ADR 0024](../../docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md)).
  Set `musubi_otel_otlp_endpoint` and `musubi_prometheus_remote_write_url` only
  if this deployment sends telemetry to an external collector. Set
- `musubi_deployment_environment` to the label you want on metrics.
+ `musubi_deployment_environment` to the label you want on metrics. Bootstrap
+ also requires `musubi_admin_ssh_cidr` and either `musubi_kong_ip` or
+ `musubi_vlan_cidr`; it refuses to change the firewall without bounded sources.
 2. Edit `~/.musubi-secrets/vault.yml` with real secret values (see
  `vault.example.yml` for the key list).
 3. Encrypt it:
