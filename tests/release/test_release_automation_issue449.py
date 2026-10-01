@@ -3,7 +3,7 @@
 The publish-core-image.yml workflow intentionally builds and
 signs BOTH a moving main channel (bleeding-edge) AND an
 immutable release channel (v* tags). This is the CURRENT
-INTENTIONAL CONTRACT (Option C per Yua 2026-07-13 19:11:24),
+INTENTIONAL CONTRACT (Option C),
 NOT a newly discovered production defect.
 
 The auto-digest-bump.yml workflow gates on workflow_run
@@ -15,24 +15,10 @@ guard on the resolved tag. Issue #449 adds the mechanically
 verified guard after all tag sources resolve and before any tag
 output or registry use.
 
-Per Yua 2026-07-13 20:57:08 (WITHHOLD on 6ea08a9):
-  - Make the executable Bash proof actually run.
-  - Fix the tag-rule parser to not split inside enable exprs.
-  - Extract path-aware helpers for Inv1, Inv4, Inv6.
-  - Inv6 is the channel-metadata rule / allowed-divergence
-    contract, NOT a workflow_run.branches filter.
-  - Inv3 exact-set proof needs full names + decoy logic.
-  - Resolver must use real release tag grammar.
-  - Slice doc and lock must be updated to match tests.
-
-Toolchain note (per Yua 6e07c56 finding 8):
-The worktree uv environment (used by 'uv run pytest') does
-NOT include ruff. The ruff checks (in CI, in pre-commit
-hooks) use the main-checkout binaries at
-/Users/ericmey/Projects/musubi/.venv/bin/ruff. The static
-gate output (mypy, ruff check, ruff format) above refers
-to the main-checkout toolchain, not a worktree-local
-toolchain. The tests run in the worktree uv environment.
+The tests prove the executable Bash guard, the tag-rule parser,
+the path-aware invariant checks, the channel-metadata rule, exact
+job-name matching, and release-tag grammar against both valid and
+adversarial inputs.
 """
 
 from __future__ import annotations
@@ -61,7 +47,7 @@ AUTO_PIN_WF = WORKFLOWS / "auto-digest-bump.yml"
 # Mirrors what release-please emits and what the v* tag
 # push trigger accepts.
 # Project release tag grammar (single source).
-# Per Yua 21:36:58 #1: one declared grammar that drives
+# One declared grammar that drives
 # the Python resolver, the Bash regex, AND CORRECTED_GUARD.
 #
 # This is a DOCUMENTED BOUNDED SUBSET of SemVer 2.0.0
@@ -114,7 +100,7 @@ RELEASE_TAG_GRAMMAR_BASH = PROJECT_RELEASE_GRAMMAR_BASH
 def _extract_guard_regex(guard: str) -> str:
     """Extract the regex from CORRECTED_GUARD.
 
-    Per Yua 21:36:58 #1: derive/render the actual guard
+    Derive/render the actual guard
     regex from the same grammar source.
     """
     m = re.search(r"\[\[\s+\"(\$TAG)\"\s+=~\s+(.*?)\s+\]\]", guard)
@@ -336,7 +322,7 @@ def assert_push_trigger_set(path: Path) -> None:
     """Assert the publish workflow's push trigger set is
     exactly {main, v*}.
 
-    Per Yua 20:57:08 #3: extract a path-aware helper used by
+    Extract a path-aware helper used by
     both the production guard and every corresponding wrong.
     """
     config = _load_workflow_yaml(path)
@@ -371,7 +357,7 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
     """Parse the docker/metadata-action with.tags into a list
     of distinct rule records.
 
-    Per Yua 20:57:08 #2: parse the static prefix fields and
+    Parse the static prefix fields and
     the entire enable remainder WITHOUT splitting expression
     commas. The with.tags format is:
         type=KEY[,field=value...] enable=EXPR
@@ -381,7 +367,7 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
     We treat `enable=...` as a single field regardless of
     internal commas.
 
-    Per Yua 21:27:31 #1: detect duplicate keys BEFORE dict
+    Detect duplicate keys BEFORE dict
     collapse. Reject a repeated key even when both values
     are identical.
     """
@@ -425,7 +411,7 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
                     enable_value.startswith("'") and enable_value.endswith("'")
                 ):
                     enable_value = enable_value[1:-1]
-                # Per Yua 21:27:31 #1: detect duplicate keys
+                # Detect duplicate keys
                 if "enable" in seen_keys:
                     raise MutexChannelMissingError(f"Duplicate key 'enable' in rule line: {line!r}")
                 seen_keys.add("enable")
@@ -443,7 +429,7 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
             if "=" in part:
                 k, v = part.split("=", 1)
                 k = k.strip()
-                # Per Yua 21:27:31 #1: detect duplicate keys
+                # Detect duplicate keys
                 # even when both values are identical.
                 if k in seen_keys:
                     raise MutexChannelMissingError(f"Duplicate key {k!r} in rule line: {line!r}")
@@ -455,7 +441,7 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
 
 
 # Supported expression grammar (bound and fail closed).
-# Per Yua 21:05:45 #2: parse/normalize the supported
+# Parse/normalize the supported
 # expression grammar and prove each rule is positively
 # enabled on its intended channel, disabled on the other
 # channels. Reject false/true/token-smear/OR broadening.
@@ -508,7 +494,7 @@ RAW_ENABLE_SHAPE = re.compile(RAW_PATTERN)
 def _normalize_enable(expr: str) -> str:
     """Strip ${{ ... }} and normalize whitespace.
 
-    Per Yua 21:05:45 #2: bound and fail closed on unsupported
+    Bound and fail closed on unsupported
     shapes.
     """
     e = expr.strip()
@@ -524,7 +510,7 @@ def _assert_supported_shape(expr: str, shape: re.Pattern[str], channel: str) -> 
     """Assert the expression matches the supported shape for
     the given channel.
 
-    Per Yua 21:05:45 #2: reject false/true/token-smear/
+    Reject false/true/token-smear/
     OR broadening. Do not claim a full GitHub expression
     parser; bound and fail closed on unsupported shapes.
     """
@@ -542,7 +528,7 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     """Assert the docker/metadata-action with.tags has exactly
     three distinct, non-overlapping rules.
 
-    Per Yua 20:57:08 #2: pin complete per-rule truth:
+    Pin complete per-rule truth:
     - semver: type=semver, pattern={...}, prefix=v, enable
       has startsWith(github.ref, 'refs/tags/v')
     - ref: type=ref, event=branch, enable has
@@ -553,7 +539,7 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     Reject extra overlapping rules.
     """
     rules = _parse_tag_rules(path)
-    # Per Yua 21:05:45 #1: pin exact rule cardinality. Reject
+    # Pin exact rule cardinality. Reject
     # any extra non-comment metadata rule (e.g., a 4th
     # `type=sha,format=short` rule).
     if len(rules) != 3:
@@ -578,7 +564,7 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     semver = semver_rules[0]
     ref = ref_rules[0]
     raw = raw_rules[0]
-    # Per Yua 21:21:24 #1: pin exact allowed key sets and
+    # Pin exact allowed key sets and
     # values for all three metadata rules. Reject unknown
     # or duplicate fields.
     semver_expected_keys = {"type", "pattern", "prefix", "enable"}
@@ -596,7 +582,7 @@ def assert_distinct_mutex_tags(path: Path) -> None:
         raise MutexChannelMissingError(
             f"raw rule keys must be exactly {sorted(raw_expected_keys)}, got {sorted(raw.keys())}: {raw!r}"
         )
-    # Per Yua 21:21:24 #1: pin exact values
+    # Pin exact values
     if semver.get("pattern") != "{{version}}":
         raise MutexChannelMissingError(
             f"semver rule pattern must be exactly '{{{{version}}}}', got {semver.get('pattern')!r}: {semver!r}"
@@ -614,7 +600,7 @@ def assert_distinct_mutex_tags(path: Path) -> None:
             f"raw rule value must be exactly '${{{{ github.event.inputs.tag }}}}', got {raw.get('value')!r}: {raw!r}"
         )
     semver_enable = semver.get("enable", "")
-    # Per Yua 21:05:45 #2: strict shape check. Reject
+    # Strict shape check. Reject
     # false/true/token-smear/OR broadening.
     _assert_supported_shape(semver_enable, SEMVER_ENABLE_SHAPE, "semver")
     # Ref rule enable must gate on main (strict shape)
@@ -632,7 +618,7 @@ def assert_distinct_mutex_tags(path: Path) -> None:
 
 
 # Exact full names of the 5 required supply-chain steps.
-# Per Yua 20:57:08 #5: use exact full names, not substrings.
+# Use exact full names, not substrings.
 REQUIRED_STEPS_EXACT = {
     "cosign_sign": "Sign the published image (keyless, via GitHub OIDC)",
     "sbom": "Generate SBOM (CycloneDX)",
@@ -653,7 +639,7 @@ def _get_step_by_exact_name(name: str, path: Path) -> dict[str, Any] | None:
 def assert_no_if_key_in_publish_step(name: str, path: Path) -> None:
     """Assert that the named step has no 'if' key.
 
-    Per Yua 20:57:08 #5: use exact full name.
+    Use exact full name.
     """
     step = _get_step_by_exact_name(name, path)
     if step is None:
@@ -666,7 +652,7 @@ def assert_all_required_steps_present(path: Path) -> None:
     """Assert all 5 required steps are present, none have an
     'if' key, and there are no duplicate or decoy names.
 
-    Per Yua 20:57:08 #5: missing, duplicate, renamed-near-
+    Missing, duplicate, renamed-near-
     match, and unrelated substring decoy must fail for their
     intended reason.
     """
@@ -714,7 +700,7 @@ def assert_all_required_steps_present(path: Path) -> None:
 # =============================================================
 
 
-# Per Yua 21:05:45 #3: prove the supported job-if shape
+# Prove the supported job-if shape
 # semantically. The supported shape is:
 #   github.event_name == 'workflow_dispatch' ||
 #   (github.event.workflow_run.conclusion == 'success'
@@ -749,11 +735,11 @@ def assert_workflow_run_v_gate(path: Path) -> None:
     """Assert the auto-pin workflow gates on workflow_run with
     conclusion == 'success' AND startsWith(head_branch, 'v').
 
-    Per Yua 20:57:08 #3: extract a path-aware helper used by
+    Extract a path-aware helper used by
     both the production guard and every corresponding wrong.
-    Per Yua 20:57:08 #4: the gate is at jobs.bump.if, NOT at
+    The gate is at jobs.bump.if, NOT at
     workflow_run.branches.
-    Per Yua 21:05:45 #3: prove the supported job-if shape
+    Prove the supported job-if shape
     semantically. Reject false/true/token-smear/OR broadening.
     """
     config = _load_workflow_yaml(path)
@@ -763,7 +749,7 @@ def assert_workflow_run_v_gate(path: Path) -> None:
     if_conditions = job.get("if", "")
     if not isinstance(if_conditions, str):
         raise WorkflowRunVGateError(f"jobs.bump.if is not a string: {if_conditions!r}")
-    # Per Yua 21:05:45 #3: strict shape check. Reject
+    # Strict shape check. Reject
     # false/true/token-smear/OR broadening.
     normalized = _normalize_enable(if_conditions)
     if not JOB_IF_SHAPE.match(normalized):
@@ -784,7 +770,7 @@ def assert_workflow_run_v_gate(path: Path) -> None:
 def _run_bash_harness_result(guard_block: str, tag_value: str) -> subprocess.CompletedProcess[str]:
     """Execute a guard block with TAG=<tag_value> and return the completed process.
 
-    Per Yua 20:57:08 #1: the bash proof must actually run.
+    The bash proof must actually run.
     The guard_block is the bash code to test (e.g., the
     if ! [[ \"$TAG\" == v* ]]; then ... exit 1; fi block).
     """
@@ -815,9 +801,9 @@ def _extract_guard_block(run_script: str) -> str | None:
     """Extract the if ! [[ \"$TAG\" =~ semver ]]; then ... exit N;
     fi block from the Resolve step's run script.
 
-    Per Yua 20:57:08 #1: require the nonzero exit INSIDE the
+    Require the nonzero exit INSIDE the
     matched if block before its fi, not merely any later exit.
-    Per Yua 21:21:24 #4 + 21:27:31 #2: the guard uses the
+    The guard uses the
     bounded SemVer 2.0.0 grammar (Bash POSIX ERE: capturing
     groups) to align with the decision model.
     """
@@ -839,13 +825,13 @@ def assert_release_only_manual_dispatch_guard(path: Path) -> None:
     """Assert the Resolve tag + digest step has a valid
     release-only manual dispatch guard.
 
-    Per Yua 20:57:08 #1: extract the exact guard block and
+    Extract the exact guard block and
     execute it with TAG values. Prove valid release tags
     return zero and main, empty, and malformed v-prefixed
     tags return nonzero. Require the nonzero exit INSIDE
     the matched if block before its fi.
 
-    Per Yua 20:57:08 #1 (additional): the guard must include
+    The guard must include
     the tag emission/use anchor (it must appear before
     tag is emitted or used in /v2/${IMAGE}/manifests/${TAG}).
     """
@@ -889,7 +875,7 @@ def assert_release_only_manual_dispatch_guard(path: Path) -> None:
                 )
     # Executable bash proof: actually run the guard with
     # various TAG values and check the exit code.
-    # Per Yua 21:05:45 #4: the guard uses the same bounded
+    # The guard uses the same bounded
     # release grammar as the resolver. Valid: semver tags.
     # Invalid: anything else (including v* glob matches like
     # vgarbage).
@@ -949,7 +935,7 @@ def assert_release_channel_consumption(path: Path) -> None:
     """Assert the channel-metadata rule / allowed-divergence
     contract.
 
-    Per Yua 20:57:08 #4: Inv6 is the accepted mutually
+    Inv6 is the accepted mutually
     exclusive channel-metadata rule / allowed-divergence
     contract. The publish workflow's with.tags must have
     mutually exclusive main ref and release semver guards,
@@ -958,7 +944,7 @@ def assert_release_channel_consumption(path: Path) -> None:
     proves the mutex; the test-local model proves the
     allowed-divergence contract.
 
-    Per Yua 20:57:08 #3: extract a path-aware helper used by
+    Extract a path-aware helper used by
     both the production guard and every corresponding wrong.
     """
     assert_distinct_mutex_tags(path)
@@ -990,7 +976,7 @@ def assert_release_channel_consumption(path: Path) -> None:
 def _resolve_release_tag(explicit: str | None, latest: str | None) -> str:
     """Test-local model of the desired decision contract.
 
-    Per Yua 20:57:08 #6: use the release tag grammar
+    Use the release tag grammar
     RELEASE_TAG_GRAMMAR. Add explicit invalid-v-prefix cases
     for both explicit and latest fallback.
 
@@ -1059,7 +1045,7 @@ def test_invariant_4_workflow_run_v_gate() -> None:
     """Invariant 4: auto-pin gates on workflow_run with
     conclusion == 'success' AND startsWith(head_branch, 'v').
 
-    Per Yua 20:57:08 #4: the gate is at jobs.bump.if, NOT
+    The gate is at jobs.bump.if, NOT
     at workflow_run.branches.
     """
     assert_workflow_run_v_gate(AUTO_PIN_WF)
@@ -1075,7 +1061,7 @@ def test_invariant_6_channel_metadata_allowed_divergence() -> None:
     """Invariant 6: channel-metadata rule / allowed-divergence
     contract.
 
-    Per Yua 20:57:08 #4: the publish workflow's with.tags
+    The publish workflow's with.tags
     has mutually exclusive main ref and release semver
     guards. Divergence between main and v* digests is
     ALLOWED, not GUARANTEED.
@@ -1469,7 +1455,7 @@ def test_wrong_fixture_inv2_semver_disabled_by_false(fixture_dir: Any) -> None:
     """Wrong-fixture: semver disabled by `false &&` breaks
     Invariant 2.
 
-    Per Yua 21:05:45 #2: token-presence check accepts this
+    Token-presence check accepts this
     because startsWith and refs/tags/v are still present.
     Strict shape check rejects.
     """
@@ -1562,7 +1548,7 @@ def test_wrong_fixture_inv2_extra_sha_rule(fixture_dir: Any) -> None:
     """Wrong-fixture: extra `type=sha,format=short` rule breaks
     Invariant 2.
 
-    Per Yua 21:05:45 #1: cardinality check rejects any extra
+    Cardinality check rejects any extra
     non-comment metadata rule.
     """
     dst = fixture_dir / "publish-core-image.yml"
@@ -1591,7 +1577,7 @@ def test_wrong_fixture_inv4_job_if_disabled_by_false(fixture_dir: Any) -> None:
     """Wrong-fixture: job-if disabled by `false &&` breaks
     Invariant 4.
 
-    Per Yua 21:05:45 #3: token-presence check accepts this.
+    Token-presence check accepts this.
     Strict shape check rejects.
     """
     dst = fixture_dir / "auto-digest-bump.yml"
@@ -1625,7 +1611,7 @@ def _mutate_yaml_raw_value_main(src: Path, dst: Path) -> None:
 def test_wrong_fixture_inv2_raw_value_main(fixture_dir: Any) -> None:
     """Wrong-fixture: raw value=main recreates channel overlap.
 
-    Per Yua 21:21:24 #1: pin raw value to exactly
+    Pin raw value to exactly
     `${{ github.event.inputs.tag }}`. Hard-coding `main`
     lets a manual rule recreate the channel overlap.
     """
@@ -1660,7 +1646,7 @@ def _mutate_yaml_semver_pattern_main(src: Path, dst: Path) -> None:
 def test_wrong_fixture_inv2_semver_pattern_main(fixture_dir: Any) -> None:
     """Wrong-fixture: semver pattern=main breaks Invariant 2.
 
-    Per Yua 21:21:24 #1: pin semver pattern to exactly
+    Pin semver pattern to exactly
     `{{version}}`.
     """
     dst = fixture_dir / "publish-core-image.yml"
@@ -1696,7 +1682,7 @@ def test_wrong_fixture_inv2_unknown_field(fixture_dir: Any) -> None:
     """Wrong-fixture: unknown `priority=999` field breaks
     Invariant 2.
 
-    Per Yua 21:21:24 #1: reject unknown fields.
+    Reject unknown fields.
     """
     dst = fixture_dir / "publish-core-image.yml"
     _mutate_yaml_unknown_field(PUBLISH_WF, dst)
@@ -1713,7 +1699,7 @@ def test_control_malformed_prerelease_rejected() -> None:
     """Control 8: malformed prerelease values are rejected
     by the bounded SemVer grammar.
 
-    Per Yua 21:21:24 #2 + #4: the resolver rejects malformed
+    The resolver rejects malformed
     prerelease (empty, dot-only, trailing hyphen/dot).
     """
     for bad in [
@@ -1733,7 +1719,7 @@ def test_control_malformed_prerelease_rejected() -> None:
 def test_control_leading_zero_core_rejected() -> None:
     """Control 9: leading-zero core identifiers are rejected.
 
-    Per Yua 21:21:24 #2 + #4: SemVer 2.0.0 requires non-zero-
+    SemVer 2.0.0 requires non-zero-
     prefixed core numbers.
     """
     for bad in [
@@ -1752,7 +1738,7 @@ def test_control_python_bash_grammar_parity() -> None:
     """Control 10: Python, Bash, and CORRECTED_GUARD grammars
     agree on every value in the cross-product corpus.
 
-    Per Yua 21:27:31 #2 + 21:36:58 #1: the Python resolver,
+    The Python resolver,
     the executable Bash proof, AND the actual CORRECTED_GUARD
     regex must share one bounded project release grammar
     source. The cross-product parity test verifies that for
@@ -2024,7 +2010,7 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 
 # Synthetic corrected guard block (the parent artifact)
 # Synthetic corrected guard block (the parent artifact)
-# Per Yua 21:21:24 #4 + 21:27:31 #2: align with the
+# Align with the
 # release-tag decision model. The corrected guard uses
 # the same bounded SemVer 2.0.0 grammar as the Python
 # resolver (Bash POSIX ERE equivalent: capturing groups
@@ -2044,7 +2030,7 @@ CORRECTED_GUARD = (
 def _write_corrected_resolve_step(src: Path, dst: Path) -> None:
     """Add the corrected guard to the Resolve step's run script.
 
-    Per Yua 20:57:08 #1: the guard must appear AFTER all TAG
+    The guard must appear AFTER all TAG
     sources resolve and BEFORE tag is emitted.
     """
     text = src.read_text(encoding="utf-8")
@@ -2311,7 +2297,7 @@ def _mutate_yaml_duplicate_prefix(src: Path, dst: Path) -> None:
 def test_wrong_fixture_inv2_duplicate_prefix(fixture_dir: Any) -> None:
     """Wrong-fixture: duplicate `prefix=v` is rejected.
 
-    Per Yua 21:27:31 #1: detect duplicate keys BEFORE dict
+    Detect duplicate keys BEFORE dict
     collapse. Reject a repeated key even when both values
     are identical.
     """
@@ -2347,7 +2333,7 @@ def _mutate_yaml_duplicate_enable(src: Path, dst: Path) -> None:
 def test_wrong_fixture_inv2_duplicate_enable(fixture_dir: Any) -> None:
     """Wrong-fixture: duplicate `enable=` is rejected.
 
-    Per Yua 21:27:31 #1: detect duplicate keys BEFORE dict
+    Detect duplicate keys BEFORE dict
     collapse. Reject a repeated key even when both values
     are identical.
     """
@@ -2411,7 +2397,7 @@ def test_control_malformed_v_prefix_rejected() -> None:
     """Control 6: malformed v-prefix values are rejected for
     both explicit and latest fallback.
 
-    Per Yua 20:57:08 #6: use the release tag grammar
+    Use the release tag grammar
     RELEASE_TAG_GRAMMAR.
     """
     # Explicit malformed values
