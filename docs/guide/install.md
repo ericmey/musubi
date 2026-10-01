@@ -41,9 +41,11 @@ credential preflight against the new image before each deploy.
   reserve it.
 - Docker with Compose v2 (the playbooks install both).
 
-**The root [`docker-compose.yml`](../../docker-compose.yml) is a scaffold,
-not a runnable stack.** Every image line in it carries a placeholder digest.
-Don't `up` it as committed; use the rendered stack.
+The root [`docker-compose.yml`](../../docker-compose.yml) is a runnable
+stack with digest-pinned images: Core, the lifecycle worker, Qdrant and a
+one-shot volume-init. See
+[the Compose stack](../Musubi/08-deployment/compose-stack.md) for its
+services and required settings.
 
 ### Pin and verify the image
 

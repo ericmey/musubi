@@ -52,7 +52,10 @@ services:
   core:
     image: *core-image
     env_file: ${MUSUBI_ENV_FILE:-.env}
-    environment: *core-env
+    environment:
+      <<: *core-env
+      # env_file may contain worker-only settings; do not give its LLM key to Core.
+      LIFECYCLE_LLM_API_KEY: ""
     volumes:
       - vault:/var/lib/musubi/vault
       - artifact-blobs:/var/lib/musubi/artifact-blobs

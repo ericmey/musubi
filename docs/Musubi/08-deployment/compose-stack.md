@@ -26,7 +26,8 @@ Copy `.env.example` to a private `.env` and set a random `JWT_SIGNING_KEY`, a
 `QDRANT_API_KEY`, and reachable dense, sparse, reranker and Ollama URLs. Core
 loads model IDs and the OAuth issuer from the same file. Compose refuses
 missing keys or endpoint URLs before creating containers. Optional TEI Basic
-auth and lifecycle LLM settings are passed through to Core when supplied.
+auth settings reach Core and the worker; the lifecycle LLM key reaches only
+the worker, even when the shared env file contains it.
 
 Core publishes only `MUSUBI_CORE_BIND:MUSUBI_CORE_PORT`, defaulting to
 `127.0.0.1:8100`. To reach it over a network, the operator must explicitly
@@ -55,9 +56,12 @@ does not deploy to any host. Operators review and apply pins themselves.
 
 All named volumes must be backed up and restored as one consistent set.
 The previous `/var/lib/musubi` backup script is for the private Ansible
-layout and is not this stack's backup procedure. The public guide describes
-a cold backup with the stack stopped. The operator supplies the storage and
-retention system.
+layout and is not this stack's backup procedure. Back up cold: stop the
+stack (`docker compose stop`), archive all six volumes at the same point
+in time, then start it again (`docker compose up -d --wait`). Restore all
+six from one backup set, never a mix. The GPU override's `tei-models` and
+`ollama-models` volumes are model caches and need no backup. The operator
+supplies the storage and retention system.
 
 ## Test Contract
 

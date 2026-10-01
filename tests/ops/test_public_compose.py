@@ -56,6 +56,7 @@ def operator_env(tmp_path: Path) -> Path:
                 "SPARSE_MODEL=example/sparse",
                 "RERANKER_MODEL=example/reranker",
                 "LLM_MODEL=example/llm",
+                "LIFECYCLE_LLM_API_KEY=test-only-lifecycle-credential",
                 "MUSUBI_TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:86-1.9.4",
                 "MUSUBI_TEI_DIGEST=" + "a" * 64,
                 "MUSUBI_OLLAMA_IMAGE=ollama/ollama:0.11.2",
@@ -108,6 +109,11 @@ def test_public_compose_remote_mode_is_host_independent(operator_env: Path) -> N
         == "service_completed_successfully"
     )
     assert services["volume-init"]["user"] == "0:0"
+    assert services["core"]["environment"]["LIFECYCLE_LLM_API_KEY"] == ""
+    assert (
+        services["lifecycle-worker"]["environment"]["LIFECYCLE_LLM_API_KEY"]
+        == "test-only-lifecycle-credential"
+    )
 
 
 def test_public_compose_local_gpu_mode_has_no_inference_port(operator_env: Path) -> None:
