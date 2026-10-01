@@ -1,8 +1,6 @@
 ---
-# operator_ssh_user: ssh user used to reach the Musubi workload host.
-# Override via -e @~/.musubi-secrets/inventory-vars.yml if it differs from the
-# default here. Required at runtime; must resolve to a non-placeholder string.
-operator_ssh_user: "ericmey"
+# operator_ssh_user (SSH user for the workload host) is required from
+# the operator's private inventory; do not supply a public fallback.
 
 musubi_service_user: musubi
 musubi_service_group: musubi
@@ -67,9 +65,11 @@ musubi_node_exporter_image: "prom/node-exporter:v1.11.1"
 
 # OTel Collector endpoint for server-side span export. Empty disables tracing
 # (see src/musubi/observability/tracing.py + settings.py::otel_exporter_otlp_endpoint).
-# Defaults to the fleet's shared LGTM stack on shiori; override per-environment
-# via ~/.musubi-secrets/inventory-vars.yml when a host needs to diverge.
-musubi_otel_otlp_endpoint: "http://shiori.mey.house:4317"
+# Operators may set this in their private inventory; the public default
+# does not send traces to a host outside the deployment.
+musubi_otel_otlp_endpoint: ""
+musubi_prometheus_remote_write_url: ""
+musubi_deployment_environment: "production"
 
 musubi_required_packages:
   - ca-certificates

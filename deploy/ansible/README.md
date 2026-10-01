@@ -7,17 +7,15 @@ the control-host setup below.
 
 ## Control-host model
 
-Playbooks are run from an ansible control host. In this environment that's
-the ansible control host alongside the homelab fleet's own `~/ansible/` repo. The
-control host:
+Playbooks run from an Ansible control host. The control host:
 
 - Clones this repo to `~/musubi` (fresh `git pull` before each deploy).
 - Keeps Musubi-specific secrets + inventory overrides under
  `~/.musubi-secrets/` (gitignored directory, 700-perm).
 - Reads the ansible-vault password file named by `ANSIBLE_VAULT_PASSWORD_FILE`.
- Export it once in the control host's shell profile (for example
- `export ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible_vault_pass`, mode `0600`);
- every command, runbook and script here uses that variable.
+  Export it once in the control host's shell profile (for example
+  `export ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible_vault_pass`, mode `0600`);
+  every command, runbook and script here uses that variable.
 
 Running playbooks from this repo's working tree on a developer laptop is
 possible for `--syntax-check` and `--check --diff` dry-runs, but the
@@ -56,6 +54,9 @@ After it prints the next-steps banner:
 1. Edit `~/.musubi-secrets/inventory-vars.yml` — fill in `musubi_host`,
  `musubi_ip`, `musubi_inference_hostname`, `operator_ssh_user` (and Kong vars if/when Kong is
  re-enabled per [ADR 0024](../../docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md)).
+ Set `musubi_otel_otlp_endpoint` and `musubi_prometheus_remote_write_url` only
+ if this deployment sends telemetry to an external collector. Set
+ `musubi_deployment_environment` to the label you want on metrics.
 2. Edit `~/.musubi-secrets/vault.yml` with real secret values (see
  `vault.example.yml` for the key list).
 3. Encrypt it:
@@ -148,7 +149,7 @@ Ansible vault, command output, diffs, or this repository. Updating either
 - **Secrets live outside any git clone.** `~/.musubi-secrets/` survives
  `rm -rf ~/musubi && git clone` and can't be accidentally `git add`ed.
 - **One vault password file, named once.** `ANSIBLE_VAULT_PASSWORD_FILE` is the
- only place its path appears, so commands and scripts can't disagree about it.
+  only place its path appears, so commands and scripts can't disagree about it.
 - **The committed inventory is a valid template**, not a file that has to
  be hand-patched before use. Running it unparameterised fails fast with a
  clear Jinja undefined-variable error.

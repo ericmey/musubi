@@ -256,18 +256,18 @@ ansible-playbook \
 curl -sS http://musubi.example.local:8100/v1/ops/status | jq .
 
 # Inspect the upgrade log:
-ssh ericmey@musubi.example.local \
+ssh "${OPERATOR_SSH_USER:?set operator SSH user}@musubi.example.local" \
  'sudo tail -1 /var/log/musubi/upgrade-history.jsonl | jq .'
 
 # Live consumer blast-radius smoke. Run once before deploy with
 # MUSUBI_CONSUMER_PHASE=pre-deploy and again here with post-deploy.
-# Each command must exercise the real consumer, not only curl Musubi.
-# The script rejects unset values, literal <placeholder> text, and no-ops.
+# Set MUSUBI_CONSUMER_CHECKS_FILE to a private TSV with one
+# label<TAB>real-consumer-command per line. Each command must exercise its
+# consumer, not only curl Musubi. A test command that skips every case
+# and exits zero is not a valid check; require an executed live case.
+# Missing/empty files and obvious no-ops fail closed.
 MUSUBI_CONSUMER_PHASE=post-deploy \
-MUSUBI_CONSUMER_COMMAND_CHAIR_CMD='<command-chair live smoke command>' \
-MUSUBI_CONSUMER_PHONE_AGENTS_CMD='<phone-agent live smoke command>' \
-MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD='<openclaw-on-nyla live smoke command>' \
-MUSUBI_CONSUMER_VICE_CMD='<vice live app smoke command>' \
+MUSUBI_CONSUMER_CHECKS_FILE="$HOME/.musubi-secrets/consumer-checks.tsv" \
 deploy/smoke/check_consumers.sh
 ```
 
@@ -276,9 +276,8 @@ deploy/smoke/check_consumers.sh
 - `status` is `ok` and every component is `healthy: true`.
 - The last `upgrade-history.jsonl` entry is this run (matching
  timestamp, listed services, current `core_image`).
-- `check_consumers.sh` reports `[PASS]` for all four live consumer
- classes: command-chair agents, phone agents, OpenClaw on Nyla, and
- Vice. If any consumer fails, treat the deploy as failed even when Core
+- `check_consumers.sh` reports `[PASS]` for every declared live consumer.
+ If any consumer fails, treat the deploy as failed even when Core
  health is green.
 
 **Destructive:** no.

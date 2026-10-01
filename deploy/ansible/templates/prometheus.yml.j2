@@ -1,7 +1,5 @@
 # Prometheus scrape config for the Musubi workload host.
-# See [[09-operations/observability]] for the broader strategy and
-# [[13-decisions/0033-centralize-observability-on-shiori]] for the
-# central-vs-local split.
+# See [[09-operations/observability]] for the broader strategy.
 #
 # Rendered into `/etc/musubi/prometheus.yml` on the host by
 # `deploy/ansible/deploy.yml`, then mounted read-only at
@@ -13,9 +11,8 @@
 # Every `target` below is a compose service name — resolution happens on
 # the musubi compose bridge.
 #
-# Sample flow: scrape locally → keep 30 days locally (`--storage.tsdb.retention.time=30d`)
-# AND remote_write to shiori's Mimir for central aggregation, multi-host
-# correlation, and longer-horizon visualization.
+# Sample flow: scrape locally → keep 30 days locally (`--storage.tsdb.retention.time=30d`).
+# Optionally forward samples to the operator's remote metrics backend.
 #
 # Qdrant scrape uses `authorization.credentials_file` to send
 # `Authorization: Bearer <api-key>`. Qdrant 1.17 accepts either an
@@ -25,34 +22,33 @@
 # template into `/run/musubi-secrets/qdrant.token`, then mounted into the
 # container at `/etc/prometheus/qdrant.token` (mode 0400, UID 65534).
 #
-# Visualization, alerting, and trace collection live on shiori per ADR 0033.
-# Local Grafana/Loki/Tempo/Alertmanager were planned by slice-ops-observability
-# but never deployed; the `deploy/{grafana,loki,tempo}/` directories were
-# removed in the same PR as this header update.
+# Visualization, alerting, and trace collection are supplied by the operator.
 
 global:
   scrape_interval: 15s
   scrape_timeout: 10s
   external_labels:
-    deployment_environment: harem-world
+    deployment_environment: {{ musubi_deployment_environment }}
     host_name: musubi
     service_namespace: musubi
 
-# Mirror every sample to shiori's Mimir. Local TSDB still serves direct
-# PromQL queries on 127.0.0.1:9090 if shiori is unreachable.
+{% if musubi_prometheus_remote_write_url %}
+# Forward samples to the operator-configured backend. Local TSDB still serves
+# direct PromQL queries on 127.0.0.1:9090 if it is unreachable.
 remote_write:
-  - url: http://shiori.mey.house:9009/api/v1/push
+  - url: {{ musubi_prometheus_remote_write_url }}
     write_relabel_configs:
-      # Don't ship prometheus's own scrape-of-itself metrics — shiori has its
-      # own prometheus self-metrics; double-counting muddies correlation.
+      # Don't ship Prometheus's own scrape-of-itself metrics; double-counting
+      # muddies cross-host correlation.
       - source_labels: [job]
         regex: prometheus
         action: drop
       # Promote `job` → `service_name` so musubi-emitted series match the
-      # OTel convention used by openclaw/livekit/shiori. See [[wiki/services/observability/integration-baseline#F3.1]].
+      # OTel convention used by agent and voice integrations.
       - source_labels: [job]
         target_label: service_name
         action: replace
+{% endif %}
 
 scrape_configs:
   # Musubi Core — HTTP API metrics (request counts, latency histograms,
@@ -98,8 +94,7 @@ scrape_configs:
 
   # Prometheus scrapes itself — cheap, handy for debugging "are scrapes
   # landing at all?" without standing up a separate probe. Dropped from
-  # remote_write (see write_relabel_configs above) so shiori's central
-  # prometheus self-metrics aren't double-counted.
+  # remote_write, when configured, so self-metrics aren't double-counted.
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]

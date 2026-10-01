@@ -16,7 +16,7 @@ Behaviour:
   the rest of the fleet emits (so musubi-core lines up with openclaw,
   livekit, etc. on Tempo + Mimir labels).
 - Span export goes over OTLP/gRPC to the supplied endpoint
-  (e.g. ``http://shiori.mey.house:4317``).
+  (e.g. ``https://telemetry.example.test:4317``).
 - 100% sampling per the spec ("100% in v1 (low traffic; dedicated host
   has spare headroom)"). No sampler argument is passed; OTel's default
   is ``ParentBased(AlwaysOn)`` which is exactly 100% root-sampling.
@@ -67,7 +67,7 @@ def init_tracing(
     service_namespace: str = "musubi",
     host_name: str | None = None,
     service_version: str | None = None,
-    deployment_environment: str = "harem-world",
+    deployment_environment: str = "production",
 ) -> TracerProvider | None:
     """Build and install the global TracerProvider.
 
@@ -77,9 +77,8 @@ def init_tracing(
     Idempotent: a second call returns ``None`` and does not reinstall.
 
     All values are passed by the caller — typically pulled from
-    :class:`musubi.settings.Settings`. Defaults match what the rest of
-    the fleet emits so musubi-core's spans align on the same labels as
-    openclaw/livekit in Tempo + Mimir.
+    :class:`musubi.settings.Settings`. Operators set environment labels
+    for their own telemetry backend.
     """
     global _provider, _provider_initialized
 

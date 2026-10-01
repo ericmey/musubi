@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from jinja2 import Environment, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[2]
 PROM_CONFIG = ROOT / "deploy" / "ansible" / "templates" / "prometheus.yml.j2"
@@ -35,8 +36,13 @@ DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
 UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
 
 
-def _load_prom_config() -> Any:
-    return yaml.safe_load(PROM_CONFIG.read_text())
+def _load_prom_config(**overrides: str) -> Any:
+    vars = yaml.safe_load(GROUP_VARS.read_text())
+    vars.update(overrides)
+    rendered = (
+        Environment(undefined=StrictUndefined).from_string(PROM_CONFIG.read_text()).render(**vars)
+    )
+    return yaml.safe_load(rendered)
 
 
 def _load(path: Path) -> Any:
@@ -94,18 +100,24 @@ def test_external_labels_identify_host() -> None:
     assert "service_namespace" in labels, "external_labels.service_namespace missing"
 
 
-def test_remote_write_to_shiori_central() -> None:
-    """Per ADR 0033, prometheus mirrors all scraped samples to the central
-    Mimir instance on shiori. Without this block, musubi metrics never reach
-    central observability — the centralization is a runtime no-op.
-    """
+def test_remote_write_is_operator_configured() -> None:
     cfg = _load_prom_config()
-    rw = cfg.get("remote_write") or []
-    assert rw, "remote_write block missing — central observability won't receive musubi metrics"
-    urls = [entry.get("url", "") for entry in rw]
-    assert any("shiori" in url and "/api/v1/push" in url for url in urls), (
-        f"no remote_write target points at shiori's Mimir push endpoint; got {urls!r}"
+    assert not cfg.get("remote_write"), "public default must not forward metrics to a house host"
+
+    cfg = _load_prom_config(
+        musubi_prometheus_remote_write_url="https://metrics.example.test/api/v1/push"
     )
+    assert cfg["remote_write"][0]["url"] == "https://metrics.example.test/api/v1/push"
+
+
+def test_telemetry_defaults_do_not_name_house() -> None:
+    vars = _load(GROUP_VARS)
+    assert "operator_ssh_user" not in vars
+    assert vars["musubi_otel_otlp_endpoint"] == ""
+    assert vars["musubi_prometheus_remote_write_url"] == ""
+    assert vars["musubi_deployment_environment"] == "production"
+    env_template = (ROOT / "deploy/ansible/templates/env.production.j2").read_text()
+    assert "OTEL_DEPLOYMENT_ENVIRONMENT={{ musubi_deployment_environment }}" in env_template
 
 
 def test_scrape_targets_node_exporter() -> None:
