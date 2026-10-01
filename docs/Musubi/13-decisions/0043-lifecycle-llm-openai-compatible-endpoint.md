@@ -5,9 +5,9 @@ type: adr
 status: accepted
 date: 2026-08-14
 updated: 2026-08-14
-deciders: [Eric]
+deciders: [Admin]
 tags: [architecture, lifecycle, llm, deployment, type/adr, status/accepted]
-supersedes: ""
+supersedes: "[[13-decisions/0019-qwen-on-musubi-gpu-phase-1]]; [[13-decisions/0012-local-inference]] (lifecycle LLM placement only)"
 superseded-by: ""
 ---
 
@@ -15,7 +15,7 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
-- **Decider:** Eric (model-lane selection)
+- **Decider:** Admin (model-lane selection)
 
 ## Context
 
@@ -39,12 +39,12 @@ Failure rate tracks schema complexity: the model, not the pipeline. #684's
 skip-cluster semantics turned what used to be a livelock into quiet
 zero-output — visible on the new counters, but still zero output.
 
-The house serves larger models behind LiteLLM (OpenAI-compatible):
+At decision time, the operator's inference gateway (LiteLLM, OpenAI-compatible) served larger models in these lanes:
 
-1. `house/main` — Qwen 3.6 35B A3B, 8× concurrency, 131K ctx (interactive lane)
-2. `house/backup` — same model, 4× concurrency, 131K ctx (failover lane;
+1. the `main` lane — Qwen 3.6 35B A3B, 8× concurrency, 131K ctx (interactive lane)
+2. the `backup` lane — same model, 4× concurrency, 131K ctx (failover lane;
    throughput shrinks faster under concurrency)
-3. `house/voice` — Qwen 3.5 9B, 16× concurrency, 8K ctx
+3. the `voice` lane — Qwen 3.5 9B, 16× concurrency, 8K ctx
 4. (planned) Jetson Orin Nano 0.7B–3B utility models
 
 ## Decision
@@ -52,7 +52,8 @@ The house serves larger models behind LiteLLM (OpenAI-compatible):
 The lifecycle worker's LLM client speaks a second wire protocol —
 `/v1/chat/completions` with `response_format: json_schema (strict)` — selected
 by settings (`LIFECYCLE_LLM_API=openai`, plus base URL / model / key
-overrides). The deployment targets **`house/backup` (35B, 131K ctx)** for all
+overrides). The deployment targets the gateway's large-context failover lane
+(`<lifecycle-llm-model>`; at decision time a 35B, 131K-ctx model) for all
 four lifecycle tasks. Defaults preserve the existing Ollama path unchanged.
 
 Alongside, maturation's batched enrichment isolates failures **per batch**
@@ -63,15 +64,15 @@ implemented a stricter all-or-nothing reading that let one flaky batch erase
 topics for entire sweeps — which in turn starved synthesis clustering down to
 capture-source tags (the mega-cluster precondition from #684).
 
-## Why house/backup and not the alternatives
+## Why the backup lane and not the alternatives
 
 - **The workload is the inverse of the interactive lane.** Lifecycle calls
   are serial nightly/hourly batch: latency-irrelevant, correctness-critical.
-  `house/backup`'s concurrency penalty never applies to a serial caller, and
-  using it keeps `house/main` uncontended for the agents. Worst case — a
+  The `backup` lane's concurrency penalty never applies to a serial caller, and
+  using it keeps the `main` lane uncontended for the agents. Worst case — a
   main-outage night where backup carries both — lifecycle degrades benignly
   by design (skip, candidates carry, retry next sweep).
-- **`house/voice` (8K ctx) is disqualified by arithmetic**: a capped synthesis
+- **The `voice` lane (8K ctx) is disqualified by arithmetic**: a capped synthesis
   cluster is 20 members × 1,500 chars ≈ 8–9K tokens before instructions and
   schema. Every call would truncate; the 0% would return wearing a
   different error.
@@ -88,10 +89,11 @@ capture-source tags (the mega-cluster precondition from #684).
 - Model capability for the memory pipeline becomes a deployment decision
   (env), not a code path. The gradient can be re-measured against any lane
   by flipping four env values.
-- One new secret in the worker environment (the LiteLLM key), materialized
+- One new secret in the worker environment (the gateway API key,
+  `LIFECYCLE_LLM_API_KEY`), materialized
   from a committed 1Password reference by `op run`; it is never rendered into
   the persistent non-secret `.env.production` file.
-- If the LiteLLM backend only best-efforts `json_schema` (backend-dependent),
+- If the OpenAI-compatible backend only best-efforts `json_schema` (backend-dependent),
   the existing validate-or-None contract absorbs it: failed calls skip and
   retry next sweep, and the failure lands on the #684 counters.
 - The co-located Ollama becomes retirable once the openai lane is proven,

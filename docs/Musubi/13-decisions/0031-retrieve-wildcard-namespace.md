@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-24
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, api, retrieve, namespace]
 updated: 2026-04-24
 up: "[[13-decisions/index]]"
@@ -17,13 +17,13 @@ superseded-by: ""
 
 **Status:** accepted
 **Date:** 2026-04-24
-**Deciders:** Eric
+**Deciders:** Admin
 
 ## Context
 
 Under [[13-decisions/0030-agent-as-tenant|ADR 0030]], every channel an agent
 speaks on (voice, openclaw, discord, …) writes its episodic captures into a
-distinct 3-segment namespace: `nyla/voice/episodic`, `nyla/openclaw/episodic`,
+distinct 3-segment namespace: `alex/voice/episodic`, `alex/openclaw/episodic`,
 and so on. Channel provenance is preserved on every row — desirable, because
 "on our last call" is meaningfully different from "in the Openclaw thread".
 
@@ -36,8 +36,8 @@ openclaw memories; the agent has no path to her own voice history.
 
 The two known mitigations both hurt:
 - **Plugin-side fanout** (each adapter enumerates the agent's channels and
-  N-calls retrieve). Pushes household awareness into every adapter; brittle.
-- **Forcing all writes to a single channel-less namespace** (`nyla/_shared/episodic`).
+  N-calls retrieve). Pushes tenant-wide awareness into every adapter; brittle.
+- **Forcing all writes to a single channel-less namespace** (`alex/shared/episodic`).
   Loses provenance; "where did this come from" becomes a payload field
   conventions debate, not a structural fact.
 
@@ -60,12 +60,12 @@ matches only 2-seg, and so on.
 
 | Pattern              | Meaning                                                          |
 |----------------------|------------------------------------------------------------------|
-| `nyla/voice/episodic`| Single channel, single plane (unchanged from v1.0)               |
-| `nyla/voice`         | Single channel, fans across `planes` (ADR 0028, unchanged)       |
-| `nyla/*/episodic`    | All of Nyla's episodic across her channels — **new, primary case**|
-| `nyla/*/curated`     | All of Nyla's curated across her channels                        |
+| `alex/voice/episodic`| Single channel, single plane (unchanged from v1.0)               |
+| `alex/voice`         | Single channel, fans across `planes` (ADR 0028, unchanged)       |
+| `alex/*/episodic`    | All of Alex's episodic across its channels — **new, primary case**|
+| `alex/*/curated`     | All of Alex's curated across its channels                        |
 | `*/voice/episodic`   | Every agent's voice episodic (cross-tenant)                      |
-| `nyla/*/*`           | All of Nyla's everything (cross-channel × cross-plane)           |
+| `alex/*/*`           | All of Alex's everything (cross-channel × cross-plane)           |
 | `*/*/episodic`       | The whole episodic plane (operator scope)                        |
 
 A pattern with `*` in the trailing (plane) position is valid only when
@@ -86,7 +86,7 @@ plane is determined by `planes` rather than the namespace.
    syntactically valid; no data yet is a normal state for a brand-new agent.
 4. **Scope check stays strict** (ADR 0028). Every concrete target the pattern
    expanded to must be readable by the token. First denial 403s the whole
-   request. Wildcard tokens (`nyla/*:r`, `*/*:r`) are the natural pairing
+   request. Wildcard tokens (`alex/*:r`, `*/*:r`) are the natural pairing
    for wildcard reads — but the check happens against the resolved target
    list, not the pattern.
 
@@ -115,7 +115,7 @@ plane is determined by `planes` rather than the namespace.
 - **openclaw-musubi plugin.** Updates the retrieve callsites from
   `${presence}/episodic` to `${tenant}/*/episodic` (where `tenant` is the
   first segment of the resolved presence). Per-channel writes unchanged.
-  This is the platform's "Nyla remembers across her surfaces" wiring.
+  This is the platform's "an agent remembers across its surfaces" wiring.
 - **openclaw-livekit.** No change required — its retrieve calls already
   use 3-seg explicit namespaces and aren't trying to span channels. Voice
   recall stays voice-tagged. Future enhancement could add a tenant-wide
@@ -132,13 +132,13 @@ Cleaner long-term — fast equality filters, no scroll. But requires a
 write-side schema change and either backfill or a major bump. Deferred until
 the scroll cost actually bites.
 
-**1-seg `nyla` shape** ("everything Nyla"). Shorter, but loses the ability
+**1-seg `alex` shape** ("everything Alex"). Shorter, but loses the ability
 to scope reads to a single plane across channels. Wildcards subsume the
-1-seg case (`nyla/*/*`) and offer the per-plane variant for free.
+1-seg case (`alex/*/*`) and offer the per-plane variant for free.
 
 **Plugin-side fanout (no core change).** Rejected — see Context. Every
-adapter would re-implement household awareness, and the platform's job is
-to *be* the household-aware substrate, not to outsource that to clients.
+adapter would re-implement tenant-wide awareness, and the platform's job is
+to *be* the tenant-aware substrate, not to outsource that to clients.
 
 **Cache the expansion (60 s TTL).** Faster hot path, but adds a "did the
 cache invalidate?" axis to debugging. Deferred until retrieve latency or

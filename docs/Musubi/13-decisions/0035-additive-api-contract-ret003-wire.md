@@ -1,21 +1,24 @@
 ---
 title: "ADR 0035: Additive API Contract — RET-003 ranked vs recent wire shape"
 section: 13-decisions
-tags: [adr, api, area:retrieval, wire-contract, architecture, section/decisions, status/proposed, type/adr]
+tags: [adr, api, area:retrieval, wire-contract, architecture, section/decisions, status/partially-superseded, type/adr]
 type: adr
-status: proposed
+status: partially-superseded
 date: 2026-07-13
-deciders: [Eric]
-updated: 2026-07-13
+deciders: [Admin]
+updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
+superseded-by: "[[13-decisions/data001-phase2-immutable-vectors]] (corrupt-source rule for ranked reads only)"
 ---
 
 # ADR 0035: Additive API Contract — RET-003 ranked vs recent wire shape
 
-**Status:** proposed
+**Status:** accepted, partially superseded (proposed 2026-07-13; status updated 2026-10-01 from implementation evidence)
 **Date:** 2026-07-13
-**Deciders:** Eric
+**Deciders:** Admin
+
+> **Note (2026-10-01):** implemented in `src/musubi/api/responses.py` (`RankedRetrieveResponse` / `RecentRetrieveResponse`), tested by `tests/api/test_retrieve_ret003_wire.py`. The corrupt-source → 500 rule is superseded for ranked reads by [[13-decisions/data001-phase2-immutable-vectors]]; see §DATA-001 P2 supersession below.
 
 ## Context
 
@@ -31,17 +34,16 @@ The current `/v1/retrieve` public wire is missing several fields the implementat
 | top-level `provenance_score` (recent) | omitted | required (nullable; exact-table-only) |
 
 The implementation produces these values internally — they just don't make it onto the public
-wire. Aoi's spec-source read at harem-ops commit `e8c116c2` (merging `d05e0a6`) on branch
-`chore/tama-ret003-spec` via PR3, file
+wire. The spec-source read at the maintainers' private spec repository, commit `e8c116c2` (merging `d05e0a6`) via PR3, file
 `projects/active/hermes-musubi-provider/specs/spec-ret003-ranked-recent-wire-contract.md` is
 the authoritative locked contract for the public shape. The 5 correction cycles
-(Yua 2026-07-13 09:39:26, 09:49:53, 09:55:38, 10:00:42, 10:03:03) are all applied.
+(review 2026-07-13 09:39:26, 09:49:53, 09:55:38, 10:00:42, 10:03:03) are all applied.
 
 ## Decision
 
-Adopt the RET-003 public wire shape from the harem-ops spec as the additive-API contract for
+Adopt the RET-003 public wire shape from that spec as the additive-API contract for
 `POST /v1/retrieve`. The changes are **additive fields + a deliberate
-corrective semantic change**, not "purely additive" (Yua 2026-07-13
+corrective semantic change**, not "purely additive" (review 2026-07-13
 11:57:59 #8):
 
 - **Additive**: the public top-level shape gains `state`,
@@ -60,7 +62,7 @@ corrective semantic change**, not "purely additive" (Yua 2026-07-13
 
 **Compat risk (must be addressed by adapter tests before deploy):**
 
-- The Hermes adapter (`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`)
+- The Hermes adapter (an external Hermes user plugin, outside this repo)
   currently discards `extra` entirely; the Hermes closeout gate covers ranked passthrough.
   A future recent-mode Hermes surface MUST be tested against the
   exact-`{}` shape so it does not depend on the prior fabricated keys.
@@ -203,23 +205,21 @@ The implementation slice lands in a follow-up branch after the test contract is 
 
 ## Out of scope
 
-- Aoi C6 work (separate lane, Issue #433)
-- Shiori's RET-004 (separate slice: `slice-ret004-evals`, Issue #430)
+- C6 lifecycle-durability work (separate lane, Issue #433)
+- RET-004 (separate slice: `slice-ret004-evals`, Issue #430)
 - `/v1/retrieve/stream` (RET-010 surface; out of scope for RET-003)
 - `docs/Musubi/07-interfaces/openapi/musubi.v1.yaml` (stale skeleton; not hand-edited in
   this slice; regenerated as a separate `slice-api-v*` ADR step)
 - SEC-005 binding-trace (separate lane)
-- Nyla / Sumi consumer proof (separate lane)
+- Downstream agent consumer proof (separate lane)
 
 
-## Closeout gate: Hermes adapter follow-up (per Yua 2026-07-13 10:56:23; corrected 11:19:50 + 11:57:59 #7)
+## Closeout gate: Hermes adapter follow-up (per review 2026-07-13 10:56:23; corrected 11:19:50 + 11:57:59 #7)
 
 This ADR is a closeout gate for the broader wire contract. Once the
 Musubi contract is stable, the Hermes adapter
-(`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`,
-lines ~1200-1305 — a standalone Hermes user plugin loaded as such,
-NOT core/MCP) must preserve the following through without fabricating
-fields. Per Yua 2026-07-13 11:19:50 + 11:57:59 #7 correction, the
+(an external Hermes user plugin outside this repo, NOT core/MCP)
+must preserve the following through without fabricating fields. Per review 2026-07-13 11:19:50 + 11:57:59 #7 correction, the
 current emitted shape is:
 
 - The plugin emits Musubi's **logical API `object_id` (the stored KSUID)**,

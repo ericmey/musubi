@@ -6,7 +6,7 @@ type: adr
 status: accepted
 date: 2026-07-17
 updated: 2026-07-17
-deciders: [Eric, Yua]
+deciders: [Admin, Maintainers]
 ---
 
 # 0039: Durable Client Idempotency Receipts
@@ -57,7 +57,7 @@ decoder-normalizable forms are rejected at request validation, before storage.
 
 Receipt retention is independent of the ordinary POST replay TTL. Automatic
 receipt deletion is deferred until fleet outbox-retention policy can prove that no
-client will retry the event; household-scale SQLite growth is preferable to an
+client will retry the event; small-deployment-scale SQLite growth is preferable to an
 unsafe expiry. Receipt content is never returned across principal or namespace
 boundaries.
 

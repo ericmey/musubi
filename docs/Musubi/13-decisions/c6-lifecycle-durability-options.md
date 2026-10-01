@@ -3,9 +3,7 @@ title: "C6: lifecycle audit durability — accepted decision (Option A, durable-
 section: 13-decisions
 type: adr
 status: accepted
-owner: aoi
-discoverer: eric
-decided-by: yua
+owner: maintainers
 phase: "Lifecycle-audit 2026-07-13 — C6 event-loss"
 tags: [type/adr, status/accepted, lifecycle, audit, durability]
 updated: 2026-07-13
@@ -14,7 +12,7 @@ supersedes: []
 
 # C6: lifecycle audit durability — accepted decision (Option A, durable-on-accept)
 
-**Author:** Aoi · **Decided by:** Yua (2026-07-13) · **Status:** ACCEPTED — durable-on-accept.
+**Decided:** 2026-07-13 (review ruling) · **Status:** ACCEPTED — durable-on-accept.
 This ADR fixes the durability model and the exact observability surface BEFORE source, and draws the
 C6 / C6b boundary. No source in this slice; the contract is `slice-c6-lifecycle-event-loss` (Issue #433).
 

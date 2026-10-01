@@ -6,7 +6,7 @@ type: adr
 status: accepted
 date: 2026-08-02
 updated: 2026-08-02
-deciders: [Eric, Aoi, Yua]
+deciders: [Admin, Maintainers]
 ---
 
 # 0041: Truthful Hybrid Retrieval Channel Controls

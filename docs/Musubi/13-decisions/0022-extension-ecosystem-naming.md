@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-19
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, monorepo, ecosystem, adapters, extensions, packaging]
 updated: 2026-04-19
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: "[[13-decisions/0046-standalone-python-sdk-and-livekit]] (Python 
 
 **Status:** accepted
 **Date:** 2026-04-19
-**Deciders:** Eric
+**Deciders:** Admin
 
 **Partial supersession (2026-09-30):** [[13-decisions/0046-standalone-python-sdk-and-livekit]]
 places the Python SDK and LiveKit adapter in sibling repositories. The naming
@@ -44,7 +44,7 @@ An earlier draft proposed a **runtime criterion** (external-runtime components m
 **If the implementation is not Python,** source lives in a separate sibling repository named:
 
 ```
-github.com/ericmey/<system>-musubi
+github.com/<org>/<system>-musubi
 ```
 
 where `<system>` names the host system the component targets.
@@ -55,12 +55,12 @@ where `<system>` names the host system the component targets.
 |---|---|---|---|
 | Musubi server | Python | `src/musubi/` → future `packages/musubi-server/` | Operator deploys on `musubi.example.local` |
 | Musubi Python SDK | Python | `src/musubi/sdk/` → future `packages/musubi-client/` | `pip install musubi-client` |
-| MCP server (remote HTTP + SSE) | Python | `src/musubi/adapters/mcp/` → future `packages/musubi-mcp/` | Deploys with Musubi; Kong-fronts it |
+| MCP server (remote HTTP + SSE) | Python | `src/musubi/adapters/mcp/` → future `packages/musubi-mcp/` | Deploys with Musubi; fronted by the operator's gateway (see 0024) |
 | MCP local stdio plugin *(if ever built)* | Python | `packages/musubi-mcp-stdio/` *(future subpackage)* | `pip install musubi-mcp-stdio` on agent host |
 | LiveKit adapter | Python | `src/musubi/adapters/livekit/` → future `packages/musubi-livekit/` | `pip install musubi-livekit` into LiveKit worker |
-| OpenClaw browser extension | TypeScript | **`github.com/ericmey/openclaw-musubi`** | Chrome Web Store / Firefox Add-ons / sideload |
-| Obsidian plugin *(future, if built)* | TypeScript | **`github.com/ericmey/obsidian-musubi`** | Obsidian Community Plugins |
-| VS Code extension *(future, if built)* | TypeScript | **`github.com/ericmey/vscode-musubi`** | VS Code Marketplace |
+| OpenClaw browser extension | TypeScript | **`github.com/<org>/openclaw-musubi`** | Chrome Web Store / Firefox Add-ons / sideload |
+| Obsidian plugin *(future, if built)* | TypeScript | **`github.com/<org>/obsidian-musubi`** | Obsidian Community Plugins |
+| VS Code extension *(future, if built)* | TypeScript | **`github.com/<org>/vscode-musubi`** | VS Code Marketplace |
 
 ### Naming rationale for external repos
 
@@ -135,7 +135,7 @@ Git tags scope per-subpackage: `musubi-v1.2.0`, `musubi-livekit-v0.1.0`, `musubi
 - **Clean DX for external TS consumers.** OpenClaw dev clones `openclaw-musubi`, uses pnpm, publishes to the browser store. No Python toolchain touches them.
 - **Atomic cross-cutting changes for Python.** Changing a plane type + SDK + LiveKit adapter lands in one Musubi PR. The monorepo wins where it wins; external repos handle what must be external.
 - **Interface proliferation stays sanctioned.** Every external consumer, regardless of repo location, goes through the canonical API. No direct Qdrant access. ADR-0011's interface-discipline decision is preserved.
-- **Ecosystem is visible at the namespace level.** `github.com/ericmey/*-musubi` enumerates the non-Python surfaces at a glance.
+- **Ecosystem is visible at the namespace level.** `github.com/<org>/*-musubi` enumerates the non-Python surfaces at a glance.
 
 ### Negative
 
@@ -190,7 +190,7 @@ Check out `openclaw-musubi` as a submodule under `external/openclaw/` so `git cl
 - [[13-decisions/0011-canonical-api-and-adapters]] — original 8-repo interface-discipline ADR; superseded on repo-layout by 0015 and this ADR.
 - [[13-decisions/0015-monorepo-supersedes-multi-repo]] — the Python-monorepo decision this ADR extends (language criterion is the extension).
 - [[13-decisions/0016-vault-in-monorepo]] — precedent for "extend 0015, don't supersede".
-- [[13-decisions/0021-mcp-server-library]] — Nyla's sibling ADR adopting Anthropic's `mcp` package (unrelated to this ADR; shares nothing but the session date).
+- [[13-decisions/0021-mcp-server-library]] — the sibling ADR adopting Anthropic's `mcp` package (unrelated to this ADR; shares nothing but the session date).
 - [[07-interfaces/mcp-adapter]] — MCP spec; implementation in-monorepo.
 - [[07-interfaces/livekit-adapter]] — LiveKit spec; implementation in-monorepo.
 - [[07-interfaces/openclaw-adapter]] — OpenClaw spec (contract only; implementation in `openclaw-musubi`).

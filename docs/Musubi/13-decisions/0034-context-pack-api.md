@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-06-28
-deciders: [Eric, Aoi, Yua]
+deciders: [Admin, Maintainers]
 tags: [section/decisions, status/accepted, type/adr, musubi-context]
 updated: 2026-06-28
 up: "[[13-decisions/index]]"
@@ -15,7 +15,7 @@ reviewed: false
 
 **Status:** accepted
 **Date:** 2026-06-28
-**Deciders:** Eric, Aoi, Yua
+**Deciders:** Admin, Maintainers
 
 ## Context
 
@@ -62,7 +62,7 @@ untyped tags remain valid and are read as `kind=episode`.
 
 ### Keep context packing client-side
 
-Rejected. It would duplicate ranking logic across Yua, Aoi, command-chair
+Rejected. It would duplicate ranking logic across individual agents, operator
 scripts, and future adapters, and would make deployed Musubi less valuable
 than local agent hacks.
 
@@ -91,6 +91,6 @@ testable.
 - Future ranking changes are product behavior changes and should be
   tested against the acceptance scenarios before deployment.
 - Deployment close requires blast-radius proof against live consumers,
-  not only unit tests: command-chair agents, phone agents, OpenClaw on
-  Nyla, and Vice must all pass their existing consumer smokes before and
-  after rollout. If any fail, roll back the versioned image pin.
+  not only unit tests: every known live consumer (agent CLIs, mobile
+  agents, the OpenClaw plugin host, other integrations) must pass its
+  existing consumer smokes before and after rollout. If any fail, roll back the versioned image pin.

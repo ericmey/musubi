@@ -2,27 +2,28 @@
 title: "C6b: lifecycle Qdrant↔SQLite atomicity — design v2 (durable-intent outbox + coordinator)"
 section: 13-decisions
 type: adr
-status: proposed
-owner: aoi
-discoverer: eric
+status: accepted
+owner: maintainers
 phase: "Lifecycle-audit 2026-07-13 — C6b atomicity"
-tags: [type/adr, status/proposed, lifecycle, audit, atomicity, outbox]
-updated: 2026-07-13
+tags: [type/adr, status/accepted, lifecycle, audit, atomicity, outbox]
+updated: 2026-10-01
 supersedes: []
 ---
 
 # C6b: lifecycle Qdrant↔SQLite atomicity — design v2 (durable-intent outbox + coordinator)
 
-**Author:** Aoi · 2026-07-13 · **Status:** PROPOSED v2 — revised for Yua's fork rulings + corrections A–J
+**Date:** 2026-07-13 · **Status:** PROPOSED v2 — revised for the review fork rulings + corrections A–J
 (2026-07-13). Slice: `slice-c6b-lifecycle-qdrant-sqlite-atomicity` (Issue #437). Direction
 (durable-intent outbox) ACCEPTED; this v2 is the contract that makes the outbox truthful across callers,
 retries, bypass paths, and long-term operation. Zero source until the red contract is encoded + reviewed.
+
+> **Status note (2026-10-01):** implemented. `src/musubi/lifecycle/coordinator.py` holds `LifecycleTransitionCoordinator`, the `transition()` seam in `src/musubi/lifecycle/transitions.py` requires it, and the Phase-1 wiring landed in #455. [[13-decisions/h5-canonical-plane-transition-design]] depends on it. The "Zero source" line above is the state on 2026-07-13.
 
 ## The gap (verified against `src/musubi/lifecycle/transitions.py` + the plane layer)
 
 `transition()` delegates the mutation + audit to `LifecycleTransitionCoordinator.transition(intent)` (in `src/musubi/lifecycle/coordinator.py`); the seam itself no longer calls `set_payload` directly. The coordinator owns the durable-intent outbox (S2 admit / S3 conditional apply + readback / S4 reconcile) and emits a single `LifecycleEvent` on finalize, so the pre-coordinator failure window (mutation-without-audit) is closed by the outbox. `expected_version` is hard-fenced (LIFE-010 transition hard fence): the seam returns `Err(version_fence_violation)` BEFORE legality or coordinator.apply, so no mutation, no event, no version bump on a stale write. **The earlier C6 durable-on-accept proposal alone would not have closed either gap; the current coordinator/outbox + LIFE-010 hard fence does.** **And `transitions.py` is not the only mutation path (correction G).**
 
-## Fork rulings (Yua 2026-07-13)
+## Fork rulings (review, 2026-07-13)
 
 1. **Boundary:** a distinct **`LifecycleTransitionCoordinator`** public API, backed by a distinct
    **`LifecycleOutbox`** and a **shared SQLite event+outbox store** (same DB). begin/finalize do NOT go
@@ -148,7 +149,7 @@ rule (a `set_payload` in a function that writes a `state` field), NOT the raw li
 2026-07-13): `maturation.py:893` writes `tags/importance/topics` ("non-state enrichment", per its own
 docstring), `synthesis.py:718` writes `contradicts`, `demotion.py:380` writes the reinforcement clock.
 The actual **state-writing TRANSITION** `set_payload` sites (G1 covers post-create transitions only —
-Yua repair 3) are **6 sites across 6 files**:
+review repair 3) are **6 sites across 6 files**:
 
 - **5 plane `transition()` methods** — `planes/episodic/plane.py:812`, `planes/concept/plane.py:436`,
   `planes/thoughts/plane.py:488`, `planes/artifact/plane.py:295`, `planes/curated/plane.py:449` (each
@@ -218,7 +219,7 @@ Reds:
   one wins (creates the intent + applies); the loser **cannot mutate and cannot overwrite the winner's
   intent** — it is fenced/rejected (`Err: active_intent_exists` or stale-fence abandon), never a silent
   lost-update. Distinct from R11 (concurrent begins of the *same* operation) — this proves the
-  single-active-intent guard + hard fence together defeat a genuine two-writer conflict (Yua 2026-07-13).
+  single-active-intent guard + hard fence together defeat a genuine two-writer conflict (review, 2026-07-13).
 
 Guards:
 - G1 **mechanical AST/rg guard: NO direct `state`-writing `set_payload` outside
@@ -228,7 +229,7 @@ Guards:
 - G2 callsite inventory: `coordinator.transition(` callsites are exactly the reviewed set.
 - G3 AST "Result consumed": no caller may drop the three-way `TransitionOutcome`.
 
-## Phase-1 acceptance vs defect closure (Yua sequencing 2026-07-13 — no circular dependency)
+## Phase-1 acceptance vs defect closure (review sequencing 2026-07-13 — no circular dependency)
 
 The red contract **labels each item**:
 

@@ -5,7 +5,7 @@ type: adr
 status: accepted
 date: 2026-08-03
 updated: 2026-08-03
-deciders: [Eric]
+deciders: [Admin]
 tags: [architecture, api, artifacts, idempotency, data-001, type/adr, status/accepted]
 supersedes: ""
 superseded-by: ""
@@ -15,7 +15,7 @@ superseded-by: ""
 
 **Status:** accepted
 **Date:** 2026-08-03
-**Decider:** Eric
+**Decider:** Admin
 
 ## Context
 
@@ -30,7 +30,7 @@ The original cannot be recovered from immutable-vector history. A successful
 vector-changing publish deletes every superseded content point except the live
 one. Backups may retain bytes, but no supported live API can address them.
 
-Eric selected **Option A: artifact escrow**. Before retraction, Musubi must save
+The Admin selected **Option A: artifact escrow**. Before retraction, Musubi must save
 the exact original content bytes as an artifact that is readable by explicit
 reference and deliberately absent from semantic search. A bounded tombstone then
 replaces the logical episodic content without re-embedding. Option B, which would
@@ -320,7 +320,7 @@ them as malformed evidence.
 
 - Ordinary artifact upload/indexing is unchanged.
 - Existing inline tombstones remain readable and valid with no migration.
-- The household remains single-worker until #558 supplies distributed idempotency
+- The deployment remains single-worker (`WEB_CONCURRENCY=1`) until #558 supplies distributed idempotency
   ownership; this ADR does not claim a completed receipt solves that broader gap.
 
 ## Alternatives considered

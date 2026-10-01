@@ -2,22 +2,23 @@
 title: "C6b Phase-1 source cut plan + authoritative Pending contract (P0 appendix, REV3)"
 section: 13-decisions
 type: adr
-status: proposed
-owner: aoi
-discoverer: eric
+status: accepted
+owner: maintainers
 phase: "Lifecycle-audit 2026-07-13 — C6b Phase-1 source planning (P0 appendix)"
-tags: [type/adr, status/proposed, lifecycle, atomicity, outbox, planning]
-updated: 2026-07-13
+tags: [type/adr, status/accepted, lifecycle, atomicity, outbox, planning]
+updated: 2026-10-01
 supersedes: []
 ---
 
 # C6b Phase-1 source cut plan + authoritative Pending contract — P0 appendix (REV3)
 
-**Author:** Aoi · 2026-07-13. Companion to [[13-decisions/c6b-lifecycle-atomicity-design]]. Reflects Yua's
+**Date:** 2026-07-13. Companion to [[13-decisions/c6b-lifecycle-atomicity-design]]. Reflects the review's
 REV2 twelve rulings + the P0b/P0c checkpoint rulings (2026-07-13). **Planning + authoritative contract
 only — NOT source authorization.** Source, migration, merge, release, deploy, host contact remain
-forbidden until Yua explicitly authorizes S1. Accepted red-contract head at authoring: `ce2e527`
+forbidden until review explicitly authorizes S1. Accepted red-contract head at authoring: `ce2e527`
 (P0a+P0d landed on `23c61a3`).
+
+> **Status note (2026-10-01):** executed. The coordinator wiring (S7) landed in #455; `cleanup_terminal` (S6) and the `musubi_lifecycle_coordinator_ready` signal are in `src/musubi/lifecycle/`. Statements below such as "S7 itself is not yet merged" are the state on 2026-07-13.
 
 ## A. Authoritative Pending contract (ruling P0b/6 — source must not reinvent this)
 
@@ -245,7 +246,7 @@ subprocesses + on-disk Qdrant) — is **nondeterministic under load**: on 2026-0
 double-operation race); the rerun passed, and it passes reliably locally. The failure was a harness timing
 race, NOT a regression (the failing commit touched only the P0c config parsers).
 
-**Blocker (Yua ruling, 2026-07-14):** S1 coordinator source MUST NOT proceed while a nondeterministic crash
+**Blocker (review ruling, 2026-07-14):** S1 coordinator source MUST NOT proceed while a nondeterministic crash
 proof gates it — a flaky red-proof cannot certify the single-winner invariant it exists to prove. Before S1
 that exercises the R22 race, the R22 crash harness must be **flake-hardened to determinism** (e.g. an
 explicit rendezvous/barrier so both processes are provably in-flight before the fenced apply, bounded
@@ -253,7 +254,7 @@ retries removed, or a deterministic scheduler seam) and shown stable across N re
 a **separate scoped task** — do NOT fix R22 inside the P0c parity work. Tracked here as a pre-S1 gate;
 promote to an issue when S1 is scheduled.
 
-### J.1 RESOLVED-in-harness (2026-07-14, tests-only, zero src) — Yua option-B flake-harden
+### J.1 RESOLVED-in-harness (2026-07-14, tests-only, zero src) — review option-B flake-harden
 
 **Root cause (reproduced deterministically, not inferred).** The flake is a HARNESS rendezvous gap plus an
 on-disk-Qdrant lock artifact — NOT a reference-apply bug. The original harness released both children at

@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-17
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr]
 updated: 2026-04-17
 up: "[[13-decisions/index]]"
@@ -15,7 +15,7 @@ reviewed: true
 
 **Status:** accepted
 **Date:** 2026-04-17
-**Deciders:** Eric
+**Deciders:** Admin
 
 ## Context
 

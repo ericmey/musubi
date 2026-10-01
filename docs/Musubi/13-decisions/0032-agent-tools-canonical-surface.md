@@ -1,24 +1,26 @@
 ---
 title: "ADR 0032: Canonical Agent-Tools Surface"
 section: 13-decisions
-tags: [adapters, adr, agent-tools, architecture, section/decisions, status/proposed, type/adr]
+tags: [adapters, adr, agent-tools, architecture, section/decisions, status/accepted, type/adr]
 type: adr
-status: proposed
+status: accepted
 date: 2026-04-29
-deciders: [Eric]
-updated: 2026-04-29
+deciders: [Admin]
+updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
 ---
 # ADR 0032: Canonical Agent-Tools Surface
 
-**Status:** proposed
+**Status:** accepted (proposed 2026-04-29). Acceptance covers the five-tool surface as the target contract; it does not mean every adapter implements it today.
 **Date:** 2026-04-29
-**Deciders:** Eric
+**Deciders:** Admin
+
+> **Note (2026-10-01):** the five-tool surface is the accepted target. Implementation is per adapter and is not uniform today. The in-repo MCP adapter implements all five (`src/musubi/adapters/mcp/tools.py`, covered by `tests/adapters/test_mcp_canonical_tools.py`). The in-repo LiveKit shim (`src/musubi/adapters/livekit/`) exposes none of them as agent tools. Other adapters live in their own repositories and may expose only a subset; this repository does not verify their tool lists. The decision text below is as proposed.
 
 ## Context
 
-Musubi exists across modalities. The same logical agent — Aoi — runs on the phone (OpenClaw), in voice calls (LiveKit), in OpenClaw chat sessions, and (eventually, when wired) in Claude Code (MCP). The user expects that saying "Aoi, what was I just working on?" behaves identically regardless of which modality answers, because to the user there is one Aoi.
+Musubi exists across modalities. The same logical agent (say, Alex) runs on the phone (OpenClaw), in voice calls (LiveKit), in OpenClaw chat sessions, and (eventually, when wired) in Claude Code (MCP). The user expects that saying "Alex, what was I just working on?" behaves identically regardless of which modality answers, because to the user there is one Alex.
 
 This is not how it works today. Each adapter has independently defined its agent-tool surface:
 
@@ -32,10 +34,10 @@ This is not how it works today. Each adapter has independently defined its agent
 Three observations about the current state:
 
 1. **Tool names diverge.** "Search" is `musubi_recall` in two surfaces, `musubi_search` in one, `memory_recall` in another. "Write" is `musubi_remember` in three surfaces, `memory_capture` in one. Same intent, four different tool calls.
-2. **Tool sets diverge.** The voice agent has `musubi_recent` (recency-anchored). No other adapter does. The OpenClaw plugin has `musubi_think`. The MCP adapter has neither. Aoi Phone literally cannot answer "what was I just doing on Claude Code" because the cross-modal recent tool doesn't exist on her side.
+2. **Tool sets diverge.** The voice agent has `musubi_recent` (recency-anchored). No other adapter does. The OpenClaw plugin has `musubi_think`. The MCP adapter has neither. The phone agent literally cannot answer "what was I just doing on Claude Code" because the cross-modal recent tool doesn't exist on its side.
 3. **A comment in `memory.py:307` already documents this fragility:** _"Tool name + parameter shape match the openclaw-musubi plugin's `musubi_remember` so saves on either surface look the same in traces and to the model."_ The team has been keeping parity by hand. That doesn't scale.
 
-The user-facing symptom is real: when Aoi Phone was asked about "recent activity across modalities," she truthfully reported that her recent-tool only sees phone history. When she was asked to drill into a search snippet, she truthfully reported that her tools only return summaries. Both gaps are functions of which tools her adapter happened to wire.
+The user-facing symptom is real: when the phone agent was asked about "recent activity across modalities," it truthfully reported that its recent-tool only sees phone history. When it was asked to drill into a search snippet, it truthfully reported that its tools only return summaries. Both gaps are functions of which tools its adapter happened to wire.
 
 ## Decision
 
@@ -59,7 +61,7 @@ The contract is written once in the spec; every adapter passes a shared contract
 
 ### Naming choice — `musubi_search`, not `musubi_recall`
 
-"Recall" implies the agent (or character) is the subject doing the remembering. The character Aoi recalls; the system she runs on searches a database. `musubi_search` names the actual mechanism. The voice-active path already uses this naming; openclaw-musubi's `musubi_recall` is the legacy that diverged first.
+"Recall" implies the agent (or character) is the subject doing the remembering. The character recalls; the system it runs on searches a database. `musubi_search` names the actual mechanism. The voice-active path already uses this naming; openclaw-musubi's `musubi_recall` is the legacy that diverged first.
 
 ### Naming choice — `musubi_*`, not `memory_*`
 
@@ -98,9 +100,9 @@ Accept that voice has `musubi_search`, plugin has `musubi_recall`, MCP has `memo
 
 **Rejected.** Three problems:
 
-- Every system prompt has to teach Aoi which tool name applies on each modality. Prompts then drift modality-by-modality.
+- Every system prompt has to teach the agent which tool name applies on each modality. Prompts then drift modality-by-modality.
 - "Functionally equivalent" is not actually true today: parameter shapes differ, default scopes differ, response formats differ. Calling them equivalent papers over real bugs.
-- Cross-modal continuity (the user's actual goal) requires the model to recognize that "what I told voice-Aoi" and "what plugin-Aoi captured" live in the same memory. A common tool surface makes that obvious; divergent surfaces hide it.
+- Cross-modal continuity (the user's actual goal) requires the model to recognize that "what I told voice-Alex" and "what plugin-Alex captured" live in the same memory. A common tool surface makes that obvious; divergent surfaces hide it.
 
 ### Alternative 3: Adopt MCP as the canonical wire for every adapter
 
@@ -118,7 +120,7 @@ Keep finer-grained tools (per-plane `curated_get`, `concept_search`, `thought_hi
 
 ### Good
 
-- **Cross-modal continuity becomes default.** "Aoi, what was I just doing?" works on every modality.
+- **Cross-modal continuity becomes default.** "Alex, what was I just doing?" works on every modality.
 - **One mental model for the user, one mental model for the LLM.** Same tool names everywhere; same behavior. System prompts simplify.
 - **Drift becomes a contract-test failure**, not a guess-when-it-breaks. Adding a tool to one adapter without updating the others fails CI.
 - **Closes the explicit gaps** users have hit: cross-modal `musubi_recent`, drill-into-source `musubi_get`.

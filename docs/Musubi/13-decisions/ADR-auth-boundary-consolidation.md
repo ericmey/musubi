@@ -3,9 +3,7 @@ title: "ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001"
 section: 13-decisions
 type: adr
 status: accepted
-owner: aoi
-discoverer: eric
-reviewed_by: yua
+owner: maintainers
 phase: "Security audit 2026-07-12/13"
 tags: [type/adr, status/accepted, security, auth, idempotency]
 updated: 2026-09-20
@@ -14,7 +12,7 @@ supersedes: []
 
 # ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001
 
-**Discoverer of all four defects: Eric.** Source-confirmed and routed by Yua. Design: Aoi.
+All four defects were found in review, source-confirmed and routed before design.
 **Status: ACCEPTED AND SHIPPED (rev 7).** Phase A merged in PR #403 (`0def0df`); the original
 stacked Phase B PR #404 was superseded and closed, and its production implementation merged in
 replacement PR #414 (`8167202`). Both are on `main` and have been included in deployed releases
@@ -52,7 +50,7 @@ the superseded Decision sections (D1–D6, sequences, matrix) IN PLACE** — the
 remain below, but their Decision bodies are replaced, not kept verbatim. Rev 4 corrects the doc to
 the code that was actually implemented and independently accepted in the then-unmerged stack, SEPARATES
 the accepted subset from the still-deferred work, and removes the "no src until approved" gating —
-src was narrowly authorized by the router (Yua) and Phase B accepted at `fafca2c`. The design shape
+src was narrowly authorized by the review router and Phase B accepted at `fafca2c`. The design shape
 DID change during implementation and this Rev records the shape accepted in the historical stack,
 not the Rev3 sketch:
 
@@ -68,9 +66,9 @@ not the Rev3 sketch:
 Historical reminder: in the Rev 4 sections, "accepted" names the review-time stack state. Rev 5
 supersedes every old delivery-status claim: Phase A and replacement Phase B are now shipped.
 
-## Rev 3 — split pipeline (Yua's "option 1 MODIFIED"), every step PROVEN executable
+## Rev 3 — split pipeline (review "option 1 MODIFIED"), every step PROVEN executable
 
-Yua's correction to rev 2: a dependency can lookup/lock/replay *before* the handler, but it
+Review correction to rev 2: a dependency can lookup/lock/replay *before* the handler, but it
 **cannot capture the serialized handler response afterward** — storing the response needs a
 step that runs *after* `call_next`. So the pipeline splits: the **security decision** is a
 dependency (pre-handler); the **store/release** is a thin outer middleware (post-handler)
@@ -90,7 +88,7 @@ four:
 3. the middleware can **distinguish hit vs miss and read the status** to decide what to store.
    ✓ proven — BUT **streaming detection is UNSETTLED**: the spike disproved `isinstance`
    (everything is wrapped as `_StreamingResponse` under BaseHTTPMiddleware), and my
-   follow-on "absence of Content-Length" guess is ALSO only a heuristic (Yua: a buffered or
+   follow-on "absence of Content-Length" guess is ALSO only a heuristic (review finding: a buffered or
    transform-middleware response may omit Content-Length; a StreamingResponse may set it;
    header manipulation could make a stream look cacheable). **No proven stream detector yet
    — see D3 cacheability contract.** Do not treat streaming detection as solved.
@@ -100,7 +98,7 @@ four:
    success, error, or cancel), cache written only on success. ✓ proven (a bug I would have
    shipped, caught by running it)
 
-## Rev 2 — the contradiction Yua caught, and its resolution
+## Rev 2 — the contradiction review caught, and its resolution
 
 Rev 1 said "idempotency replay only after authorization" (D3) **and** "authorization is
 route-native, from parsed Form/Path/Body" (D2) — while the diagram still ran the
@@ -268,12 +266,12 @@ bounding ingress. Two different uploads with identical form fields cannot collid
 
 ### D6 — identity is issuer + subject + presence (NOT jti)
 
-Yua's correction: **`jti` is per-token and rotates; it is not rotation-stable.** The cache
+Review correction: **`jti` is per-token and rotates; it is not rotation-stable.** The cache
 identity is `(issuer, subject, presence)` so a legitimate token refresh for the same
 principal still replays its own write. `jti` may be recorded in structured logs for audit
 but is **not** part of the cache key. Chosen explicitly.
 
-**Validate the tuple's internal consistency** (Yua): `issuer`, `subject`, and `presence`
+**Validate the tuple's internal consistency** (review requirement): `issuer`, `subject`, and `presence`
 must be mutually consistent per the token contract — e.g. `presence` must be the
 subject's declared presence, not an arbitrary claim — so a token cannot present a
 `(issuer, subject)` it owns with a `presence` it does not, and thereby key into another
@@ -321,7 +319,7 @@ Nullable fanout (contradictions — accepted PR #403):
 Every arrow is a real FastAPI dependency edge that runs in that order — no step consumes a
 decision that has not yet been made.
 
-### Exact lifecycle sequences (hit / miss-success / miss-error / cancel) — Yua required
+### Exact lifecycle sequences (hit / miss-success / miss-error / cancel) — required by review
 
 ```
 IDEMPOTENT WRITE — HIT:
@@ -376,7 +374,7 @@ deploy** (a cold cache is safe; a miss re-executes idempotently for its owner). 
 in-process store is fine under single-worker; Phase-1 chooses the durable cross-process
 store.
 
-## Observability (PII-safe, corrected per Yua)
+## Observability (PII-safe, corrected per review)
 
 Metrics carry **bounded labels only**: `decision` (allow/deny), `reason_code`,
 `route_template`, `method`, `idempotent_replay` bool, `in_flight_conflict` bool. **No raw
@@ -408,13 +406,13 @@ shipped through PR #403 and replacement PR #414 and are now production behavior.
 | public absent-vs-invalid bearer (REQ-8) | PASSING | REQ8 implemented in #413, slice-req8-presented-invalid-bearer |
 | oversize multipart → 413 (D5) | deferred | Phase C (design proven @239029a) |
 
-## Ownership / process (Yua's proposal, adopted)
+## Ownership / process (review proposal, adopted)
 
-- **Implementation owner:** Aoi — Phase A shipped through PR #403; Phase B was accepted on the
+- **Implementation owner:** one named maintainer — Phase A shipped through PR #403; Phase B was accepted on the
   historical #404 stack and shipped through replacement PR #414. This ADR/red-contract slice is
   not the implementation owner.
-- **Acceptance gate:** Yua.
-- **Security / runtime re-review:** Tama + Shiori.
+- **Acceptance gate:** a reviewer other than the implementer.
+- **Security / runtime re-review:** two further reviewers.
 - **Merger:** a different party than the implementer.
 - **Issues/ADR:** this doc (canonical `docs/Musubi/13-decisions/`); one tracking Issue per
   defect + an "auth-boundary" epic; the multipart-hash/DoS spike (D5) and the durable-store

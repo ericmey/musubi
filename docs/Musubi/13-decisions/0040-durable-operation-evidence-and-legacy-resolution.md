@@ -6,10 +6,12 @@ type: adr
 status: proposed
 date: 2026-08-02
 updated: 2026-08-02
-deciders: [Eric, Aoi, Yua]
+deciders: [Admin, Maintainers]
 ---
 
 # 0040: Durable Operation Evidence and Legacy Resolution
+
+> **Status note (2026-10-01):** still `proposed` as a whole, but §6 shipped: the exact audit operation is `POST /v1/idempotency/receipts/audit` in `src/musubi/api/routers/idempotency_receipts.py`, tested by `tests/api/test_idem006_receipt_audit.py`. The server journal of §2–§4 was not found in `src/musubi` at this date.
 
 ## Context
 
@@ -21,7 +23,7 @@ though an object may have been inserted or an existing object may have been
 reinforced. Search absence cannot distinguish those outcomes and must never
 authorize replay.
 
-Issue #603 is concrete production evidence. Three Yua verified-delivery rows crossed
+Issue #603 is concrete production evidence. Three verified-delivery rows from one agent client crossed
 the client's durable `post_attempted` boundary without a completed receipt. Exact
 inspection separated them into two classes:
 
@@ -217,7 +219,7 @@ server-observed auditor identity, presence, effective scopes, and timestamp toge
 with the requested namespace, operation, digest, and an opaque target identity hash.
 A `found` result includes the receipt commit time and confirms that a specific
 principal captured a specific digest into a specific namespace. This disclosure is accepted
-inside the household operator trust boundary and is not a generally safe public
+inside the single-operator trust boundary and is not a generally safe public
 API contract.
 
 ### 7. Keep the single-worker deployment gate

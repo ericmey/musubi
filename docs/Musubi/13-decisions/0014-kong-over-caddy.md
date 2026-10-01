@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-17
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr]
 updated: 2026-04-20
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: ""
 
 **Status:** accepted (implementation deferred — see [[13-decisions/0024-kong-deferred-for-musubi-v1]])
 **Date:** 2026-04-17
-**Deciders:** Eric
+**Deciders:** Admin
 
 > **2026-04-20 update:** This ADR remains the forward architectural target.
 > Implementation is deferred for Musubi v1 because Kong currently routes only
@@ -90,4 +90,4 @@ Rejected. Musubi Core should not embed TLS or gateway concerns; the canonical AP
 - [[08-deployment/compose-stack]] — Musubi Core publishes `<musubi-ip>:8100`; no host-bound Caddy service.
 - [[08-deployment/ansible-layout]] — `roles/caddy/` removed; Kong route config lives in the Kong-admin repo, not Musubi's.
 - [[07-interfaces/canonical-api]] — base URL examples now use `https://<musubi-host>/v1/*`.
-- Operator environment: Kong runs on a dedicated VM on the homelab VLAN as the VLAN-wide API gateway. Concrete hostname / IP in `.agent-context.local.md`.
+- Operator environment (as of 2026-04-17): Kong ran on a dedicated VM on the operator's VLAN as the VLAN-wide API gateway. Concrete hostname / IP in `.agent-context.local.md`.

@@ -6,7 +6,7 @@ type: adr
 status: accepted
 date: 2026-07-15
 updated: 2026-07-15
-deciders: [Eric, Yua]
+deciders: [Admin, Maintainers]
 ---
 
 # 0038: Network-Protect Read-Only Ops Endpoints
@@ -69,14 +69,14 @@ CI pins the boundary at the source-of-truth deployment files:
 Any host already admitted to the trusted Musubi VLAN can read readiness and metrics
 until Kong becomes the sole upstream. That can reveal component availability,
 software version, request volume, and latency. It cannot authorize data reads or
-mutations. We accept that bounded operational disclosure for the household trusted
+mutations. We accept that bounded operational disclosure for the operator's trusted
 VLAN rather than introduce scrape/probe credentials.
 
 These endpoints are not safe for public Internet exposure.
 
 ## Owner and review triggers
 
-Owner: Yua / Musubi operations.
+Owner: Musubi operations (Admin).
 
 Review by 2026-10-15, or immediately if any of these occurs first:
 
