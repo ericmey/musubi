@@ -43,21 +43,21 @@ Three layers of evaluation, increasing in cost:
 musubi/evals/golden/
 ├── README.md
 ├── corpora/
-│   ├── household-2026-04/
+│   ├── sample-2026-04/
 │   │   ├── manifest.json             # source snapshots (git SHA, data hash)
 │   │   └── qdrant-backup/            # snapshot of collections (volume backup)
 │   └── synthetic-beir-mini/
 │       └── ...
 └── queries/
-    ├── household-2026-04.yaml
+    ├── sample-2026-04.yaml
     └── synthetic-beir-mini.yaml
 ```
 
 ### Query file format
 
 ```yaml
-# queries/household-2026-04.yaml
-corpus: household-2026-04
+# queries/sample-2026-04.yaml
+corpus: sample-2026-04
 queries:
   - id: q001
     text: "how do I restart the livekit agent"
@@ -67,7 +67,7 @@ queries:
       - object_id: 2W1eB2bbbbbbbbbbbbbbbb
         relevance: 2
     mode: fast
-    namespace: eric/claude-code/episodic
+    namespace: alex/claude-code/episodic
     # expected budget
     latency_p95_ms: 400
 
@@ -79,11 +79,11 @@ queries:
       - object_id: 2W1eD4dddddddddddddddd
         relevance: 2
     mode: deep
-    namespace: eric/_shared/curated
+    namespace: alex/_shared/curated
     latency_p95_ms: 3000
 ```
 
-~200 queries is a healthy household-sized golden set. We seed with 50 hand-written queries + 150 LLM-expanded ones (a local LLM generates paraphrases from the 50 originals; a human reviews and keeps the good ones).
+~200 queries is a healthy small-team-sized golden set. We seed with 50 hand-written queries + 150 LLM-expanded ones (a local LLM generates paraphrases from the 50 originals; a human reviews and keeps the good ones).
 
 ### Graded relevance (0-3)
 
@@ -113,8 +113,8 @@ Thresholds are hand-tuned on initial seed queries — they'll shift as the golde
 ## Tooling
 
 ```bash
-uv run python -m musubi.evals run --corpus household-2026-04 --mode fast # (proposed)
-uv run python -m musubi.evals run --corpus household-2026-04 --mode deep # (proposed)
+uv run python -m musubi.evals run --corpus sample-2026-04 --mode fast # (proposed)
+uv run python -m musubi.evals run --corpus sample-2026-04 --mode deep # (proposed)
 uv run python -m musubi.evals compare --before main --after pr-123       # (proposed)
 ```
 
@@ -139,7 +139,7 @@ Each corpus directory has a `manifest.json`:
 
 ```json
 {
-  "name": "household-2026-04",
+  "name": "sample-2026-04",
   "created_at": "2026-04-17T00:00:00Z",
   "qdrant_snapshot_sha256": "...",
   "model_versions": {
@@ -202,14 +202,14 @@ Golden-set replay is a pytest fixture:
 
 ```python
 @pytest.mark.evals
-def test_household_golden_fast_ndcg():
-    results = run_evals(corpus="household-2026-04", mode="fast")
+def test_sample_golden_fast_ndcg():
+    results = run_evals(corpus="sample-2026-04", mode="fast")
     assert results.metrics.ndcg_at_10 >= 0.55
     assert results.metrics.mrr >= 0.55
 
 @pytest.mark.evals
-def test_household_golden_deep_ndcg():
-    results = run_evals(corpus="household-2026-04", mode="deep")
+def test_sample_golden_deep_ndcg():
+    results = run_evals(corpus="sample-2026-04", mode="deep")
     assert results.metrics.ndcg_at_10 >= 0.65
 ```
 
@@ -233,5 +233,5 @@ Integration (slow, gated by `@pytest.mark.evals`):
 
 8. `integration: synthetic BEIR-mini fast NDCG@10 ≥ 0.50`
 9. `integration: synthetic BEIR-mini deep NDCG@10 ≥ 0.60`
-10. `integration: household corpus fast + deep meet all threshold metrics`
+10. `integration: small-team corpus fast + deep meet all threshold metrics`
 11. `integration: repeat run produces identical metrics` (reproducibility)

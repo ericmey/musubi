@@ -67,17 +67,17 @@ Some namespaces shouldn't ever hold even-redacted sensitive strings. Config:
 ```yaml
 # /etc/musubi/redaction-policy.yaml
 namespaces:
-  "eric/livekit-voice/episodic":
+  "alex/livekit-voice/episodic":
     enabled: true
     categories: [credit_cards, api_keys, jwt, private_key]
     on_match: redact           # or: reject
 
-  "eric/openclaw/episodic":
+  "alex/openclaw/episodic":
     enabled: true
     categories: [api_keys, jwt]
     on_match: redact
 
-  "eric/claude-code/episodic":
+  "alex/claude-code/episodic":
     enabled: false             # trust; coding session is developer-authored
 ```
 

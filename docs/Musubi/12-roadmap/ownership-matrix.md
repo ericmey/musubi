@@ -14,13 +14,13 @@ Who owns what. Musubi is (for now) effectively a single-developer project — bu
 
 ## Repos
 
-Musubi is a **single-repo monorepo** per [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]]. The 8-repo layout originally proposed in [[13-decisions/0011-canonical-api-and-adapters]] is retired; its interface discipline survives as import-lint rules. The Obsidian architecture vault lives in the same repo at `docs/Musubi/`.
+Musubi Core is one repo. [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]] originally consolidated everything there and retired the 8-repo layout proposed in [[13-decisions/0011-canonical-api-and-adapters]]; its interface discipline survives as import-lint rules. Since then, the published SDK, the LiveKit integration and the client plugins have moved out to their own repos, while the core service, its in-repo SDK and MCP adapter, and the Obsidian architecture vault (`docs/Musubi/`) stay here. The table lists both.
 
 | Repo | Primary owner | Backup | Access | Contents |
 |---|---|---|---|---|
-| `github.com/sourceblender/musubi` | Eric | — | public | Everything: Core, SDK, MCP/Obsidian/CLI adapters, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
+| `github.com/sourceblender/musubi` | Maintainer | — | public | Core service, CLI, the in-repo Python SDK and MCP adapter, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. Separately maintained: the published SDK (`musubi-sdk`), the LiveKit integration (`musubi-livekit`), the shared plugin library (`musubi-harness`) and the client plugins (`musubi-claude`, `musubi-codex`, `musubi-openclaw`, `musubi-hermes`, `musubi-opencode`, `musubi-grok`). `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
 
-If a second contributor joins, the "backup" column fills in. For now, Eric holds all bus factor.
+If a second contributor joins, the "backup" column fills in. For now, one maintainer holds all bus factor.
 
 ## Modules within `musubi` (monorepo)
 
@@ -95,7 +95,7 @@ For a single-developer shop, ownership is mostly about what I pay attention to t
 When a second person joins:
 
 1. They pick a module as primary (likely one that needs help).
-2. Eric becomes backup on that module; they become backup on one other.
+2. The current maintainer becomes backup on that module; they become backup on one other.
 3. Credentials split: both have GitHub admin; 1Password vault shared; ansible-vault password rotated.
 4. Code review required on PRs touching each other's primary modules.
 

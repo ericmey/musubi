@@ -44,7 +44,7 @@ Musubi's design is informed by the state of the art in AI agent memory systems a
 - **Where in the design:** [[05-retrieval/fast-path]], [[07-interfaces/livekit-adapter]].
 
 ### MCP Authorization (spec finalized June 2025)
-- **What we take:** OAuth 2.1 with dynamic client registration is the right shape *if* we go multi-org. For small-team/household, we default to simpler bearer tokens plus mTLS within the home network.
+- **What we take:** OAuth 2.1 with dynamic client registration is the right shape *if* we go multi-org. For small teams, we default to simpler bearer tokens plus mTLS within a private network.
 - **Where in the design:** [[10-security/auth]].
 
 ## Referenced but modified heavily

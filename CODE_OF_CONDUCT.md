@@ -10,7 +10,7 @@ Unacceptable behaviour is defined by the Contributor Covenant and will not be to
 
 ## Enforcement
 
-Reports of unacceptable behaviour can be sent to **`ericmey@gmail.com`** with subject prefix `[musubi-coc]`. Reports are reviewed by the project maintainer and handled confidentially. Action taken may range from a warning to a permanent ban from project spaces, proportional to the incident.
+Reports of unacceptable behaviour can be sent to **`eric@sourceblender.com`** with subject prefix `[musubi-coc]`. Reports are reviewed by the project maintainer and handled confidentially. Action taken may range from a warning to a permanent ban from project spaces, proportional to the incident.
 
 If the incident involves the maintainer, or you would prefer a neutral escalation path, please use GitHub's [abuse-report tool](https://support.github.com/contact/report-abuse).
 

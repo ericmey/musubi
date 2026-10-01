@@ -97,7 +97,7 @@ Structured JSON. Every line:
   "level": "info",
   "service": "core",
   "request_id": "abc-123",
-  "namespace": "eric/claude-code/episodic",
+  "namespace": "alex/claude-code/episodic",
   "event": "memory.captured",
   "object_id": "k1a2b3c...",
   "duration_ms": 42,
@@ -232,7 +232,7 @@ Look at `musubi_lifecycle_job_duration_seconds` and `musubi_lifecycle_events_tot
 - **Anomaly detection** — we use flat thresholds for v1.
 - **SLO reports** — error budget tracking deferred; we have enough signal from raw metrics.
 - **Multi-region** — single-host.
-- **User-visible status page** — not needed at household scale.
+- **User-visible status page** — not needed at small-team scale.
 
 ## Test contract
 

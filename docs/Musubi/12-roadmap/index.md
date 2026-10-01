@@ -38,7 +38,7 @@ SORT section ASC
 
 ### v1 (now → ~Q3 2026)
 
-Everything in sections 01-11. Target: stable single-box household deployment with MCP + LiveKit + OpenClaw adapters.
+Everything in sections 01-11. Target: stable single-box small-team deployment with MCP + LiveKit + OpenClaw adapters.
 
 ### v2 (late 2026)
 
@@ -48,13 +48,13 @@ Once v1 is stable and gaps are visible:
 - **Richer reflections.** Weekly + monthly reflections in addition to daily. Cross-presence reflection ("coding + voice this week").
 - **Guarded auto-promotion.** Some categories of concept auto-promote without operator approval (e.g., tag normalizations). Requires a "policy" layer.
 - **Mobile adapter.** iOS shortcut / iMessage capture. A phone-based presence.
-- **Shared household presences.** Spouse's presence, kid's presence — separate scopes, explicit sharing surface.
+- **Shared team presences.** A teammate's presence, a support bot's presence — separate scopes, explicit sharing surface.
 
 ### v3 (2027)
 
 Exploratory; directions depend on v2 learnings:
 
-- **Federation.** Two Musubi hosts share selected namespaces (Eric ↔ household).
+- **Federation.** Two Musubi hosts share selected namespaces (for example, two teams in one organisation).
 - **Offline-first replica.** Laptop has a local read-only replica that syncs when online.
 - **Multi-modal memory.** Image / audio-native storage beyond transcripts.
 - **Better synthesis.** LLM-guided clustering; multi-hop reasoning across concepts.

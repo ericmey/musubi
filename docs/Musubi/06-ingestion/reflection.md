@@ -40,7 +40,7 @@ With frontmatter:
 ```yaml
 ---
 object_id: <ksuid>
-namespace: eric/_shared/curated
+namespace: alex/_shared/curated
 schema_version: 1
 title: "Reflection — 2026-04-17"
 topics:
@@ -108,13 +108,13 @@ Concepts that passed the promotion gate in the last 24h (not just the ones the p
 - concept: 2W1e...  title: "CUDA 13 installation pattern"
   reinforcement: 5
   importance: 7
-  status: promoted → curated/eric/_shared/infrastructure/gpu/cuda-13-installation.md
+  status: promoted → curated/alex/_shared/infrastructure/gpu/cuda-13-installation.md
 ```
 
 With a linked view for each promoted concept:
 
 ```
-[[curated/eric/_shared/infrastructure/gpu/cuda-13-installation]]
+[[curated/alex/_shared/infrastructure/gpu/cuda-13-installation]]
 ```
 
 ### 4. Demotion candidates
@@ -152,7 +152,7 @@ resolved:
 Objects that haven't been accessed in a long time but are high importance + high reinforcement:
 
 ```yaml
-- curated: [[curated/eric/_shared/projects/ship-dates]]
+- curated: [[curated/alex/_shared/projects/ship-dates]]
   last_accessed: 45 days ago
   importance: 9
   reinforcement: 12

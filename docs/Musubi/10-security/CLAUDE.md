@@ -29,7 +29,7 @@ Local rules for `musubi/auth/`, `musubi/redaction/`, and anything touching PII. 
 
 ## Threat model scope (v1)
 
-- **In scope:** household-scale multi-tenant (1–5 humans), local-network access, single host, host-level disk encryption, backup exfiltration prevention.
+- **In scope:** small-team multi-tenant (1–5 humans), local-network access, single host, host-level disk encryption, backup exfiltration prevention.
 - **Out of scope:** multi-org SaaS, per-tenant encryption keys, fine-grained RBAC, SIEM integration, formal certification.
 
 Expanding scope requires an ADR.

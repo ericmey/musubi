@@ -135,9 +135,9 @@ See [[10-security/auth]] for the full auth spec.
 
 Each MCP client identifies itself via a **presence name**, mapped to a namespace triple:
 
-- Claude Code → `eric/claude-code`
-- Cursor → `eric/cursor`
-- Generic CLI user → `eric/cli`
+- Claude Code → `alex/claude-code`
+- Cursor → `alex/cursor`
+- Generic CLI user → `alex/cli`
 
 The adapter reads this from the OAuth client ID or from config. Every `memory_capture` call then defaults `namespace` to `<presence>/episodic` unless the caller overrides. The caller's override is validated against the token scope.
 
@@ -180,7 +180,7 @@ musubi_url: https://musubi.example.local.example.com/v1
 oauth:
   authority: https://auth.internal.example.com
   client_id: musubi-mcp
-presence_default: eric/claude-code
+presence_default: alex/claude-code
 tool_allowlist: [memory_capture, memory_recall, thought_send, ...]
 tool_denylist: [memory_reflect]
 ```

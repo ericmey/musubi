@@ -69,7 +69,7 @@ depends-on: [<wiki-path>, <wiki-path>]   # notes that must be complete first
 blocks: [<wiki-path>]                    # what this note blocks
 implements: [<spec-path>]                # for code-paired docs
 audience: coding-agents | humans         # optional consumer hint
-reviewed: true | false                   # has Eric read and mentally accepted this?
+reviewed: true | false                   # has the maintainer read and accepted this?
 ```
 
 ### Breadcrumbs (navigation graph)

@@ -138,7 +138,7 @@ For non-concept types that don't track `reinforcement_count`, we substitute `acc
 
 ## What isn't in the score (and why)
 
-- **Per-user affinity / personalization.** Everything already filters by namespace. No collaborative filtering — single-household.
+- **Per-user affinity / personalization.** Everything already filters by namespace. No collaborative filtering — single team.
 - **Query-drift penalty.** We don't penalize hits on rare terms; sparse handles that organically.
 - **Contradiction penalty.** If a concept is flagged `contradicts`, it's excluded from retrieval via a filter, not via score. Binary.
 - **Content-length bonus/malus.** Length is noise here; relevance handles it via dense/sparse scoring.

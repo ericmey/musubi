@@ -16,7 +16,7 @@ Security-relevant fixes land on the latest release line and are published as the
 Use one of these paths instead:
 
 1. **GitHub Private Vulnerability Reporting** — preferred. Go to the [Security tab](https://github.com/sourceblender/musubi/security/advisories/new) on this repo and open a draft advisory. It's routed directly to the maintainer and isn't publicly indexed until published.
-2. **Email** — `ericmey@gmail.com` with subject prefix `[musubi-security]`.
+2. **Email** — `eric@sourceblender.com` with subject prefix `[musubi-security]`.
 
 Please include:
 

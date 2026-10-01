@@ -10,7 +10,7 @@ reviewed: false
 ---
 # Alerts
 
-What fires a page, what fires an email, what's silent. Targeted for a single-operator household scope — noise hurts us more than it helps.
+What fires a page, what fires an email, what's silent. Targeted for a single-operator, small-team scope — noise hurts us more than it helps.
 
 ## Routing
 
@@ -119,11 +119,11 @@ Log expected behavior + actual behavior. If an alert doesn't fire when it should
 
 ## On-call model
 
-One operator (Eric). When unavailable:
+One operator (the admin). When unavailable:
 
 - Alerts buffer in ntfy.
 - After 30 min un-acked, escalate to email.
-- No automatic failover of on-call (household scope; not a service with external customers).
+- No automatic failover of on-call (small-team scope; not a service with external customers).
 
 If the system is unreachable for > 30 min, captures queue in adapter clients ([[07-interfaces/openclaw-adapter#offline-behavior]], [[07-interfaces/livekit-adapter#error-handling]]) and drain on recovery.
 
@@ -150,7 +150,7 @@ receivers:
       - url: "https://ntfy.sh/musubi-alerts"
   - name: email
     email_configs:
-      - to: eric@example.com
+      - to: admin@example.com
         from: alertmanager@musubi.example.local
         smarthost: smtp.example.com:587
 ```

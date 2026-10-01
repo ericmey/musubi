@@ -213,7 +213,7 @@ Property tests:
 
 ## Why this much ceremony
 
-At first glance, `transition()` + events look like overkill for a household memory system. It's not:
+At first glance, `transition()` + events look like overkill for a small-team memory system. It's not:
 
 - Without an audit trail, "why does this memory say X?" becomes unanswerable after a week.
 - Without typed transitions, silent `set_payload` calls break assumptions deep in retrieval (stale `state`, desynced versions).

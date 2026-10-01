@@ -71,7 +71,7 @@ Alternatives we evaluated:
 
 - **Weighted sum of scores.** Requires per-corpus score normalization. Brittle.
 - **CombSUM / CombMNZ.** Similar issues.
-- **Learned fusion (LTR).** Worth it at scale; overkill for a household corpus.
+- **Learned fusion (LTR).** Worth it at scale; overkill for a small-team corpus.
 
 RRF it is.
 
@@ -131,7 +131,7 @@ The filter goes in the same `query_points` call as `query_filter`. Qdrant evalua
 
 Most-frequent filter: `namespace` (always set). Index hit rate on this field must be ~100% — it's the first gate.
 
-> **Decision — #510 supersedes #332, for retrieval of a CONCRETE target only.** `namespace` is the **exact** deployment namespace (`tenant/presence/plane`); a concrete target returns only that presence's rows. The `identity_family` federation introduced by #332 (scoping to the first path segment so every presence of one identity was cross-visible) is reversed here for concrete-target retrieval. Cross-presence / identity-family retrieval is still supported, but ONLY when the request explicitly resolves to multiple concrete `namespace_targets` — i.e. a wildcard like `aoi/*/episodic` expanded upstream by `retrieve._expand_wildcard_targets`, each concrete leg exact-filtered and unioned. **Unchanged:** wildcard-expanded multi-target retrieval, scope/auth wildcard matching, and lifecycle **synthesis** family federation (`lifecycle/synthesis.py`), which is intentionally identity-scoped. No ADR (per the routing decision); this note + Issue #510 + the discrimination tests are the record.
+> **Decision — #510 supersedes #332, for retrieval of a CONCRETE target only.** `namespace` is the **exact** deployment namespace (`tenant/presence/plane`); a concrete target returns only that presence's rows. The `identity_family` federation introduced by #332 (scoping to the first path segment so every presence of one identity was cross-visible) is reversed here for concrete-target retrieval. Cross-presence / identity-family retrieval is still supported, but ONLY when the request explicitly resolves to multiple concrete `namespace_targets` — i.e. a wildcard like `sam/*/episodic` expanded upstream by `retrieve._expand_wildcard_targets`, each concrete leg exact-filtered and unioned. **Unchanged:** wildcard-expanded multi-target retrieval, scope/auth wildcard matching, and lifecycle **synthesis** family federation (`lifecycle/synthesis.py`), which is intentionally identity-scoped. No ADR (per the routing decision); this note + Issue #510 + the discrimination tests are the record.
 
 Secondary filters: `state IN (matured, promoted)`, `tags`, `topics`, `created_epoch BETWEEN ...`. All indexed; see [[04-data-model/qdrant-layout]].
 

@@ -3,7 +3,7 @@ title: Musubi Architecture Vault
 status: living-document
 type: vault-readme
 vault-root: true
-maintainer: ericmey@gmail.com
+maintainer: eric@sourceblender.com
 last-reviewed: 2026-04-17
 updated: 2026-04-17
 tags: [type/vault-readme, status/living-document]

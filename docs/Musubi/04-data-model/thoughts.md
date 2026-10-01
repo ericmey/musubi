@@ -15,10 +15,10 @@ Durable, inter-presence messages. Preserved from the POC, unchanged in spirit. N
 
 ## Use cases
 
-- `scheduler → eric/*`: "Synthesis run completed; 3 concepts promoted."
-- `claude-code → eric/claude-desktop`: "Noted that you restarted the LiveKit agent; relevant logs saved as artifact X."
+- `scheduler → alex/*`: "Synthesis run completed; 3 concepts promoted."
+- `claude-code → alex/claude-desktop`: "Noted that you restarted the LiveKit agent; relevant logs saved as artifact X."
 - `lifecycle-worker → all`: "Daily reflection digest at vault/reflections/2026-04-17.md."
-- `eric/livekit-voice → eric/claude-code`: "Reminder I'll continue this discussion later via chat."
+- `alex/livekit-voice → alex/claude-code`: "Reminder I'll continue this discussion later via chat."
 
 Thoughts are **not** the conversation transcript — they are targeted messages between presences that survive past their session.
 
@@ -103,7 +103,7 @@ Channel filtering is done in query, not storage. We don't partition collections 
 
 ## Isolation
 
-Thoughts follow the standard namespace rules, with one subtlety: a thought sent from `eric/claude-code` to `eric/livekit-voice` is stored with `namespace: eric/claude-code/thought`. The recipient reads it via a query that filters by `to_presence: livekit-voice` — which requires the query to span *namespaces* within the same tenant.
+Thoughts follow the standard namespace rules, with one subtlety: a thought sent from `alex/claude-code` to `alex/livekit-voice` is stored with `namespace: alex/claude-code/thought`. The recipient reads it via a query that filters by `to_presence: livekit-voice` — which requires the query to span *namespaces* within the same tenant.
 
 Cross-tenant thoughts are allowed but require the token to carry scope for both tenants. Logged in audit.
 

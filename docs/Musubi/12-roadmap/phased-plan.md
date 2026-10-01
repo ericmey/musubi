@@ -102,7 +102,7 @@ No persistent agent on the phone (battery, network, OS constraints). Just captur
 
 Two Musubi hosts share selected namespaces. E.g.:
 
-- Eric's Musubi + spouse's Musubi share `household/projects/vacation-2026/curated`.
+- Two teams' Musubi instances share `shared/projects/launch-2026/curated`.
 - Both read + write; changes sync.
 
 Mechanism:
@@ -155,7 +155,7 @@ Items we haven't decided:
 - A dramatically better embedding model that shifts the whole retrieval stack.
 - Qdrant becoming incompatible with a feature we depend on.
 - LiveKit or OpenClaw direction changing (vendor risk).
-- Household scale stops applying — if this grows to a team or product, re-think.
+- Small-team scale stops applying — if this grows to a large organisation or a hosted product, re-think.
 
 ## Annotations we'll add to this doc
 

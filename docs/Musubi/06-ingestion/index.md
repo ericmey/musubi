@@ -55,7 +55,7 @@ Everything else — maturation, synthesis, promotion, demotion, reflection — i
 | Episodic demotion (weekly) | Weekly (Sunday 03:00) | Lifecycle Worker |
 | Vault reconciler | Every 6h | Lifecycle Worker |
 
-All schedules are tunables; defaults optimized for a household cadence (humans look at it once a day; system digests over 24h windows).
+All schedules are tunables; defaults optimized for a small-team cadence (humans look at it once a day; system digests over 24h windows).
 
 ## Ownership
 

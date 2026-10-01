@@ -15,16 +15,16 @@ Terms used across this vault. If a term is ambiguous in general usage, this file
 ## Core terms
 
 - **Plane** — One of three top-level memory partitions: Episodic, Curated Knowledge, Source Artifact. Each has its own write path, truth model, and retention policy. See [[01-overview/three-planes]].
-- **Namespace** — A scoping identifier that partitions all memory objects. Shape: `{tenant}/{presence}/{plane}` (e.g., `eric/claude-code/episodic`). Always explicit; never defaulted. See [[03-system-design/namespaces]].
+- **Namespace** — A scoping identifier that partitions all memory objects. Shape: `{tenant}/{presence}/{plane}` (e.g., `alex/claude-code/episodic`). Always explicit; never defaulted. See [[03-system-design/namespaces]].
 - **Presence** — A named AI-agent identity. Not the same as a human user. Examples: `claude-code`, `claude-desktop`, `livekit-voice`, `openclaw`. A presence is the authoring subject of episodic memories and the *from* / *to* of thoughts. Multiple presences may belong to one human.
-- **Tenant** — A human identity or shared household. In a small-team deployment there are 1–N tenants, each owning a set of presences.
+- **Tenant** — The agent identity that owns memory: the continuous "who" across channels (for example `alex`). Each tenant owns a set of presences. `system` is reserved for the lifecycle worker and scheduler. Pre-v1.0 used the human operator as the tenant; [[13-decisions/0030-agent-as-tenant|ADR 0030]] retired that.
 - **Canonical API** — The single HTTP + gRPC surface exposed by Musubi Core. Every interface (MCP, LiveKit, OpenClaw) consumes this API. See [[07-interfaces/canonical-api]].
 - **Adapter** — An independent downstream project that translates between a specific protocol (MCP, LiveKit tool, OpenClaw extension) and the canonical API. Adapters are separate repos. See [[07-interfaces/index]].
 - **SDK** — A client library (Python, TypeScript) that adapters embed. Hides HTTP details, handles auth, retries, and error types. See [[07-interfaces/sdk]].
 
 ## Memory object terms
 
-- **Episodic Memory** — A time-indexed, source-first recollection. "Eric said X to Claude-code at T." See [[04-data-model/episodic-memory]].
+- **Episodic Memory** — A time-indexed, source-first recollection. "Admin said X to Claude Code at T." See [[04-data-model/episodic-memory]].
 - **Curated Knowledge** — A topic-first durable fact. Stored as markdown in the Obsidian vault. Indexed in Qdrant. See [[04-data-model/curated-knowledge]].
 - **Source Artifact** — A raw document, transcript, or file. Blob-stored with chunk-level Qdrant index. See [[04-data-model/source-artifact]].
 - **Synthesized Concept** — A higher-order memory created by the Lifecycle Engine when multiple episodic memories reinforce the same idea. Bridge between episodic and curated. See [[04-data-model/synthesized-concept]].

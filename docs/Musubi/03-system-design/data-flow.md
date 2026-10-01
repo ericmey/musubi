@@ -158,7 +158,7 @@ Budget: minutes for large artifacts. Done async — response returns immediately
 Human in Obsidian          Filesystem                Vault Watcher                 Core             Qdrant
       │                         │                           │                        │                │
       │ saves a .md file in     │                           │                        │                │
-      │ vault/curated/eric/...  │                           │                        │                │
+      │ vault/curated/alex/...  │                           │                        │                │
       ├────────────────────────►│                           │                        │                │
       │                         │ inotify modify event      │                        │                │
       │                         ├──────────────────────────►│                        │                │
@@ -181,7 +181,7 @@ Human in Obsidian          Filesystem                Vault Watcher              
 
 If `musubi-managed: true` and the file was just written by Core (write-log hit): skip.
 
-If frontmatter is invalid: log error, emit a thought to the `eric/scheduler` channel so the human sees the notification on next session-sync, leave index unchanged.
+If frontmatter is invalid: log error, emit a thought to the `alex/scheduler` channel so the human sees the notification on next session-sync, leave index unchanged.
 
 ## 6. Concept synthesis (scheduled, Lifecycle Worker)
 
@@ -251,8 +251,8 @@ Budget: minutes per run. Runs in background; no user-facing latency impact.
          │ sets concept.state = promoted, promoted_to = <vault-path>
          │ reindexes the new curated file into Qdrant
          ▼
-  emit scheduler thought to presence `eric/scheduler`:
-    "Promoted concept 'CUDA 13 setup' to curated/eric/projects/cuda.md"
+  emit scheduler thought to presence `alex/scheduler`:
+    "Promoted concept 'CUDA 13 setup' to curated/alex/projects/cuda.md"
 ```
 
 ## 8. Voice agent blended recall (via LiveKit adapter)

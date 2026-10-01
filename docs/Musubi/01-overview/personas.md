@@ -12,11 +12,11 @@ reviewed: false
 
 ## Humans
 
-### Eric (Primary operator)
-Single power-user, developer. Edits curated knowledge directly in Obsidian. Runs the Ansible playbooks. Triages lifecycle events. Owns the vault git repo.
+### Admin (Primary operator)
+The person who runs the deployment: a power user and developer. Edits curated knowledge directly in Obsidian. Runs the Ansible playbooks. Triages lifecycle events. Owns the vault git repo.
 
 ### Small-team members (up to ~5 humans)
-Use the system via their AI presences (voice, chat, code). May occasionally edit the vault but expect the majority of curated knowledge to be promoted from conversation. Each has a tenant identifier; their episodic memories are namespace-scoped to them.
+Use the system via their AI presences (voice, chat, code). May occasionally edit the vault but expect the majority of curated knowledge to be promoted from conversation. Musubi namespaces memory by agent, not by person ([[13-decisions/0030-agent-as-tenant|ADR 0030]]): what a team member says is captured under the agent and presence they used, and token scopes decide which agents' memory each client can reach.
 
 ## Agents (Presences)
 

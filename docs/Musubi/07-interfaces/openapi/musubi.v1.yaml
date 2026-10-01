@@ -21,7 +21,7 @@ info:
     Source of truth: pydantic models in `musubi/types/`. See ADR-0013.
   contact:
     name: Eric Mey
-    email: ericmey@gmail.com
+    email: eric@sourceblender.com
 
 servers:
   - url: https://{host}/v1
@@ -156,7 +156,7 @@ components:
       in: header
       name: X-Musubi-Namespace
       required: true
-      schema: { type: string, example: "eric/claude-code/episodic" }
+      schema: { type: string, example: "alex/claude-code/episodic" }
       description: "`{tenant}/{presence}/{plane}` scope. Never defaulted."
 
   responses:

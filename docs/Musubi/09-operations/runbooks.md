@@ -159,9 +159,9 @@ Rare. See [[09-operations/backup-restore#full-disaster-recovery]]. Briefly:
 
 ## Add a new presence
 
-1. User decides presence name (e.g., `eric/mobile-chat`).
+1. User decides presence name (e.g., `alex/mobile-chat`).
 2. Mint an OAuth client + scope in the auth authority.
-3. Add scope: `eric/mobile-chat/episodic:rw`, `eric/_shared/curated:r`, etc.
+3. Add scope: `alex/mobile-chat/episodic:rw`, `alex/_shared/curated:r`, etc.
 4. Register in the presence registry (future config; for v1 just document).
 5. Hand token to the adapter.
 

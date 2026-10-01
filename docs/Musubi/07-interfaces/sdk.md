@@ -66,7 +66,7 @@ The async variant uses `httpx.AsyncClient`; sync uses `httpx.Client`. Shared `mo
 ```python
 # Capture
 memory = client.episodic.capture(
-    namespace="eric/claude-code/episodic",
+    namespace="alex/claude-code/episodic",
     content="...",
     tags=["cuda"],
     topics=["infrastructure/gpu"],
@@ -76,7 +76,7 @@ memory = client.episodic.capture(
 # Retrieve — 2-segment cross-plane per ADR-0028
 results = client.retrieve(
     RetrievalQuery(
-        namespace="eric/claude-code",
+        namespace="alex/claude-code",
         query_text="...",
         mode="fast",
         limit=5,

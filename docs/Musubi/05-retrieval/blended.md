@@ -99,7 +99,7 @@ three-segment namespace whose final plane is `/blended`. A two-segment
 `tenant/blended` is a valid literal presence through the API. The older
 internal blended function expands `tenant/blended` across presences only when
 the caller supplies an explicit nonempty `presences` list; it rejects the
-implicit form rather than falling back to a household list. Public callers
+implicit form rather than falling back to a default presence list. Public callers
 should use an explicit namespace for one presence or a scoped wildcard
 retrieve across presences. Authorization still applies to every namespace
 returned.

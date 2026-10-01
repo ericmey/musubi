@@ -13,7 +13,7 @@ implements: "docs/Musubi/10-security/"
 
 Authentication + authorization for Musubi. OAuth 2.1 for human/adapter flows; JWT bearer tokens validated at the edge.
 
-> **v1.0 convention note:** the token and scope examples on this page use the pre-v1.0 `eric/<agent>` shape (human-as-tenant). As of v1.0, namespaces are agent-as-tenant — `nyla/voice`, `aoi/discord`, etc. — per [[13-decisions/0030-agent-as-tenant|ADR 0030]]. The validation pipeline, scope-glob matching, and test contract on this page are still correct; only the example strings need a sweep. Read [[03-system-design/namespaces]] for the authoritative shape.
+> **v1.0 convention note:** the token and scope examples on this page use the pre-v1.0 `admin/<agent>` shape (human-as-tenant). As of v1.0, namespaces are agent-as-tenant — `alex/voice`, `sam/discord`, etc. — per [[13-decisions/0030-agent-as-tenant|ADR 0030]]. The validation pipeline, scope-glob matching, and test contract on this page are still correct; only the example strings need a sweep. Read [[03-system-design/namespaces]] for the authoritative shape.
 
 ## Model
 
@@ -48,18 +48,18 @@ JWT, RS256 signed:
 ```json
 {
   "iss": "https://auth.internal.example.com",
-  "sub": "eric-claude-code",          // principal id
+  "sub": "admin-claude-code",          // principal id
   "aud": "musubi",
   "iat": 1744892400,
   "exp": 1744896000,                   // 1h
   "jti": "abc-123",
   "scope": [
-    "eric/claude-code:r",
-    "eric/claude-code/*:rw",
-    "eric/_shared/curated:r",
-    "eric/_shared/artifact:rw"
+    "admin/claude-code:r",
+    "admin/claude-code/*:rw",
+    "admin/_shared/curated:r",
+    "admin/_shared/artifact:rw"
   ],
-  "presence": "eric/claude-code"
+  "presence": "admin/claude-code"
 }
 ```
 
@@ -79,9 +79,9 @@ Key fields:
 
 Namespace glob:
 
-- `eric/claude-code/episodic` — exact.
-- `eric/_shared/curated` — shared scope.
-- `eric/*/episodic` — all of Eric's episodic (rare; operator scope).
+- `admin/claude-code/episodic` — exact.
+- `admin/_shared/curated` — shared scope.
+- `admin/*/episodic` — all of the admin's episodic (rare; operator scope).
 - `**` — recursive read across all namespaces. Recursive namespace scope is
   read-only by policy; `**:rw` does not grant write access. Use explicit
   segment wildcards for scoped writes, or `operator` for admin/migration
@@ -127,7 +127,7 @@ A small FastAPI service (`musubi-auth`) runs on the same box:
 - Client registry: YAML file (`/etc/musubi/oauth-clients.yaml`) listing registered adapters + allowed redirect URIs + default scopes.
 - Stores: sqlite `auth.sqlite` for PKCE pending flows + refresh tokens.
 
-Enough for household. Not hardened for anonymous internet use.
+Enough for a small team. Not hardened for anonymous internet use.
 
 ### External IdP (optional)
 
@@ -142,27 +142,27 @@ clients:
     redirect_uris: ["chrome-extension://<ext-id>/oauth/callback",
                     "http://localhost:<port>/oauth/callback"]
     allowed_scopes:
-      - eric/claude-code:r
-      - eric/claude-code/*:rw
-      - eric/_shared/curated:r
+      - admin/claude-code:r
+      - admin/claude-code/*:rw
+      - admin/_shared/curated:r
     public: true    # PKCE only, no client secret
 
   - client_id: musubi-livekit
     redirect_uris: ["http://localhost:8200/oauth/callback"]
     allowed_scopes:
-      - eric/livekit-voice:r
-      - eric/livekit-voice/*:rw
-      - eric/_shared/curated:r
-      - eric/_shared/concept:r
-      - eric/_shared/artifact:rw
+      - admin/livekit-voice:r
+      - admin/livekit-voice/*:rw
+      - admin/_shared/curated:r
+      - admin/_shared/concept:r
+      - admin/_shared/artifact:rw
     public: true
 
   - client_id: musubi-openclaw
     redirect_uris: ["chrome-extension://<ext-id>/oauth/callback"]
     allowed_scopes:
-      - eric/openclaw:r
-      - eric/openclaw/*:rw
-      - eric/_shared/curated:r
+      - admin/openclaw:r
+      - admin/openclaw/*:rw
+      - admin/_shared/curated:r
     public: true
 ```
 
@@ -209,9 +209,9 @@ Retrieval is trickier — a query might span namespaces (blended). Rule:
   concrete namespace selected by the request. Core checks every expanded target
   before querying it (see [[05-retrieval/blended]]).
 
-For example, a client reading `eric/_shared/curated` and
-`eric/_shared/concept` needs read scope for both. The old
-`eric/_shared/blended` virtual address is not a public retrieval address.
+For example, a client reading `admin/_shared/curated` and
+`admin/_shared/concept` needs read scope for both. The old
+`admin/_shared/blended` virtual address is not a public retrieval address.
 
 ## Refresh tokens
 
@@ -226,7 +226,7 @@ Adapter calls `/oauth/revoke` with the refresh token. Authority deletes it. Acce
 
 Core learns about revoked tokens via a short-TTL cache refresh (60s) or `/oauth/introspect` for per-request validation (costlier).
 
-For household scope, we lean on short lifetimes rather than active revocation checks.
+For small-team scope, we lean on short lifetimes rather than active revocation checks.
 
 ## Operator tokens
 
@@ -235,7 +235,7 @@ Issued manually by the admin. Scope: `operator`, plus any specific namespaces. L
 The only way to get an operator token is via the CLI:
 
 ```
-musubi-auth issue-operator --subject eric --ttl 1h
+musubi-auth issue-operator --subject admin --ttl 1h
 ```
 
 No web flow.
@@ -253,9 +253,9 @@ Each adapter stores its token differently:
 
 ```
 POST /v1/episodic
-Authorization: Bearer <token with scope eric/claude-code/episodic:rw>
+Authorization: Bearer <token with scope admin/claude-code/episodic:rw>
 
-{"namespace": "eric/livekit-voice/episodic", "content": "..."}
+{"namespace": "admin/livekit-voice/episodic", "content": "..."}
 ```
 
 → 403
@@ -264,7 +264,7 @@ Authorization: Bearer <token with scope eric/claude-code/episodic:rw>
 {
   "error": {
     "code": "FORBIDDEN",
-    "detail": "namespace 'eric/livekit-voice/episodic' not in token scope",
+    "detail": "namespace 'admin/livekit-voice/episodic' not in token scope",
     "hint": "request a token with scope including this namespace"
   }
 }
@@ -274,12 +274,12 @@ Authorization: Bearer <token with scope eric/claude-code/episodic:rw>
 
 ```
 POST /v1/thoughts/check
-Authorization: Bearer <token with presence=eric/claude-code, scope eric/claude-code/thought:r>
+Authorization: Bearer <token with presence=admin/claude-code, scope admin/claude-code/thought:r>
 
-{"namespace": "eric/livekit-voice/thought", "presence": "livekit-voice"}
+{"namespace": "admin/livekit-voice/thought", "presence": "livekit-voice"}
 ```
 
-→ 403. The request body's `namespace` is `eric/livekit-voice/thought` but the token's scope only grants `eric/claude-code/thought:r`. The scope matcher compares the requested namespace against the token's scope list verbatim — no implicit presence-of-token check.
+→ 403. The request body's `namespace` is `admin/livekit-voice/thought` but the token's scope only grants `admin/claude-code/thought:r`. The scope matcher compares the requested namespace against the token's scope list verbatim — no implicit presence-of-token check.
 
 ## Auditing
 
@@ -290,10 +290,10 @@ Every auth decision is logged:
   "ts": "...",
   "event": "auth.allow",
   "request_id": "...",
-  "sub": "eric-claude-code",
+  "sub": "admin-claude-code",
   "endpoint": "POST /v1/episodic",
-  "namespace": "eric/claude-code/episodic",
-  "scope_used": "eric/claude-code/episodic:rw"
+  "namespace": "admin/claude-code/episodic",
+  "scope_used": "admin/claude-code/episodic:rw"
 }
 ```
 
