@@ -12,7 +12,8 @@
 ## Upgrades
 
 1. **A release publishes a signed image,** and an automatic PR proposes the new
-   digest on every Musubi image line in `docker-compose.yml`.
+   digest on the shared `x-core-image` line in `docker-compose.yml` (and the
+   quickstart's).
    That PR never merges itself.
 2. **Verify the digest** with `cosign verify`, as in
    [Install](install.md#pin-and-verify-the-image), and read the release notes
