@@ -1,5 +1,5 @@
 // Spike: voice-call burst on top of background steady-state. Mimics
-// the pessimistic case — Eric drops into a LiveKit call while the
+// the pessimistic case — an agent enters a LiveKit call while the
 // browser agents keep doing their thing.
 //
 // Shape (per the perf plan):

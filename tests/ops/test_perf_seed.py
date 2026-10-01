@@ -73,7 +73,7 @@ def test_idempotency_key_is_stable() -> None:
     # shape even in a hashing-only test so the fixture matches what
     # real requests will carry.
     ns = "perf-test/harness/episodic"
-    content = "Eric prefers coffee black, no sugar."
+    content = "Admin prefers coffee black, no sugar."
     ts = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
     k1 = seed.make_idempotency_key(ns, content, ts)
     k2 = seed.make_idempotency_key(ns, content, ts)

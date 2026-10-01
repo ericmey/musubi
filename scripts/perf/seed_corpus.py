@@ -17,7 +17,7 @@ Philosophy (the other part)
 We deliberately do **not** hit an external LLM (Ollama, OASST) for
 generation. That keeps the seed step self-contained and deterministic
 — no "but the model version changed" variance. The pool of seed
-fragments is intentionally mundane household-conversation-shaped text;
+fragments is intentionally mundane conversation-shaped text;
 the point is exercising dense/sparse embedding + rerank latency, not
 producing human-realistic corpora.
 
@@ -39,14 +39,14 @@ debug-synthesis trigger.
 
 Namespaces are pinned under ``<tenant>/<presence>/<plane>`` (the
 canonical three-segment format), defaulting to
-``perf-test/harness/<plane>`` so live data at ``eric/*`` is never
-touched. The tenant + presence are taken from ``--namespace-prefix``
+``perf-test/harness/<plane>`` so production tenants are not touched.
+The tenant + presence are taken from ``--namespace-prefix``
 which must be exactly two segments.
 
 Usage
 -----
-  MUSUBI_V2_BASE_URL=http://musubi.mey.house:8100/v1 \\
-  MUSUBI_V2_TOKEN=mbi_perf_... \\
+  MUSUBI_V2_BASE_URL=http://localhost:8100/v1 \\
+  MUSUBI_V2_TOKEN=your-perf-token \\
   python3 scripts/perf/seed_corpus.py \\
       --size 10000 --seed 42 --namespace-prefix perf-test/harness
 
@@ -93,19 +93,19 @@ logging.basicConfig(
 # after seeding episodic, or hit the debug-synthesis trigger.
 PLANES = ("episodic", "curated", "artifact", "thought")
 
-# Intentionally mundane fragments — household + ops + meta mix. The
+# Intentionally mundane fragments — conversation + ops + meta mix. The
 # pool is small on purpose: seeded random sampling over a small pool
 # gives realistic duplication + reinforcement patterns (the same fact
 # mentioned in two episodic captures) which exercises dedup + scoring.
 _FRAGMENTS: tuple[str, ...] = (
     "Remember the dentist appointment on Tuesday afternoon.",
-    "Eric prefers coffee black, no sugar.",
-    "Aoi mentioned the deploy finished cleanly.",
-    "Nyla is running a background sweep on household memory.",
+    "Admin prefers coffee black, no sugar.",
+    "Sam mentioned the deploy finished cleanly.",
+    "Alex is running a background memory sweep.",
     "Party agent handles delegation to the other voice agents.",
     "OpenClaw sidecar is responsible for capture mirroring.",
     "The LiveKit stack routes SIP into voice tools.",
-    "Kong is the gateway that fronts musubi.mey.house for external traffic.",
+    "The API gateway fronts the Musubi host for client traffic.",
     "Qdrant holds every plane's vector embeddings behind named collections.",
     "TEI serves BGE-M3 dense + SPLADE sparse embeddings on the RTX 3080.",
     "BGE-reranker-v2-m3 does the cross-encoder rerank pass on hybrid retrieve.",
@@ -152,7 +152,7 @@ _FRAGMENTS: tuple[str, ...] = (
 )
 
 _TOPICS: tuple[str, ...] = (
-    "household",
+    "conversation",
     "deploy",
     "ops",
     "voice",
@@ -193,7 +193,7 @@ def parse_args() -> SeedConfig:
         help=(
             "tenant/presence prefix for all seeded data; the plane is "
             "appended automatically to produce the canonical three-segment "
-            "namespace. Kept off 'eric/*' on purpose."
+            "namespace. Use a dedicated test tenant, never a production tenant."
         ),
     )
     p.add_argument(
@@ -210,7 +210,7 @@ def parse_args() -> SeedConfig:
         sys.stderr.write(
             "error: MUSUBI_V2_BASE_URL and MUSUBI_V2_TOKEN must be set.\n"
             "       The token must scope write access on "
-            f"{args.namespace_prefix}/* — never on eric/*.\n"
+            f"{args.namespace_prefix}/* — never on a production tenant.\n"
         )
         sys.exit(2)
 
