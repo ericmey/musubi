@@ -85,8 +85,8 @@ not silently become a Qdrant identifier.
 > **Warning (2026-10-01): `deploy/backup/restore.yml` does not work, and `drill.yml` (which imports it) fails with it.** It stops `core` and `lifecycle-worker` (`restore.yml:100-106`), then runs `docker compose exec -T lifecycle-worker` against the stopped container to recover Qdrant (`restore.yml:152-153`), so no snapshot is restored. It also stops services before checking that the backup is complete, chooses "latest" by directory name without reading the manifest's status, and never checks `SHA256SUMS`. A fix is being designed. Until it lands, do not rely on these playbooks for recovery.
 
 - `backup.yml` performs on-demand or scheduled backups.
-- `restore.yml` restores filesystem stores, recovers Qdrant snapshots, rebuilds curated vectors, and verifies artifact chunk counts.
-- `drill.yml` composes bootstrap + restore + smoke validation for quarterly restore drills.
+- `restore.yml` is intended to restore the host-local stores and recover the Qdrant snapshots. **Blocked:** it does not work today (see the warning above).
+- `drill.yml` is intended to run bootstrap, `restore.yml` and validation as a restore drill. **Blocked:** it imports `restore.yml`, so it fails with it.
 
 ## Credentials
 
