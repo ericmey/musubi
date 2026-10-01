@@ -31,7 +31,7 @@ UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade.md"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
 DEPLOY_WRAPPER = ROOT / "scripts" / "musubi-deploy"
-PREFLIGHT_MANIFEST = ROOT / "deploy" / "credential-preflight.json"
+PREFLIGHT_EXAMPLE = ROOT / "deploy" / "credential-preflight.example.json"
 ANSIBLE_README = ROOT / "deploy" / "ansible" / "README.md"
 AUTO_DIGEST_WORKFLOW = ROOT / ".github" / "workflows" / "auto-digest-bump.yml"
 
@@ -239,6 +239,9 @@ def test_core_update_runs_candidate_image_credential_preflight_intrinsically() -
     assert "--env-file" not in argv
     assert "--authority-env" in argv
     assert any("dst=/preflight/authority.env" in item for item in argv)
+    assert any("candidate_preflight_manifest" in item for item in argv)
+    assert "MUSUBI_PREFLIGHT_MANIFEST" in str(play.get("vars"))
+    assert not (ROOT / "deploy" / "credential-preflight.json").exists()
 
     assert any("--policy always" in str(task) for task in _tasks(play))
 
@@ -268,6 +271,7 @@ def test_auto_digest_pin_requires_human_preflight_before_merge() -> None:
     assert cosign < candidate_run
     assert "--user" in text[candidate_run - 1000 : candidate_run]
     assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text[before_merge:candidate_run]
+    assert "MUSUBI_PREFLIGHT_MANIFEST" in text[before_merge:candidate_run]
     assert "--env-file" not in text[before_merge:candidate_run]
     assert "--authority-env" in text[candidate_run : candidate_run + 300]
 
@@ -283,21 +287,25 @@ def test_core_update_preflight_cannot_be_satisfied_by_caller_attestation_vars() 
 def test_apply_wrapper_requires_explicit_preflight_authority_env() -> None:
     text = DEPLOY_WRAPPER.read_text()
     assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text
+    assert "MUSUBI_PREFLIGHT_MANIFEST" in text
     assert "musubi-mcp-aoi.env" not in text
     assert 'exec "${cmd[@]}"' in text
 
 
-def test_every_documented_core_update_entrypoint_names_preflight_authority_env() -> None:
+def test_every_documented_core_update_entrypoint_names_preflight_inputs() -> None:
     for path in (RUNBOOK, ANSIBLE_README, AUTO_DIGEST_WORKFLOW):
         text = path.read_text()
         assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text, (
             f"{path} documents Core updates without the required preflight authority env"
         )
+        assert "MUSUBI_PREFLIGHT_MANIFEST" in text, (
+            f"{path} documents Core updates without the required operator manifest"
+        )
 
 
-def test_candidate_preflight_manifest_declares_thirteen_live_and_one_template() -> None:
-    manifest = yaml.safe_load(PREFLIGHT_MANIFEST.read_text())
-    assert len(manifest["live"]) == 13
+def test_candidate_preflight_example_has_a_nonempty_neutral_live_set() -> None:
+    manifest = yaml.safe_load(PREFLIGHT_EXAMPLE.read_text())
+    assert manifest["live"] == [{"file": "musubi-mcp-example.env", "presence": "example/agent"}]
     assert len(manifest["templates"]) == 1
     assert manifest["templates"][0]["file"] == "musubi-mcp.env"
     assert manifest["templates"][0]["classification"] == "non-consumed-template"

@@ -281,6 +281,19 @@ def test_candidate_preflight_rejects_invalid_manifest(
     assert lines == ["FAIL manifest invalid"]
 
 
+def test_candidate_preflight_rejects_missing_operator_manifest(
+    tmp_path: Path, api_settings: Settings
+) -> None:
+    lines: list[str] = []
+    assert not run_preflight(
+        manifest_path=tmp_path / "missing-manifest.json",
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lines.append,
+    )
+    assert lines == ["FAIL manifest invalid"]
+
+
 def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
     tmp_path: Path,
     api_settings: Settings,

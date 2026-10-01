@@ -122,6 +122,12 @@ else
     die "set MUSUBI_PREFLIGHT_AUTHORITY_ENV to an explicit server/preflight env" 2
   [[ -f "$MUSUBI_PREFLIGHT_AUTHORITY_ENV" ]] || \
     die "preflight authority env not found at $MUSUBI_PREFLIGHT_AUTHORITY_ENV" 2
+  [[ -n "${MUSUBI_PREFLIGHT_MANIFEST:-}" ]] || \
+    die "set MUSUBI_PREFLIGHT_MANIFEST to an operator-owned live-credential manifest" 2
+  [[ "$MUSUBI_PREFLIGHT_MANIFEST" = /* ]] || \
+    die "MUSUBI_PREFLIGHT_MANIFEST must be an absolute path" 2
+  [[ -r "$MUSUBI_PREFLIGHT_MANIFEST" ]] || \
+    die "preflight manifest not readable at $MUSUBI_PREFLIGHT_MANIFEST" 2
 fi
 
 echo "+ ${cmd[*]}"
