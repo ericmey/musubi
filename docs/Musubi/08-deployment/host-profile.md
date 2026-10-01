@@ -15,9 +15,9 @@ implements: "docs/Musubi/08-deployment/"
 
 The dedicated Ubuntu box. What it looks like, how it's provisioned, how components fit into it.
 
-> Concrete hostnames and IPs in this spec use placeholder tokens (`<musubi-host>`, `<musubi-ip>`, `<kong-gateway>`, `<homelab-domain>`, etc.). Real values live in `.agent-context.local.md` at the repo root (gitignored); agents substitute when running real commands.
+> Concrete hostnames and IPs in this spec use placeholder tokens (`<musubi-host>`, `<musubi-ip>`, `<kong-gateway>`, `<homelab-domain>`, etc.). Substitute your own values when running real commands.
 
-> **Deployed 2026-04-17.** A physical machine matching this profile is online as `<musubi-host>` on the homelab VLAN. Base services (Qdrant, Ollama) are running natively (not containerised) from a pre-Ansible manual install. The concrete realised state (exact hardware serials, packages pulled, services and ports in use right now) is in `.agent-context.local.md` § *Realised deployment state (2026-04-18)*.
+> This profile is the **reference host**: the hardware the sizing and latency figures in these docs were measured on. Any comparable host works; use it to judge what it takes to run Musubi.
 
 ## Hardware
 
@@ -188,7 +188,7 @@ users). The `bootstrap.yml` playbook assumes a greenfield host; pre-existing
 services are a one-time artefact of this specific migration and not a pattern
 to codify.
 
-The HF cache under `/home/ericmey/musubi-hf-cache/hub/` (BGE-M3, SPLADE v3,
+An existing Hugging Face cache (BGE-M3, SPLADE v3,
 BGE-reranker-v2-m3) was rsynced into `/var/lib/musubi/tei-models/` before the
 compose stack came up. That preserved ~6.9 GB of downloads (SPLADE v3 is
 gated on HuggingFace and would 401 otherwise). Automating this rsync in
@@ -221,7 +221,7 @@ Captured from operational work on 2026-04-18. The future Ansible role that event
       [[13-decisions/0024-kong-deferred-for-musubi-v1]]; Musubi is
       VLAN-internal only today.
 - [x] Wire up the TEI model cache — done 2026-04-20. One-time rsync from
-      `~ericmey/musubi-hf-cache/hub/` into `/var/lib/musubi/tei-models/`.
+      an existing Hugging Face cache into `/var/lib/musubi/tei-models/`.
       Automating this in `bootstrap.yml` is a follow-up.
 - [x] Pull the LLM and embedding model weights used by Musubi — done
       2026-04-18 for BGE-M3 / SPLADE v3 / BGE-reranker-v2-m3; done 2026-04-20

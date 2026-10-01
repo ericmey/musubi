@@ -69,7 +69,7 @@ Someone landing from GitHub who wants to know: what is Musubi, what problem does
 
 ### Self-hosting operator
 
-Someone who wants to deploy Musubi on a homelab or dedicated host and needs practical install, config, backup, upgrade, and troubleshooting docs.
+Someone who wants to deploy Musubi on their own server and needs practical install, config, backup, upgrade, and troubleshooting docs.
 
 ### Adapter / SDK developer
 

@@ -65,7 +65,7 @@ Everything in this section assumes this profile. If deployment scales to multi-h
 
 Kong (VLAN-wide gateway on `<kong-gateway>`) fronts Musubi. The Musubi host exposes only `<musubi-ip>:8100` on the LAN for Kong's upstream. All inference services stay on the Docker compose bridge. Everything containerized except the vault watcher (runs in-process with Musubi Core for filesystem-event latency). See [[13-decisions/0014-kong-over-caddy]] for the gateway decision.
 
-> Hostnames and IPs in this section use placeholder tokens. Real values in `.agent-context.local.md` (gitignored).
+> Hostnames and IPs in this section use placeholder tokens. Substitute your own values.
 
 ## Docs in this section
 
@@ -94,7 +94,7 @@ Kong (VLAN-wide gateway on `<kong-gateway>`) fronts Musubi. The Musubi host expo
 | TEI sparse | same image, different model |
 | TEI reranker | same image |
 | Ollama | `ollama/ollama:0.4.0-cuda` (or newer compatible) |
-| Musubi Core | `ghcr.io/ericmey/musubi-core:v1.0.0` (self-built) |
+| Musubi Core | `ghcr.io/sourceblender/musubi-core:<version>` (published, signed) |
 
 Kong runs on `<kong-gateway>` (a separate VM); its image is pinned in Kong's own deployment repo, not Musubi's. See [[08-deployment/kong]].
 

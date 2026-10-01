@@ -15,7 +15,7 @@ The `docker compose` stack. One file captures every container Musubi runs.
 
 **Location on host:** `/etc/musubi/docker-compose.yml` (Ansible-rendered).
 
-> Hostnames and IPs use placeholder tokens (`<kong-gateway>`, `<musubi-ip>`, etc.). Real values in `.agent-context.local.md` (gitignored).
+> Hostnames and IPs use placeholder tokens (`<kong-gateway>`, `<musubi-ip>`, etc.). Substitute your own values.
 
 ## Services
 
@@ -26,7 +26,7 @@ The `docker compose` stack. One file captures every container Musubi runs.
 | `tei-sparse` | same image | Sparse embeddings (SPLADE++ V3) |
 | `tei-reranker` | same image | Cross-encoder rerank (BGE-reranker-v2-m3) |
 | `ollama` | `ollama/ollama:0.4.0-cuda` | LLM (Qwen2.5-7B Q4) |
-| `core` | `ghcr.io/ericmey/musubi-core:v1.0.0` | Musubi Core (FastAPI + lifecycle worker) |
+| `core` | `ghcr.io/sourceblender/musubi-core:<version>` | Musubi Core (FastAPI + lifecycle worker) |
 
 No gateway runs on the Musubi host. **Kong on `<kong-gateway>`** terminates TLS and fronts Musubi Core — covered in [[08-deployment/kong]] and [[13-decisions/0014-kong-over-caddy]].
 
@@ -291,7 +291,7 @@ services:
     logging: *default-logging
 
   core:
-    image: ghcr.io/ericmey/musubi-core:v1.0.0@sha256:...
+    image: ghcr.io/sourceblender/musubi-core:<version>@sha256:<digest>
     env_file: /etc/musubi/.env
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault

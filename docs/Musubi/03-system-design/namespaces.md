@@ -17,7 +17,7 @@ How Musubi partitions its data so that agents, channels, and system services coe
 
 Every piece of memory lives in a namespace: `{tenant}/{presence}/{plane}`.
 
-- **tenant** — the agent persona that owns the memory (the continuous "who" across channels). Examples: `nyla`, `aoi`, `hana`, `mizuki`. Also reserved: `system` (lifecycle worker, scheduler).
+- **tenant** — the agent persona that owns the memory (the continuous "who" across channels). Examples: `alice`, `support-bot`, `research-agent`. Also reserved: `system` (lifecycle worker, scheduler).
 - **presence** — the channel / client the agent is speaking through. Examples: `voice` (LiveKit), `discord`, `openclaw` (browser plugin), `mcp` (MCP adapter).
 - **plane** — one of `episodic`, `curated`, `artifact`, `concept`, `thought`.
 

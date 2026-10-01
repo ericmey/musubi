@@ -27,7 +27,7 @@ Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong
 - Mount the Obsidian vault writable by more than one process. One serialized writer.
 - Pin a model version outside [[08-deployment/gpu-inference-topology]] — the table is the budget.
 
-## Host profile (v1 target)
+## Host profile (v1 reference host)
 
 - Ryzen 5, 32 GB RAM, single NVIDIA RTX 3080 (10 GB VRAM), NVMe SSD.
 - Ubuntu Server LTS.
