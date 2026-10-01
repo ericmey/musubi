@@ -21,7 +21,7 @@ info:
     Source of truth: pydantic models in `musubi/types/`. See ADR-0013.
   contact:
     name: Eric Mey
-    email: ericmey@gmail.com
+    email: eric@sourceblender.com
 
 servers:
   - url: https://{host}/v1
