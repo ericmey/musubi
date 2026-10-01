@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.10](https://github.com/sourceblender/musubi/compare/v1.27.9...v1.27.10) (2026-10-01)
+
+
+### Bug Fixes
+
+* **auth:** remove the hardcoded mandatory tenant exclusion ([#874](https://github.com/sourceblender/musubi/issues/874)) ([431b971](https://github.com/sourceblender/musubi/commit/431b97131fcdb6456a085e762f7d36c909764f0a))
+
 ## [1.27.9](https://github.com/sourceblender/musubi/compare/v1.27.8...v1.27.9) (2026-10-01)
 
 
