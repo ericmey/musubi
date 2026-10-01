@@ -5,7 +5,7 @@ type: adr
 status: accepted
 date: 2026-08-14
 updated: 2026-08-14
-deciders: [Eric]
+deciders: [Admin]
 tags: [architecture, retrieval, api, observability, type/adr, status/accepted]
 supersedes: ""
 superseded-by: ""
@@ -15,7 +15,7 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
-- **Decider:** Eric
+- **Decider:** Admin
 
 ## Context
 

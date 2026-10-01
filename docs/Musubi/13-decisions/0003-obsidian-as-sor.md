@@ -12,7 +12,7 @@ reviewed: false
 
 **Status:** accepted
 **Date:** 2026-03-14
-**Deciders:** Eric
+**Deciders:** Admin
 
 ## Context
 
@@ -31,7 +31,7 @@ Options considered:
 - **Google Docs / Notion / other SaaS.** Vendor lock-in; no git; dubious for household-sensitive content.
 - **Obsidian vault.** Plain-markdown files on disk, syncable via git (or Syncthing/Obsidian Sync), human-editable in the user's existing tool.
 
-Eric already uses Obsidian daily. The vault already exists. The cost of adopting it as a structural decision is ~zero.
+The operator already uses Obsidian daily. The vault already exists. The cost of adopting it as a structural decision is ~zero.
 
 ## Decision
 

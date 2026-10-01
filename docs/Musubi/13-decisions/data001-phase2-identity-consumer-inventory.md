@@ -3,8 +3,7 @@ title: "DATA-001 Phase 2 — identity-consumer inventory (#530)"
 section: 13-decisions
 type: adr
 status: accepted
-owner: aoi
-discoverer: yua
+owner: maintainers
 phase: "Integrity remediation 2026-07-15 — DATA-001 Phase 2"
 tags: [type/adr, status/accepted, data-001, concurrency, vectors, consumers]
 updated: 2026-07-16
@@ -55,7 +54,7 @@ Consequences:
 |---|---|---|---|---|---|
 | 1 | `lifecycle/coordinator.py:872 _read_object` (→ `_persist_event:902`, `_apply_conditional/_confirm:1005`, `_cur:1371`) | scroll ns+oid limit=2 | anchor+content → count=2 → every episodic/curated transition fences/abandons | exclude `point_kind=content` (no-op for v1 + concept/thought/artifact) | **DONE + proven** (test 24, red-proofed) |
 | 2 | `store/raw_lookup.py:71 raw_payload` | scroll ns+oid limit=1 | returns arbitrary point (may be content shell) | target identity (`_identity_by_id`, must_not content); v2 anchor carries content so this IS anchor-over-content | **DONE + proven** (orphan-shell test) |
-| 2b | `store/raw_lookup.py:52 point_exists` (**promoted from Already-safe** — Yua/Tama) | scroll ns+oid limit=1 | an orphan content shell (anchor missing/deleted) reports the object PRESENT → existence guards keep a half-deleted object alive | exclude content (identity presence only) | **DONE + proven** (orphan-content discriminator) |
+| 2b | `store/raw_lookup.py:52 point_exists` (**promoted from Already-safe** — review finding) | scroll ns+oid limit=1 | an orphan content shell (anchor missing/deleted) reports the object PRESENT → existence guards keep a half-deleted object alive | exclude content (identity presence only) | **DONE + proven** (orphan-content discriminator) |
 | 3 | `store/immutable_vectors.py delete_object_layout` (was `raw_lookup.retrieve_by_point_id`) | delete full layout | brand-new anchor at a different id → None (delete 404); converted anchor single-delete orphans content | centralized `delete_object_layout` + `read_identity_payload` address BOTH id spaces + fan out every content point | **DONE + proven** (unit C: `test_delete_removes_brand_new_v2_layout`, `test_delete_removes_all_content_generations` — identity_consumers) |
 | 4 | `planes/episodic/plane.py get()` | resolve then bump | validated an anchor/content shell → raises; cascades to patch/transition/reinstate | `resolve_committed_content` before validate; access bump only after resolve | **DONE + proven** (healthy v2: `test_episodic_get_resolves_healthy_v2`; dangling → None + zero bump: `test_episodic_get_dangling_v2_returns_none_without_access_bump` — identity_consumers; absence-no-bump: `test_get_missing_id_does_not_bump_access` — test_episodic) |
 | 5 | `planes/episodic/plane.py _find_dedup_candidate` | query dense, ns filter | ranks content + stale converted anchors; returns shell → validate fail / stale candidate | shared seam: must_not anchor, `ranked_dedup_budget`, per-candidate `resolve_ranked_candidate`, safe-validate | **DONE + proven** (`test_dedup_walks_past_many_stale_to_the_live_candidate` — identity_consumers) |

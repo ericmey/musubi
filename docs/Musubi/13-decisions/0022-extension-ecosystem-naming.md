@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-19
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, monorepo, ecosystem, adapters, extensions, packaging]
 updated: 2026-04-19
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: "[[13-decisions/0046-standalone-python-sdk-and-livekit]] (Python 
 
 **Status:** accepted
 **Date:** 2026-04-19
-**Deciders:** Eric
+**Deciders:** Admin
 
 **Partial supersession (2026-09-30):** [[13-decisions/0046-standalone-python-sdk-and-livekit]]
 places the Python SDK and LiveKit adapter in sibling repositories. The naming
@@ -190,7 +190,7 @@ Check out `openclaw-musubi` as a submodule under `external/openclaw/` so `git cl
 - [[13-decisions/0011-canonical-api-and-adapters]] — original 8-repo interface-discipline ADR; superseded on repo-layout by 0015 and this ADR.
 - [[13-decisions/0015-monorepo-supersedes-multi-repo]] — the Python-monorepo decision this ADR extends (language criterion is the extension).
 - [[13-decisions/0016-vault-in-monorepo]] — precedent for "extend 0015, don't supersede".
-- [[13-decisions/0021-mcp-server-library]] — Nyla's sibling ADR adopting Anthropic's `mcp` package (unrelated to this ADR; shares nothing but the session date).
+- [[13-decisions/0021-mcp-server-library]] — the sibling ADR adopting Anthropic's `mcp` package (unrelated to this ADR; shares nothing but the session date).
 - [[07-interfaces/mcp-adapter]] — MCP spec; implementation in-monorepo.
 - [[07-interfaces/livekit-adapter]] — LiveKit spec; implementation in-monorepo.
 - [[07-interfaces/openclaw-adapter]] — OpenClaw spec (contract only; implementation in `openclaw-musubi`).

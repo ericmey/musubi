@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-21
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr]
 updated: 2026-10-01
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: ""
 
 **Status:** accepted
 **Date:** 2026-04-21
-**Deciders:** Eric
+**Deciders:** Admin
 
 > **Note (2026-10-01):** the integration branch is now `main`; `.github/workflows/release-please.yml` triggers on `push: branches: [main]`. References to `v2` below are the state at decision time.
 

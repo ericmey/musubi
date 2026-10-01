@@ -14,13 +14,13 @@ supersedes:
 
 ## Context
 
-The namespace shape is `<tenant>/<presence>/<plane>` (3-seg) or `<tenant>/<presence>` (2-seg for cross-plane retrieve). Pre-v1.0 the illustrative convention used **human as tenant**: `eric/nyla/episodic`, `eric/aoi/episodic`, `eric/openclaw/episodic`.
+The namespace shape is `<tenant>/<presence>/<plane>` (3-seg) or `<tenant>/<presence>` (2-seg for cross-plane retrieve). Pre-v1.0 the illustrative convention used **human as tenant**: `admin/alex/episodic`, `admin/sam/episodic`, `admin/openclaw/episodic`.
 
 While wiring the openclaw-livekit v0.6.0 cutover and preparing the household-status tool, the human-as-tenant convention produced awkward artifacts:
 
-- Every agent writes under the same tenant prefix, so per-agent scope globs look like `eric/<agent>/*:rw` — fine, but the second-segment name carries two meanings across integrations: in livekit it's the agent identity (`eric/nyla`), in the openclaw plugin it's the bridge identity (`eric/openclaw`).
-- "What does Nyla remember?" is naturally a query about an agent, not about Eric's subset of memory under his tenant. The retrieve-side mental model pulls toward agent-as-tenant even when storage is tenant-as-human.
-- Scaling to a second instance (another human running Musubi) requires a tenant-prefix convention anyway — so `eric/` was never a universal answer.
+- Every agent writes under the same tenant prefix, so per-agent scope globs look like `admin/<agent>/*:rw` — fine, but the second-segment name carries two meanings across integrations: in livekit it's the agent identity (`admin/alex`), in the openclaw plugin it's the bridge identity (`admin/openclaw`).
+- "What does Alex remember?" is naturally a query about an agent, not about the Admin's subset of memory under the Admin tenant. The retrieve-side mental model pulls toward agent-as-tenant even when storage is tenant-as-human.
+- Scaling to a second instance (another human running Musubi) requires a tenant-prefix convention anyway — so `admin/` was never a universal answer.
 
 ## Decision
 
@@ -80,8 +80,8 @@ The openclaw browser plugin bridges for whichever agent is active. Its token's `
 
 ### Trade-offs
 
-- **Scope glob breadth.** `*:r` is wider than `eric/*:r`. Acceptable in a single-instance deploy; revisit if a second instance lands.
-- **Migration cost.** Pre-cutover smoke data under `eric/<agent>/*` must be wiped (it's synthetic — no loss). Legacy POC data migrates with a namespace-mapping step in `deploy/migration/poc-to-v1.py`.
+- **Scope glob breadth.** `*:r` is wider than `admin/*:r`. Acceptable in a single-instance deploy; revisit if a second instance lands.
+- **Migration cost.** Pre-cutover smoke data under `admin/<agent>/*` must be wiped (it's synthetic — no loss). Legacy POC data migrates with a namespace-mapping step in `deploy/migration/poc-to-v1.py`.
 - **Vault path convention.** The on-disk vault structure in [[03-system-design/namespaces]] previously partitioned curated files under `vault/curated/<tenant>/`. Under agent-as-tenant this becomes `vault/curated/<agent>/` (Alex's curated knowledge lives under `vault/curated/alex/`). Documented in the v1.0 spec refresh.
 
 ## Migration
@@ -92,7 +92,7 @@ Executed as part of the v1.0 cutover:
 
 1. Wipe canonical Qdrant (synthetic + smoke rows).
 2. Re-mint every bearer token under the new convention.
-3. Update `AgentConfig` in `openclaw-livekit` (`musubi_v2_namespace = "nyla/voice"`, etc.).
+3. Update `AgentConfig` in `openclaw-livekit` (`musubi_v2_namespace = "alex/voice"`, etc.).
 4. Update openclaw plugin tokens + presence defaults.
 5. Run `deploy/migration/poc-to-v1.py` with namespace mapping `legacy payload.agent → <agent>/voice/episodic`.
 6. Deploy livekit agents against the clean canonical instance.

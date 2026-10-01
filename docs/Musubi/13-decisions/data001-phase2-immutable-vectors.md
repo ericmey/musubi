@@ -3,8 +3,7 @@ title: "DATA-001 Phase 2: immutable vectors + fenced committed pointer (#530)"
 section: 13-decisions
 type: adr
 status: accepted
-owner: aoi
-discoverer: yua
+owner: maintainers
 phase: "Integrity remediation 2026-07-15 — DATA-001 Phase 2"
 tags: [type/adr, status/accepted, data-001, concurrency, vectors, outbox, coordinator]
 updated: 2026-07-15
@@ -13,7 +12,7 @@ supersedes: ["[[13-decisions/0035-additive-api-contract-ret003-wire]] (corrupt-s
 
 # DATA-001 Phase 2: immutable vectors + fenced committed pointer (#530)
 
-Direction + four corrections approved by Yua 2026-07-15. Supersedes the Phase-1 best-effort
+Direction + four corrections approved in review 2026-07-15. Supersedes the Phase-1 best-effort
 `update_vectors` publish for the two vector-changing paths. Phase-1 payload-only safety shipped on
 [PR #539]; this closes the deferred vector-atomicity half of #530.
 
@@ -31,7 +30,7 @@ Consequences:
 Only two production paths change vectors: `EpisodicPlane._reinforce` when NEW content wins
 (existing-content-wins already leaves vectors untouched), and `CuratedPlane` same-id body update.
 
-## Decision (architecture A + Yua rulings 1–4)
+## Decision (architecture A + review rulings 1–4)
 
 **Stable anchor + immutable content points + a single fenced pointer swap, versioned.**
 
@@ -69,7 +68,7 @@ Only two production paths change vectors: `EpisodicPlane._reinforce` when NEW co
 - **`get(object_id)`:** read the anchor, then hydrate the committed content through `anchor.live_point`
   (v2) or the row itself (v1). A v2 anchor with an absent `live_point` fails closed.
 
-## Consumer integration (Yua-approved coupled scope; landed — see the inventory)
+## Consumer integration (review-approved coupled scope; landed — see the inventory)
 
 The multi-point layout is only correct if EVERY consumer of a `(namespace, object_id)` resolves the
 anchor. The 19-seam grep sweep + 1 discovered seam are reconciled in

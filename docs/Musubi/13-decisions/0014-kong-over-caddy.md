@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-17
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr]
 updated: 2026-04-20
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: ""
 
 **Status:** accepted (implementation deferred — see [[13-decisions/0024-kong-deferred-for-musubi-v1]])
 **Date:** 2026-04-17
-**Deciders:** Eric
+**Deciders:** Admin
 
 > **2026-04-20 update:** This ADR remains the forward architectural target.
 > Implementation is deferred for Musubi v1 because Kong currently routes only

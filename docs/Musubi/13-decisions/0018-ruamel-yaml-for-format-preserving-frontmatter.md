@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-19
-deciders: [Eric, Nyla]
+deciders: [Admin, Maintainers]
 tags: [section/decisions, status/accepted, type/adr, frontmatter, dependencies]
 updated: 2026-04-19
 up: "[[13-decisions/index]]"
@@ -15,7 +15,7 @@ reviewed: true
 
 **Status:** accepted
 **Date:** 2026-04-19
-**Deciders:** Eric, Nyla
+**Deciders:** Admin, Maintainers
 
 ## Context
 Obsidian vault files are user-edited markdown files with YAML frontmatter. The frontmatter schema spec mandates preserving the operator's formatting (including comments, key ordering, and quoting style) during a read-modify-write cycle. The existing `PyYAML` library destroys comments, arbitrarily reorders keys, and normalizes quoting styles upon dump, violating this contract.

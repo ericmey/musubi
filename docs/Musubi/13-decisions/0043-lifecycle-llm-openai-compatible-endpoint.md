@@ -5,7 +5,7 @@ type: adr
 status: accepted
 date: 2026-08-14
 updated: 2026-08-14
-deciders: [Eric]
+deciders: [Admin]
 tags: [architecture, lifecycle, llm, deployment, type/adr, status/accepted]
 supersedes: "[[13-decisions/0019-qwen-on-musubi-gpu-phase-1]]; [[13-decisions/0012-local-inference]] (lifecycle LLM placement only)"
 superseded-by: ""
@@ -15,7 +15,7 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
-- **Decider:** Eric (model-lane selection)
+- **Decider:** Admin (model-lane selection)
 
 ## Context
 
@@ -39,12 +39,12 @@ Failure rate tracks schema complexity: the model, not the pipeline. #684's
 skip-cluster semantics turned what used to be a livelock into quiet
 zero-output — visible on the new counters, but still zero output.
 
-The house serves larger models behind LiteLLM (OpenAI-compatible):
+At decision time, the operator's inference gateway (LiteLLM, OpenAI-compatible) served larger models in these lanes:
 
-1. `house/main` — Qwen 3.6 35B A3B, 8× concurrency, 131K ctx (interactive lane)
-2. `house/backup` — same model, 4× concurrency, 131K ctx (failover lane;
+1. the `main` lane — Qwen 3.6 35B A3B, 8× concurrency, 131K ctx (interactive lane)
+2. the `backup` lane — same model, 4× concurrency, 131K ctx (failover lane;
    throughput shrinks faster under concurrency)
-3. `house/voice` — Qwen 3.5 9B, 16× concurrency, 8K ctx
+3. the `voice` lane — Qwen 3.5 9B, 16× concurrency, 8K ctx
 4. (planned) Jetson Orin Nano 0.7B–3B utility models
 
 ## Decision
@@ -64,15 +64,15 @@ implemented a stricter all-or-nothing reading that let one flaky batch erase
 topics for entire sweeps — which in turn starved synthesis clustering down to
 capture-source tags (the mega-cluster precondition from #684).
 
-## Why house/backup and not the alternatives
+## Why the backup lane and not the alternatives
 
 - **The workload is the inverse of the interactive lane.** Lifecycle calls
   are serial nightly/hourly batch: latency-irrelevant, correctness-critical.
-  `house/backup`'s concurrency penalty never applies to a serial caller, and
-  using it keeps `house/main` uncontended for the agents. Worst case — a
+  The `backup` lane's concurrency penalty never applies to a serial caller, and
+  using it keeps the `main` lane uncontended for the agents. Worst case — a
   main-outage night where backup carries both — lifecycle degrades benignly
   by design (skip, candidates carry, retry next sweep).
-- **`house/voice` (8K ctx) is disqualified by arithmetic**: a capped synthesis
+- **The `voice` lane (8K ctx) is disqualified by arithmetic**: a capped synthesis
   cluster is 20 members × 1,500 chars ≈ 8–9K tokens before instructions and
   schema. Every call would truncate; the 0% would return wearing a
   different error.

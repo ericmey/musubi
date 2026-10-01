@@ -5,7 +5,7 @@ type: adr
 status: accepted
 date: 2026-09-30
 updated: 2026-09-30
-deciders: [Eric]
+deciders: [Admin]
 tags: [architecture, sdk, adapters, livekit, type/adr, status/accepted]
 supersedes: "ADR 0015 and ADR 0022 on Python SDK and LiveKit source location and distribution"
 superseded-by: ""
@@ -15,14 +15,14 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
-- **Decider:** Eric
+- **Decider:** Admin
 
 ## Context
 
 ADR 0015 and ADR 0022 put the Python SDK and LiveKit adapter in the Musubi
 server repository. A LiveKit worker therefore pulls the server package and its
 dependencies to use the adapter. Other Musubi integrations have since moved to
-sibling repositories. Eric directed the SDK and LiveKit adapter to become
+sibling repositories. The Admin directed the SDK and LiveKit adapter to become
 separate packages during the 2026-09-30 repository cleanup.
 
 ## Decision

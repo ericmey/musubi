@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-17
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, monorepo, packaging]
 updated: 2026-04-18
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: "[[13-decisions/0016-vault-in-monorepo]] (vault location only); [
 
 **Status:** accepted
 **Date:** 2026-04-17
-**Deciders:** Eric
+**Deciders:** Admin
 
 ## Context
 

@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-24
-deciders: [Eric]
+deciders: [Admin]
 tags: [section/decisions, status/accepted, type/adr, api, retrieve, namespace]
 updated: 2026-04-24
 up: "[[13-decisions/index]]"
@@ -17,7 +17,7 @@ superseded-by: ""
 
 **Status:** accepted
 **Date:** 2026-04-24
-**Deciders:** Eric
+**Deciders:** Admin
 
 ## Context
 

@@ -6,7 +6,7 @@ type: adr
 status: accepted
 date: 2026-07-15
 updated: 2026-07-15
-deciders: [Eric, Yua]
+deciders: [Admin, Maintainers]
 ---
 
 # 0038: Network-Protect Read-Only Ops Endpoints

@@ -18,7 +18,7 @@ Lightweight ADR:
 
 ```
 Title
-Status: [proposed|accepted|superseded|deprecated]
+Status: [proposed|accepted|partially-superseded|superseded|deprecated]
 Date: YYYY-MM-DD
 Deciders: Admin (+ anyone else)
 ---
@@ -77,7 +77,7 @@ SORT file.name ASC
 - [[13-decisions/0029-plane-aligned-endpoint-paths]] — Plane-aligned endpoint paths for v1.0.
 - [[13-decisions/0030-agent-as-tenant]] — Tenant is the agent; presence is the channel (`<agent>/<channel>/<plane>`).
 - [[13-decisions/0031-retrieve-wildcard-namespace]] — Wildcard namespace segments for tenant-wide retrieve.
-- [[13-decisions/0032-agent-tools-canonical-surface]] — Five-tool canonical agent surface (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`) every adapter implements identically; cross-modal default for recent/search.
+- [[13-decisions/0032-agent-tools-canonical-surface]] — Five-tool canonical agent surface (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`) accepted as the target surface for every adapter (implementation is per adapter: the in-repo MCP adapter has all five); cross-modal default for recent/search.
 - [[13-decisions/0033-centralize-observability-on-shiori]] — Keep only the local Prometheus scrape (plus node-exporter) on the Musubi host; visualization, alerting and traces move to a central observability host.
 - [[13-decisions/0034-context-pack-api]] — Add `/v1/context` as the deployed ranked context-pack surface for essence alignment.
 - [[13-decisions/0035-additive-api-contract-ret003-wire]] — RET-003 ranked vs recent retrieve wire shape. **Partially superseded** by DATA-001 Phase 2 (corrupt-source rule, ranked reads).

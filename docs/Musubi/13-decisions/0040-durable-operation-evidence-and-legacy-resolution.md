@@ -6,7 +6,7 @@ type: adr
 status: proposed
 date: 2026-08-02
 updated: 2026-08-02
-deciders: [Eric, Aoi, Yua]
+deciders: [Admin, Maintainers]
 ---
 
 # 0040: Durable Operation Evidence and Legacy Resolution
@@ -23,7 +23,7 @@ though an object may have been inserted or an existing object may have been
 reinforced. Search absence cannot distinguish those outcomes and must never
 authorize replay.
 
-Issue #603 is concrete production evidence. Three Yua verified-delivery rows crossed
+Issue #603 is concrete production evidence. Three verified-delivery rows from one agent client crossed
 the client's durable `post_attempted` boundary without a completed receipt. Exact
 inspection separated them into two classes:
 

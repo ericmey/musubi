@@ -5,7 +5,7 @@ type: adr
 status: accepted
 date: 2026-09-19
 updated: 2026-09-20
-deciders: [Eric]
+deciders: [Admin]
 tags: [architecture, inference, security, deployment, type/adr, status/accepted]
 supersedes: "[[13-decisions/0012-local-inference]] (TEI service ownership only)"
 superseded-by: ""
@@ -15,14 +15,14 @@ superseded-by: ""
 
 - **Status:** Accepted
 - **Date:** 2026-09-19
-- **Decider:** Eric
+- **Decider:** Admin
 
 ## Context
 
 Musubi currently owns three TEI containers inside its application Compose
 stack: BGE-M3 dense embeddings, SPLADE-v3 sparse embeddings, and the BGE-M3
 reranker. Other services cannot consume them without making Musubi Core or
-LiteLLM an accidental inference gateway. Chord needs dense embeddings, and Eric
+LiteLLM an accidental inference gateway. Chord needs dense embeddings, and the Admin
 decided that the models should become independently managed services on the
 Musubi inference host so other services can reuse them.
 
@@ -121,7 +121,7 @@ whose contracts match their output; they are not coerced into
 - **Proxy through Musubi Core:** preserves the lifecycle coupling this decision
   exists to remove and makes Musubi an inference gateway.
 - **Route through LiteLLM:** violates the direct-to-service measurement and
-  ownership boundary Eric set for Chord.
+  ownership boundary the Admin set for Chord.
 - **Run duplicate stacks for a zero-downtime cutover:** the host does not have
   the GPU headroom to make that an honest deployment plan.
 
