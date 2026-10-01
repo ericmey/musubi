@@ -1,250 +1,303 @@
 ---
 title: Runbooks
 section: 09-operations
-tags: [incident-response, operations, runbooks, section/operations, status/research-needed, type/runbook]
+tags: [incident-response, operations, runbooks, section/operations, status/draft, type/runbook]
 type: runbook
-status: research-needed
-updated: 2026-04-17
+status: draft
+updated: 2026-10-01
 up: "[[09-operations/index]]"
 reviewed: false
 ---
 # Runbooks
 
-Step-by-step procedures for each alert and common operator actions. Read-while-half-asleep format: numbered steps, copy-pasteable commands.
+Step-by-step procedures for the recommended alerts ([[09-operations/alerts]]) and common
+operator actions. Numbered steps, copy-pasteable commands.
+
+All commands run on the Musubi host, from the repo checkout that holds your
+`docker-compose.yml` and `.env`. If you started the stack with the GPU overlay, add the
+same `-f docker-compose.yml -f deploy/docker/compose.local-gpu.yml` to every
+`docker compose` command. Qdrant, TEI and Ollama publish no host ports; reach them through
+`docker compose exec`.
+
+**Canary** (used below): `deploy/smoke/verify.sh` checks health, status, a capture and
+retrieve round trip, a thought round trip and the metrics endpoint. Give it a smoke token
+(see `docs/guide/connect.md`):
+
+```bash
+MUSUBI_BASE_URL=http://127.0.0.1:8100 MUSUBI_TOKEN=<smoke-token> \
+MUSUBI_NAMESPACE=alex/ops/episodic MUSUBI_THOUGHT_NAMESPACE=alex/ops/thought \
+MUSUBI_PRESENCE=alex/ops bash deploy/smoke/verify.sh
+```
 
 ## First deploy
 
-The authored first-deploy procedure lives in `deploy/runbooks/first-deploy.md`.
-It binds the Ansible bootstrap, Compose stack, systemd units, Kong route sync,
-TLS handoff, smoke verification, rollback, and go-live checklist into one
-operator-facing sequence.
+Install with `docs/guide/install.md`: prepare the host, fill in `.env`, then
+`docker compose up -d --wait` (plus the GPU overlay if you use it). Success criteria:
+`curl -fsS http://127.0.0.1:8100/v1/ops/health` returns `{"status":"ok",…}`,
+`/v1/ops/status` reports every component healthy, and the canary passes.
 
-Success criteria: every step in the first-deploy runbook has an expected-output
-block; `deploy/smoke/verify.sh` exits 0; Kong routes `/v1` and `/mcp`; rollback
-instructions are present for every destructive step.
+`deploy/runbooks/first-deploy.md` is an older operator runbook for a different,
+host-provisioned layout with its own gateway. It is not the public install path; keep it as
+context only.
+
+## Core down
+
+**Alert:** `core_down`
+
+1. `docker compose ps` — is `core` running and healthy?
+2. If it is not running: `docker compose up -d --wait core`.
+3. If it keeps restarting: `docker compose logs --tail 200 core`. A startup that fails on
+   Qdrant or the dense TEI endpoint means Core's dependency probe failed; go to
+   [[09-operations/runbooks#qdrant-down]], or check `TEI_DENSE_URL`.
+4. Verify: `curl -fsS http://127.0.0.1:8100/v1/ops/health`, then run the canary.
 
 ## Qdrant down
 
-**Alert:** `qdrant_down` (Qdrant `/healthz` failing for 2m)
+**Alert:** `qdrant_down` (`/v1/ops/status` reports `qdrant` unhealthy for 2m)
 
-1. SSH to host: `ssh <musubi-host>`.
-2. Check container status: `docker ps -a | grep qdrant`.
-3. Is the container running? If not → step 4. If yes → step 6.
-4. Start: `docker compose -f /etc/musubi/docker-compose.yml up -d qdrant`.
-5. Wait 60s, then `curl http://localhost:6333/healthz`. If 200 → done. If not → step 8.
-6. Check logs: `docker logs musubi-qdrant-1 --tail 200`.
-7. Common causes:
-   - Disk full → see [[09-operations/runbooks#vault-fs-full]].
-   - Segment corruption → see step 8.
-   - Config parse error → revert Ansible change and `ansible-playbook musubi.yml`.
-8. If corruption: restore from snapshot. See [[09-operations/backup-restore#restore-full]].
-9. Once Qdrant is healthy, verify Core came back: `curl http://localhost:8100/v1/ops/health`.
-10. Clear silence: `amtool silence expire …`.
+1. `docker compose ps qdrant` — is the container running?
+2. If not: `docker compose up -d qdrant`, wait 60s, then step 4.
+3. If it is running but unhealthy: `docker compose logs --tail 200 qdrant`. Common causes:
+   - Disk full → [[09-operations/runbooks#vault-fs-full]].
+   - Corrupt collection → restore; see [[09-operations/backup-restore]].
+   - A bad `.env` change (e.g. `QDRANT_API_KEY` changed for Qdrant but not for Core, or the
+     reverse; both read the same variable) → revert it and `docker compose up -d`.
+4. Confirm Qdrant answers from inside the network:
+   `docker compose exec core curl -fsS http://qdrant:6333/healthz`.
+5. Verify Core sees it: `curl -fsS http://127.0.0.1:8100/v1/ops/status` shows
+   `qdrant` healthy. Then expire any silence you set.
 
 ## Core 5xx high
 
-**Alert:** `core_5xx_high` (5xx rate > 1% for 5m)
+**Alert:** `core_5xx_high` (5xx ratio > 1% for 5m)
 
-1. Check recent errors: `journalctl -t musubi.core --since="10 min ago" | grep -i error`.
-2. Is it a specific endpoint? Grep for `endpoint=` in logs.
-3. Which downstream is involved? Common patterns:
-   - `qdrant unreachable` → see [[09-operations/runbooks#qdrant-down]].
-   - `tei_dense timeout` → TEI health; `docker restart musubi-tei-dense-1`.
-   - `ollama` errors → non-hot-path; see [[09-operations/runbooks#ollama-stalled]].
-4. If the error is new/unknown: capture a stacktrace, open an issue, then restart Core: `docker restart musubi-core-1`.
-5. If 5xx persists after restart: stop accepting traffic by removing Kong's route (or return 503 from Kong temporarily), investigate without load.
+1. Recent errors: `docker compose logs --since 10m core | grep '"level": "error"'`.
+2. Which endpoint? Check `musubi_5xx_total` by `endpoint` on `/v1/ops/metrics`.
+3. Which dependency? `curl -fsS http://127.0.0.1:8100/v1/ops/status`:
+   - `qdrant` unhealthy → [[09-operations/runbooks#qdrant-down]].
+   - a `tei-*` component unhealthy → restart it if you run the overlay
+     (`docker compose … restart tei-dense`), or check the remote endpoint.
+   - `ollama` unhealthy → not on the request path; see
+     [[09-operations/runbooks#ollama-stalled]].
+4. If the error is new or unknown: save the log lines (they carry `request_id`), open an
+   issue, then `docker compose restart core`.
+5. Verify with the canary. If 5xx persists after the restart, take Core out of your
+   reverse proxy and investigate without load.
+
+## Lifecycle worker not ready
+
+**Alert:** `lifecycle_worker_not_ready`
+
+1. `docker compose ps lifecycle-worker` — running and healthy?
+2. `docker compose logs --tail 200 lifecycle-worker` — look for errors opening
+   `/var/lib/musubi/lifecycle/work.sqlite` or reaching Qdrant.
+3. If the `lifecycle` volume's filesystem is full → [[09-operations/runbooks#vault-fs-full]].
+4. `docker compose restart lifecycle-worker`, then verify its health check passes
+   (`docker compose ps`).
 
 ## Vault fs full
 
-**Alert:** `vault_fs_full` (< 10% free)
+**Alert:** `vault_fs_full` (< 10% free on the filesystem holding Docker's volumes)
 
-1. `df -h /var/lib/musubi`.
-2. `du -sh /var/lib/musubi/*/` to see which subdir is the culprit.
+1. Find Docker's data directory: `docker info --format '{{.DockerRootDir}}'`, then
+   `df -h` on it.
+2. See which volume is large: `docker system df -v`.
 3. Typical suspects:
-   - `artifact-blobs/` grew unexpectedly → check recent uploads; consider purging large artifacts.
-   - `qdrant/snapshots/` → prune: `find /var/lib/musubi/qdrant/snapshots -mtime +7 -delete`.
-   - `/var/log/musubi` → rotate: `journalctl --vacuum-time=7d`.
-4. If all subdirs are within expected range, disk really is just full → expand or add drive.
-5. After freeing space, confirm Core resumes writes: `musubi-cli capture test --ns test/ops`.
+   - `musubi_artifact-blobs` grew → check recent uploads.
+   - `musubi_qdrant-snapshots` → delete old snapshots with Qdrant's
+     `DELETE /collections/<name>/snapshots/<snapshot>` (via `docker compose exec core curl …`).
+   - Local backup sets in the checkout → move them off the host.
+   - Container logs → tighten your Docker logging driver's rotation settings.
+4. If every volume is within its expected size, the disk is just full: grow it.
+5. Verify writes work again with the canary.
 
 ## GPU OOM
 
-**Alert:** `gpu_oom`
+**Alert:** `gpu_oom` (GPU overlay only)
 
-1. `nvidia-smi` — confirm which process got killed.
-2. Check Compose: `docker ps -a | grep -v Up` — the killed container shows as Exited.
-3. `docker logs <container> --tail 100` — look for "out of memory" or CUDA OOM.
-4. Restart the killed container: `docker start <container>`.
-5. Investigate root cause:
-   - Did a new model deploy with bigger VRAM footprint? Revert.
-   - Did batch size grow? Reduce `--max-batch-tokens`.
-   - Is Ollama queue backed up? `OLLAMA_NUM_PARALLEL=1` must be set.
-6. If recurring, review [[08-deployment/gpu-inference-topology#vram-budget]] and adjust.
+1. `nvidia-smi` on the host — what is using VRAM now?
+2. `docker compose ps -a` — which of `tei-dense`, `tei-sparse`, `tei-reranker`, `ollama`
+   exited or keeps restarting?
+3. `docker compose logs --tail 100 <service>` — look for CUDA out-of-memory.
+4. Restart it: `docker compose up -d <service>`.
+5. Root cause:
+   - A larger model or a new image tag? Revert the `.env` change.
+   - Batch size grew? Lower `--max-batch-tokens` in the overlay.
+6. If it recurs, review the budget in [[08-deployment/gpu-inference-topology]]. Verify with
+   the canary once all four services are healthy.
 
 ## Loop detected
 
-**Alert:** `loop_detected` (vault echo filter > 100/min)
+**Alert:** none. Musubi emits no metric for vault write echoes (planned, not implemented).
 
-This means Core is writing to the vault AND the watcher is re-reading those writes as if human-authored.
+This can only happen if you run the optional standalone vault watcher
+(`python -m musubi.vault.watcher`), which the public stack does not start: the watcher
+re-reads a file the lifecycle worker just wrote as if a human had edited it.
 
-1. Pause the Vault Watcher: `musubi-cli vault pause-watcher --duration=15m`.
-2. Inspect the write-log: `sqlite3 /var/lib/musubi/lifecycle/work.sqlite "select count(*) from write_log where consumed_at is null"`.
-3. If count grows unbounded → watcher isn't marking entries consumed; file a bug, reset: `sqlite3 ... "update write_log set consumed_at=unixepoch() where consumed_at is null"`.
-4. Review recent promotions — did we write with wrong file path, causing an inotify miss?
-5. Resume watcher: `musubi-cli vault resume-watcher`.
-6. Monitor echo filter rate for 30 min.
+1. Stop the watcher process.
+2. Count unconsumed write-log entries:
+
+   ```bash
+   docker compose exec lifecycle-worker python -c "
+   import sqlite3
+   db = sqlite3.connect('/var/lib/musubi/lifecycle/vault-writelog.db')
+   print(db.execute('select count(*) from writes where consumed_at is null').fetchone()[0])"
+   ```
+
+3. If the count keeps growing while the watcher runs, the watcher is not marking entries
+   consumed: file a bug with the count and the affected paths.
+4. Restart the watcher and verify the vault stops churning (no repeated edits to the same
+   files in `git status` or your editor).
 
 ## Backup failure 24h
 
 **Alert:** `backup_failure_24h`
 
-1. Check the cron: `systemctl status cron`; `crontab -l -u musubi`.
-2. Check the snapshot cron log: `journalctl -t qdrant-snapshot --since="36h ago"`.
-3. Common causes:
-   - `/mnt/snapshots` not mounted. `mount | grep snapshots`. Re-mount.
-   - Qdrant api key mismatch. Check `.env`.
-   - Disk full on SATA SSD. Prune: `find /mnt/snapshots/qdrant -mtime +90 -delete`.
-4. Run snapshot manually: `/opt/musubi/qdrant-snapshot.sh`.
-5. Verify file created + rsync'd to `/mnt/snapshots/qdrant/<ts>/`.
-6. Watch the next cron fires.
+1. Check your backup tool's log for the last run.
+2. Common causes:
+   - The stack failed to stop or restart around the backup → `docker compose ps`.
+   - The backup target is full or unmounted.
+3. Run the cold backup by hand: [[09-operations/backup-restore]].
+4. Verify the new set: all six archives present and `sha256sum -c SHA256SUMS` passes.
+5. Confirm the next scheduled run succeeds.
 
 ## Ollama stalled
 
-Non-alerting, but common during synthesis.
+Not alerting; lifecycle jobs retry on their next schedule.
 
-1. `curl http://localhost:11434/api/tags` — is Ollama responding?
-2. If not: `docker restart musubi-ollama-1`; wait ~30s for model reload.
-3. If it responds but generation hangs: `docker logs musubi-ollama-1 --tail 100`.
-4. Kill in-flight generation if hung: `docker restart`.
-5. Skip the current synthesis run; it retries tomorrow.
-6. If this recurs, consider a watchdog: kill generation > 60s and mark the cluster for retry.
+1. `docker compose exec ollama ollama list` (GPU overlay) — does it respond, and is the
+   `LLM_MODEL` model present?
+2. If not: `docker compose restart ollama`, and pull the model again if it is missing.
+3. If it responds but generation hangs: `docker compose logs --tail 100 ollama`, then
+   restart it.
+4. Verify: `/v1/ops/status` shows `ollama` healthy. The skipped lifecycle work runs on the
+   next tick.
 
 ## Promotion failed (LLM returns garbage)
 
-Not a page; a Thought arrives in ops inbox.
+Not a page. A failing lifecycle job tick posts an `ops-alerts` Thought.
 
-1. Read the Thought. It links to the concept.
-2. Inspect the concept: `curl http://localhost:8100/v1/concepts/<id>`.
-3. See the LLM's render output in lifecycle events: `musubi-cli lifecycle events --object <id>`.
-4. Decision:
-   - Pydantic validation failed → fix the render prompt (see [[06-ingestion/promotion]]).
-   - Content is nonsense → reject the concept: `musubi-cli concept reject <id>`.
-   - Actually it's fine but gate was too strict → tune gate in config.
-5. Re-trigger: `musubi-cli lifecycle run --job promotion --target <id>`.
+1. Inspect the concept: `GET /v1/concepts/<id>?namespace=<namespace>` with an operator
+   token.
+2. See its lifecycle history: `GET /v1/lifecycle/events/<id>`.
+3. Decide:
+   - Content is nonsense → reject it (below).
+   - It is fine but the gate was too strict → tune the promotion settings
+     ([[06-ingestion/promotion]]).
+4. It is retried on the next daily promotion run.
 
 ## Restore from snapshot
 
-See [[09-operations/backup-restore#restore]] — that's the authoritative runbook.
+See [[09-operations/backup-restore]]: it is the authoritative procedure (cold restore of
+the whole set, or one Qdrant collection from a snapshot). Do not use
+`deploy/backup/restore.yml`; it does not work.
 
 ## Planned compose update
 
-1. Announce in #ops (if you have a channel).
-2. Silence alerts: `amtool silence add alertname=~".+" --duration=45m --comment="planned update"`.
-3. Snapshot first: `/opt/musubi/qdrant-snapshot.sh`.
-4. Pull new digests: `ansible-playbook playbooks/update.yml`.
-5. Watch for any container that failed to come back: `docker ps -a`.
-6. Smoke test: `pytest --contract=smoke --musubi-url=http://localhost:8100/v1`.
-7. Un-silence: `amtool silence expire …`.
-8. Watch dashboards for 10m.
+1. Silence alerts in your alerting tool, with a comment and an expiry.
+2. Take a cold backup ([[09-operations/backup-restore]]).
+3. Review the new pin, then `docker compose pull` and `docker compose up -d --wait`
+   (details: `docs/guide/operate.md`, "Upgrades").
+4. `docker compose ps` — every service up and healthy?
+5. Run the canary. If it fails, roll back to the previous pin and
+   `docker compose up -d --wait`.
+6. Expire the silence and watch the dashboards for 10 minutes.
 
 ## Full host rebuild
 
-Rare. See [[09-operations/backup-restore#full-disaster-recovery]]. Briefly:
-
-1. Provision new Ubuntu box.
-2. Run `ansible-playbook musubi.yml`.
-3. Restore vault from git, Qdrant from snapshot, blobs from rsync, sqlite from backup.
-4. Smoke test.
-5. Re-issue OAuth tokens if signing key was lost.
+Rare. See the full-disaster steps in [[09-operations/backup-restore]]. Briefly: prepare the
+host, clone the repo at the same release, restore `.env`, restore the latest backup set,
+start, run the canary, and re-mint tokens if the signing key was lost.
 
 ## Add a new presence
 
-1. User decides presence name (e.g., `alex/mobile-chat`).
-2. Mint an OAuth client + scope in the auth authority.
-3. Add scope: `alex/mobile-chat/episodic:rw`, `alex/_shared/curated:r`, etc.
-4. Register in the presence registry (future config; for v1 just document).
-5. Hand token to the adapter.
+1. Choose the presence, e.g. `alex/mobile-chat`.
+2. Mint a token with `sub` and `presence` both `alex/mobile-chat` and the scopes it needs,
+   e.g. `alex/mobile-chat/*:rw alex/shared/curated:r` (see `docs/guide/connect.md` and
+   [[10-security/auth]]).
+3. Hand the token to the agent through its secret store.
 
-## Rotate tokens
+## Rotate the signing key
 
-1. Generate new signing key.
-2. Deploy to Core with **both old and new** keys configured (dual-verify).
-3. All new tokens signed with new key; old tokens continue validating.
-4. Once all clients re-auth (24-48h), remove old key.
-5. Old tokens reject.
+Core verifies HS256 tokens with one key, `JWT_SIGNING_KEY`; there is no dual-key overlap.
+
+1. Set a new `JWT_SIGNING_KEY` in `.env`.
+2. `docker compose up -d --wait` (Core and the worker pick up the new value).
+3. Every existing token is now rejected: re-mint and redeploy each agent's token.
+4. Verify with the canary using a freshly minted token.
 
 ## Tune retrieval
 
 If users report "I can't find X":
 
-1. Run `musubi-cli eval run golden-sets/*.yaml`.
-2. Compare NDCG@10, MRR, Recall@20 to baseline.
-3. If metrics are flat but user complaint is real → missing golden case; capture it.
-4. If metrics regressed → git blame recent config changes.
+1. Reproduce with `POST /v1/retrieve` and note any `warnings` in the response.
+2. Check `musubi_retrieval_warnings_total` and `musubi_reranker_degradation_causes_total`
+   for degraded legs.
+3. If nothing is degraded, add the case to your evaluation set; see `src/musubi/evals/`.
 
 ## Manually promote a concept
 
-Sometimes we want to fast-track a concept that keeps getting reinforced but hasn't hit the gate thresholds:
+To fast-track a matured concept, with an operator token in `MUSUBI_TOKEN`:
 
-```
-musubi-cli concept promote --id <concept-id> --force
+```bash
+musubi promote force <concept-id> --namespace <tenant>/<presence>/concept \
+  --curated-id <curated-id> --reason "operator-force"
 ```
 
-Force skips the gate. Use sparingly; still goes through the LLM render pipeline and vault write-log. Recorded as a `LifecycleEvent` with `actor: operator, reason: force_promotion`.
+The curated row must exist first (create it with `POST /v1/curated`). The CLI calls
+`POST /v1/concepts/<id>/promote`; it defaults to `http://localhost:8100/v1`
+(`--api-url` / `MUSUBI_API_URL` to change it). The `musubi` CLI is also on the `PATH`
+inside the Core image.
 
 ## Manually reject a concept
 
-If a concept is junk:
-
+```bash
+musubi promote reject <concept-id> --namespace <tenant>/<presence>/concept \
+  --reason "LLM hallucination"
 ```
-musubi-cli concept reject --id <concept-id> --reason "LLM hallucination"
-```
 
-State becomes `rejected`. Reinforce events are ignored henceforth.
+This records the rejection and bumps `promotion_attempts`; three rejections lock the
+concept out of further promotion sweeps.
 
 ## Cold-start latency investigation
 
-If retrieve p95 spiked suddenly:
+If retrieval p95 spiked suddenly:
 
-1. Check GPU: `nvidia-smi`. VRAM utilization? If ~ full → see [[09-operations/runbooks#gpu-oom]].
-2. Check TEI health: `curl http://localhost:8010/health` (dense), `:8011` (sparse), `:8012` (reranker).
-3. Check Qdrant: `curl http://localhost:6333/healthz`.
-4. Check recent deploys: `git log ansible/ --since="24h ago"`.
-5. Trace a sample slow request via OTel: Grafana → Tempo → filter by duration > 1s.
+1. `curl -fsS http://127.0.0.1:8100/v1/ops/status` — any dependency unhealthy?
+2. GPU overlay: `nvidia-smi` — VRAM near full? → [[09-operations/runbooks#gpu-oom]].
+3. Did something change? `docker compose ps` (container ages) and your deploy history.
+4. If tracing is on, find a slow `retrieve.orchestration` span in your trace backend.
 
 ## Reset a misconfigured collection
 
-**Danger.** Only if you know the collection is derived + rebuildable.
-
-```
-musubi-cli qdrant reset --collection musubi_curated --confirm
-musubi-cli index rebuild --collection musubi_curated --source vault
-```
-
-Never run this on `musubi_episodic` or `musubi_concept` — they are canonical.
+There is no reset or rebuild command for collections (planned, not implemented). Restore
+from a backup set or a collection snapshot instead ([[09-operations/backup-restore]]).
+Never delete `musubi_episodic`, `musubi_concept`, `musubi_thought` or `musubi_artifact`:
+they hold the only copy of their data.
 
 ## Quarterly game-day drills
 
 Cycle through one operations drill each quarter so recovery paths stay fresh:
 
-1. Q1 — `Qdrant down`: restore a Qdrant snapshot into a scratch environment and
+1. Q1 — `Qdrant down`: stop Qdrant on a scratch stack, follow the runbook above, and
    verify `/v1/ops/status`.
-2. Q2 — `Restore from snapshot`: run the full restore playbook against a scratch
-   target and execute `deploy/smoke/verify.sh`. **Blocked:** `restore.yml` does not
-   work today; see the warning in [[09-operations/backup-restore]].
-3. Q3 — `Backup failure 24h`: simulate a missing snapshot target and verify the
-   manual backup path.
-4. Q4 — `First deploy`: rehearse the rollback section from
-   `deploy/runbooks/first-deploy.md` against a disposable VM.
+2. Q2 — `Restore from snapshot`: restore the latest cold backup set into a scratch stack
+   ([[09-operations/backup-restore]]) and run the canary. Do not use `restore.yml` or
+   `drill.yml`: `restore.yml` does not work today.
+3. Q3 — `Backup failure 24h`: break the backup target on purpose and verify the alert and
+   the manual backup path.
+4. Q4 — `First deploy`: rehearse the install from `docs/guide/install.md` on a disposable
+   VM, then an upgrade and rollback from `docs/guide/operate.md`.
 
-Success criteria: the drill owner records the runbook used, the command log, the
-observed recovery time, and any follow-up Issue before closing the drill.
+Success criteria: the drill owner records the runbook used, the command log, the observed
+recovery time, and any follow-up issue before closing the drill.
 
 ## Test contract
 
-**Module under test:** the runbooks (readiness, not code)
+**Module under test:** the runbooks (readiness, not code),
+`tests/ops/test_first_deploy_smoke.py`.
 
 1. `test_every_alert_has_a_runbook_section`
-2. `test_runbooks_reference_real_files_and_commands` (lint)
+2. `test_runbooks_reference_real_files_and_commands`
 3. `test_each_runbook_lists_success_criteria`
 4. `test_quarterly_game_day_drills_cycle_through_runbooks`

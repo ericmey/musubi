@@ -1,174 +1,62 @@
 ---
-title: Kong API Gateway
+title: "Exposing Core (TLS)"
 section: 08-deployment
-tags: [deployment, gateway, kong, section/deployment, status/complete, tls, type/spec]
+tags: [deployment, gateway, section/deployment, status/complete, tls, type/spec]
 type: spec
 status: complete
-updated: 2026-04-18
+updated: 2026-10-01
 up: "[[08-deployment/index]]"
-reviewed: true
-implements: "docs/Musubi/08-deployment/"
+reviewed: false
+implements: "docker-compose.yml"
 ---
 
-# Kong API Gateway
+# Exposing Core (TLS)
 
-The VLAN-wide API gateway. Fronts Musubi Core's public API surface; terminates TLS; enforces edge rate-limits, basic auth, and access logging. Runs on a dedicated VM (`<kong-gateway>`, `<kong-ip>`) — **not on the Musubi host itself**. See [[13-decisions/0014-kong-over-caddy]] for the rationale.
+How to let agents on other machines reach Musubi Core. Musubi ships no gateway: TLS and
+any edge controls live in a reverse proxy the operator already runs (nginx, Caddy,
+Traefik, HAProxy, an API gateway, and so on).
 
-> Concrete hostnames, IPs, and domains in this spec use placeholder tokens (`<kong-gateway>`, `<musubi-host>`, `<homelab-domain>`, etc.). Substitute your own deployment's values before running any command that needs a concrete endpoint.
+## What Core serves
 
-## Topology
+- **Plain HTTP** on `127.0.0.1:8100` by default (`MUSUBI_CORE_BIND`,
+  `MUSUBI_CORE_PORT` in `.env`). Core never terminates TLS itself.
+- **Liveness:** `GET /v1/ops/health`. Readiness per dependency: `GET /v1/ops/status`.
+- The API is under `/v1/*`.
 
-```
-                        ┌─────────────────────────────────────┐
-   Client on LAN  ────▶ │  Kong (<kong-gateway>, <kong-ip>)    │
-   (Claude Code,        │                                      │
-    LiveKit, user's     │  :443   TLS terminus                 │
-    laptop, shell)      │         host-header routing          │
-                        └──────────────┬──────────────────────┘
-                                       │
-                                       │ http://<musubi-ip>:8100
-                                       ▼
-                        ┌──────────────────────────┐
-                        │ Musubi Core (Musubi host) │
-                        │ Docker Compose stack      │
-                        │ Inference on Docker bridge│
-                        └──────────────────────────┘
-```
+## Proxy rules
 
-**Only Kong faces the LAN.** The Musubi host exposes exactly one port to Kong: `<musubi-ip>:8100` (plain HTTP, Musubi Core). Everything else on the Musubi host stays inside the Compose bridge network.
-
-## What Kong owns
-
-- **TLS termination** with certs managed by Kong (Let's Encrypt via ACME or internal CA).
-- **Edge auth** — bearer-token validation, OAuth flow for the MCP HTTP transport, per-route allow/deny lists.
-- **Rate limiting** — per-IP and per-consumer.
-- **Access logging** — structured JSON to wherever Kong's log sink points.
-- **Host-header routing** — multiple services fronted by the same Kong instance.
-
-## What Kong does **not** own
-
-- **Per-tenant / per-namespace authorization.** That's Musubi Core's job (it owns the canonical API schema; Kong just forwards a validated token).
-- **Request body semantics, validation, or shaping.** Those live in Musubi Core.
-- **Qdrant / TEI / Ollama exposure.** Those are bridge-only inside the Musubi host's Compose; Kong never reaches them.
-
-## Routes Kong serves for Musubi
-
-### `<musubi-host>`
-
-The canonical API. One upstream, bearer-token required, rate-limited.
-
-| Route         | Upstream                            | Notes                               |
-|---------------|-------------------------------------|-------------------------------------|
-| `/v1/*`       | `http://<musubi-ip>:8100/v1/*`      | All client-facing routes            |
-| `/oauth/*`    | `http://<musubi-ip>:8100/oauth/*`   | MCP OAuth flow (handled by Core)    |
-| `/healthz`    | `http://<musubi-ip>:8100/healthz`   | Liveness; unauth                    |
-
-### `ollama.<homelab-domain>` (optional)
-
-If the operator wants Ollama reachable for non-Musubi general-purpose LLM work. Separate route, separate auth.
-
-| Route  | Upstream                           | Notes                               |
-|--------|------------------------------------|-------------------------------------|
-| `/*`   | `http://<musubi-ip>:11434/*`       | Raw Ollama API; token-auth required |
-
-### Not fronted by Kong
-
-- Qdrant, TEI (dense / sparse / rerank), and any internal Musubi containers. Admin access goes via `ssh <musubi-host>` + `docker exec` or an SSH tunnel when debugging.
-
-## Configuration pattern
-
-Kong is configured either declaratively (`kong.yaml` / deck) or via its Admin API. Either way, the Musubi-relevant pieces:
-
-```yaml
-# Illustrative decK config; adapt to your Kong deployment
-services:
-  - name: musubi-core
-    url: http://<musubi-ip>:8100
-    retries: 2
-    connect_timeout: 2000
-    write_timeout: 30000
-    read_timeout: 30000
-    routes:
-      - name: musubi-api-v1
-        hosts: ["<musubi-host>"]
-        paths: ["/v1", "/oauth", "/healthz"]
-        protocols: [https]
-        strip_path: false
-    plugins:
-      - name: rate-limiting
-        config:
-          minute: 300
-          policy: local
-      - name: cors
-        config:
-          origins: ["https://claude.ai", "http://localhost:*"]
-          credentials: true
-      - name: request-transformer
-        config:
-          add:
-            headers: ["X-Forwarded-Proto:https"]
-      - name: file-log
-        config:
-          path: /var/log/kong/musubi-api.log
-          reopen: true
-
-  - name: ollama
-    url: http://<musubi-ip>:11434
-    routes:
-      - name: ollama-api
-        hosts: ["ollama.<homelab-domain>"]
-        paths: ["/"]
-        protocols: [https]
-    plugins:
-      - name: key-auth
-        config:
-          key_names: ["X-API-Key"]
-      - name: rate-limiting
-        config:
-          minute: 60
-```
-
-Plug in whatever your Kong deployment uses (Kong Gateway OSS, Enterprise, or Konnect). Musubi Core doesn't care which; it only expects the upstream HTTP traffic to carry a `Authorization: Bearer <token>` header that Core can parse.
-
-## Token handoff
-
-- Kong validates the bearer token format and (optionally) JWT signature. If signed: Kong rejects invalid tokens before they touch Musubi.
-- Kong forwards the token to Musubi Core unchanged via `Authorization:` header.
-- Musubi Core re-parses the token, resolves it against its own tenant/presence model, and enforces namespace scope.
-- **Don't rely on Kong alone for auth.** Musubi re-validates; the two checks are complementary. See [[10-security/auth]].
-
-## TLS
-
-- Certs managed by Kong. For a `<homelab-domain>` zone, either:
-  - **Let's Encrypt** with DNS-01 against whatever DNS provider hosts the domain, or
-  - **Internal CA** (e.g. `step-ca`) if the domain is split-horizon.
-- Musubi Core itself serves plain HTTP. Never expose Core's `:8100` to anything other than Kong.
-
-## Musubi host firewall
-
-With Kong as the gateway, the Musubi host's ingress policy is:
-
-| Port | Allow from                    | Why                                          |
-|------|-------------------------------|----------------------------------------------|
-| 22   | admin subnet                  | SSH for ops                                  |
-| 8100 | `<kong-gateway>` (`<kong-ip>/32`) | Kong upstream — Musubi Core API              |
-
-No other LAN ingress. `ufw` rules codified in [[08-deployment/ansible-layout#firewall]].
+1. **Terminate TLS in the proxy** and forward to Core over plain HTTP. If the proxy runs
+   on the same host, keep Core on `127.0.0.1`. If it runs elsewhere, set
+   `MUSUBI_CORE_BIND` to an address the proxy can reach, and restrict that port to the
+   proxy with your own firewall.
+2. **Forward `Authorization` unchanged.** Core validates every bearer token and enforces
+   namespace scopes itself; a proxy-side token check is an extra layer, never a
+   replacement. See [[10-security/auth]].
+3. **Optionally pass `X-Request-Id`.** Core reuses the value if present, mints one
+   otherwise, and echoes it on the response.
+4. **Never expose Qdrant, TEI or Ollama.** In the shipped stack they publish no host
+   port; keep it that way.
+5. **Keep the read-only ops routes off untrusted networks.** `/v1/ops/health`,
+   `/v1/ops/status` and `/v1/ops/metrics` need no bearer token by design
+   ([[13-decisions/0038-network-protect-read-only-ops-endpoints]]). Don't route
+   `/v1/ops/status` and `/v1/ops/metrics` through a proxy that untrusted clients can
+   reach.
 
 ## Failure modes
 
-- **Kong down** → Musubi unreachable from clients even if healthy. Musubi Core keeps running; queued writes from adapters succeed when Kong recovers (adapters retry).
-- **Musubi Core down** → Kong returns 502 with a JSON error body; clients see `{"code":"upstream_unavailable", …}`. Adapter SDKs retry with exponential backoff.
-- **TLS cert expiry** → Kong's ACME renewal handles this; stale certs surface in Kong's health dashboard.
-- **`<kong-gateway>` / Kong VM destroyed** → rebuild from Ansible on `<pve-node-1>` following the standard VM-clone pattern (`slice-adapter-mcp` pattern is analogous). Kong config restores from declarative source (git). Musubi itself is unaffected.
-
-## Related
-
-- [[13-decisions/0014-kong-over-caddy]] — why Kong and not Caddy.
-- [[07-interfaces/canonical-api]] — what Kong routes to.
-- [[10-security/auth]] — layered auth: Kong edge + Core deep.
-- [[08-deployment/compose-stack]] — what lives behind the gateway.
+- **Proxy down:** Core keeps running but clients cannot reach it.
+- **Core down or starting:** the proxy returns its own 502/503 until Core's health
+  check passes.
 
 ## Test Contract
 
-Realized by **`slice-ops-compose`** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.
+**Module under test:** root `docker-compose.yml` port binding
+(`tests/ops/test_public_compose.py`) and the ops router boundary
+(`tests/ops/test_sec008_ops_network_boundary.py`).
+
+1. `test_public_compose_remote_mode_is_host_independent` — Core binds `127.0.0.1`; no
+   other service publishes a port.
+2. `test_public_compose_allows_explicit_lan_bind` — the bind is an explicit operator
+   choice.
+3. `test_read_only_ops_exception_stays_bounded` — only the read-only ops routes skip
+   operator auth.
