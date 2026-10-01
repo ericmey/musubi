@@ -20,13 +20,15 @@ same `-f docker-compose.yml -f deploy/docker/compose.local-gpu.yml` to every
 `docker compose exec`.
 
 **Canary** (used below): `deploy/smoke/verify.sh` checks health, status, a capture and
-retrieve round trip, a thought round trip and the metrics endpoint. Give it a smoke token
-(see `docs/guide/connect.md`):
+retrieve round trip, a thought round trip and the metrics endpoint. It does not clean up:
+every run leaves a captured memory and a thought behind. So give it a dedicated smoke
+identity that no agent uses, with a token scoped only to it (see `docs/guide/connect.md`),
+and its rows stay out of real agent memory:
 
 ```bash
-MUSUBI_BASE_URL=http://127.0.0.1:8100 MUSUBI_TOKEN=<smoke-token> \
-MUSUBI_NAMESPACE=alex/ops/episodic MUSUBI_THOUGHT_NAMESPACE=alex/ops/thought \
-MUSUBI_PRESENCE=alex/ops bash deploy/smoke/verify.sh
+MUSUBI_BASE_URL=http://127.0.0.1:8100 MUSUBI_TOKEN=<smoke-canary-token> \
+MUSUBI_NAMESPACE=smoke/canary/episodic MUSUBI_THOUGHT_NAMESPACE=smoke/canary/thought \
+MUSUBI_PRESENCE=smoke/canary bash deploy/smoke/verify.sh
 ```
 
 ## First deploy
@@ -179,7 +181,9 @@ Not a page. A failing lifecycle job tick posts an `ops-alerts` Thought.
 
 1. Inspect the concept: `GET /v1/concepts/<id>?namespace=<namespace>` with an operator
    token.
-2. See its lifecycle history: `GET /v1/lifecycle/events/<id>`.
+2. See its lifecycle history in the `lifecycle_events` table of the lifecycle SQLite
+   ledger (`work.sqlite` in the `lifecycle` volume). The `GET /v1/lifecycle/events` routes
+   are stubs that return an empty list today ([[10-security/audit]]).
 3. Decide:
    - Content is nonsense → reject it (below).
    - It is fine but the gate was too strict → tune the promotion settings

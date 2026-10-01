@@ -54,16 +54,26 @@ Compose prefixes volume names with the project name, `musubi`, so on the host th
 2. **Archive every volume** with your usual backup tool, at the same point in time.
 3. **Start the stack again:** `docker compose up -d --wait`.
 
-One way to do step 2 with a throwaway container, from the repo checkout:
+Use the same `-f` files (for example the GPU overlay) on every `docker compose` command
+on this page that you used to start the stack.
+
+One way to do step 2 with a throwaway container, from the repo checkout. It stops at the
+first failure, and it proves every archive reads back completely before recording
+checksums:
 
 ```bash
+set -euo pipefail
 TS=$(date -u +%Y%m%dT%H%M%SZ); mkdir -p "backup-$TS"
 for v in qdrant-storage qdrant-snapshots vault artifact-blobs lifecycle logs; do
   docker run --rm -v "musubi_$v:/data:ro" -v "$PWD/backup-$TS:/backup" \
     alpine tar -C /data -czf "/backup/$v.tgz" .
+  tar -tzf "backup-$TS/$v.tgz" > /dev/null   # fails on a truncated or corrupt archive
 done
 (cd "backup-$TS" && sha256sum *.tgz > SHA256SUMS)
 ```
+
+A checksum only proves the file has not changed since it was written; it does not prove
+the archive is complete. The `tar -tzf` read-back is what catches a truncated archive.
 
 Then copy the set off the host. Keep as many sets as your retention needs; Musubi does not
 prune them. The stack is down for the length of the archive step, so schedule it when
@@ -71,22 +81,37 @@ agents are idle.
 
 ## Restore
 
-1. **Check the set first, before stopping anything:** all six archives are present, and
-   `sha256sum -c SHA256SUMS` passes.
-2. **Stop the stack:** `docker compose stop`.
-3. **Replace the contents of every volume** from that one set:
+1. **Check the whole set first, before stopping or deleting anything.** All six archives
+   must be present, match `SHA256SUMS`, and read back completely. Any failure stops here
+   with nothing changed:
 
    ```bash
+   set -euo pipefail
+   SET="$PWD/backup-<ts>"
+   (cd "$SET" && sha256sum -c SHA256SUMS)
    for v in qdrant-storage qdrant-snapshots vault artifact-blobs lifecycle logs; do
-     docker run --rm -v "musubi_$v:/data" -v "$PWD/backup-<ts>:/backup:ro" \
-       alpine sh -c "find /data -mindepth 1 -delete && tar -C /data -xzf /backup/$v.tgz"
+     tar -tzf "$SET/$v.tgz" > /dev/null
    done
    ```
 
+2. **Stop the stack:** `docker compose stop`.
+3. **Replace the contents of every volume** from that one set, in the same shell (so
+   `set -e` still applies and the loop stops at the first failure):
+
+   ```bash
+   for v in qdrant-storage qdrant-snapshots vault artifact-blobs lifecycle logs; do
+     docker run --rm -v "musubi_$v:/data" -v "$SET:/backup:ro" \
+       alpine sh -ec "find /data -mindepth 1 -delete && tar -C /data -xzf /backup/$v.tgz"
+   done
+   ```
+
+   If a step fails after the first volume is replaced, do not start the stack: fix the
+   cause and run step 3 again for all six volumes from the same set.
+
 4. **Start it:** `docker compose up -d --wait`.
 5. **Verify:** `curl -fsS http://127.0.0.1:8100/v1/ops/health`, check
-   `GET /v1/ops/status` reports every component healthy, then run a canary: with an
-   authorized agent token, capture one memory and retrieve it.
+   `GET /v1/ops/status` reports every component healthy, then run the canary from
+   [[09-operations/runbooks]] with its dedicated smoke identity.
 
 For a full-disaster recovery on a new host, prepare the host ([[08-deployment/host-profile]]),
 clone the repo at the same release, restore your `.env` (including the same
