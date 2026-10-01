@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.27.11](https://github.com/sourceblender/musubi/compare/v1.27.10...v1.27.11) (2026-10-01)
+
+
+### Bug Fixes
+
+* **retrieve:** batch blended semantic dedup embeddings ([#878](https://github.com/sourceblender/musubi/issues/878)) ([f9c51bf](https://github.com/sourceblender/musubi/commit/f9c51bff3dbabbb1697873ef6870b4e7879af6f0))
+* **retrieve:** encode cold fast queries once before plane fan-out ([#880](https://github.com/sourceblender/musubi/issues/880)) ([cf513b3](https://github.com/sourceblender/musubi/commit/cf513b3ee41db70599fb2d592c5cfadd826e0491))
+
 ## [1.27.10](https://github.com/sourceblender/musubi/compare/v1.27.9...v1.27.10) (2026-10-01)
 
 
