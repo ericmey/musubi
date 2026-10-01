@@ -132,13 +132,18 @@ quickstart's, after each release.
 
 ### Secrets and settings
 
-[`.env.example`](../../.env.example) lists every setting Core reads. Two are secrets and belong in your secret
-manager, never in the repo or in shell history:
+[`.env.example`](../../.env.example) lists the settings a Compose deployment
+needs; Core reads a few more advanced ones, documented in its settings
+reference. Two secrets are mandatory:
 
 - `JWT_SIGNING_KEY`: signs and verifies agent tokens (see
   [Connect](connect.md)). Use a long random value; a key that looks like a PEM
   or JSON public key is rejected.
 - `QDRANT_API_KEY`: authenticates Core to Qdrant.
+
+Every credential field belongs in your secret manager or your private `.env`,
+never in the repo or in shell history. That includes the optional ones, such as
+`TEI_BASIC_AUTH_PASSWORD` and `LIFECYCLE_LLM_API_KEY`.
 
 `OAUTH_AUTHORITY` is the token issuer: every token's `iss` claim must match
 it. Core's bind address and port, the model names and the data volumes have
@@ -153,5 +158,5 @@ curl -fsS http://127.0.0.1:8100/v1/ops/health
 ```
 
 Set up backups before you rely on it: see [Operate](operate.md#backups). Put
-TLS in front of Core (the runbook uses a gateway) before any agent reaches it
+TLS in front of Core before any agent reaches it
 over a network you don't fully control.
