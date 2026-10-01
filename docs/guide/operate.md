@@ -30,7 +30,9 @@
 
 Musubi keeps its state in the stack's named Docker volumes:
 `qdrant-storage`, `qdrant-snapshots`, `vault`, `artifact-blobs`, `lifecycle`
-and `logs`. Back them up **cold**, as one set:
+and `logs`. (The GPU override adds `tei-models` and `ollama-models`; those
+are model caches that download again, so they need no backup.) Back up the
+six **cold**, as one set:
 
 1. **Stop the stack:** `docker compose stop`.
 2. **Archive every volume** with your usual backup tool, at the same point in
