@@ -101,9 +101,10 @@ cosign verify \
   ghcr.io/sourceblender/musubi-core@sha256:<digest>
 ```
 
-The root `docker-compose.yml` carries the current release's pin for Core and
-the lifecycle worker. An automatic PR updates it (and the quickstart's) after
-each release.
+The root `docker-compose.yml` carries the current release's pin on every
+service built from the Musubi image (Core, the lifecycle worker and the
+one-shot volume setup). An automatic PR updates all of them, and the
+quickstart's, after each release.
 
 ### Secrets and settings
 
