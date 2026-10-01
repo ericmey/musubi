@@ -148,11 +148,13 @@ jobs:
           package version matches the bumped pyproject.toml. Closes #360."
           git push origin "$head_ref"
 
-      # Turn the release PR into a set-and-forget merge — once required
-      # checks pass, GitHub squash-merges it without a human gate. The
-      # release-please action re-opens/updates the PR on every push to
-      # main, so re-enabling auto-merge is idempotent. Skipped when no
-      # PR was produced this run (nothing to release).
+      # Arm auto-merge on the release PR. It is NOT a bypass: the main
+      # ruleset requires an approving review from someone other than the
+      # last pusher plus the required checks, so GitHub squash-merges only
+      # after both. The release-please action re-opens/updates the PR on
+      # every push to main, which dismisses stale approvals, so re-arming
+      # auto-merge is idempotent. Skipped when no PR was produced this run
+      # (nothing to release).
       - name: Enable auto-merge on release PR
         if: ${{ steps.release-please.outputs.pr != '' }}
         env:
