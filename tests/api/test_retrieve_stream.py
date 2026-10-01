@@ -262,7 +262,11 @@ def test_streaming_retrieval_forwards_all_query_parameters(
     captured_query = {}
 
     async def mock_retrieve(
-        client: object, embedder: object, reranker: object, query: dict[str, object]
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        fast_timing: object,
     ) -> object:
         nonlocal captured_query
         captured_query = query
@@ -306,7 +310,11 @@ def test_streaming_retrieval_multi_plane_fanout(
     from musubi.types.common import Ok
 
     async def mock_retrieve(
-        client: object, embedder: object, reranker: object, query: dict[str, object]
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        fast_timing: object,
     ) -> object:
         assert query["namespace_targets"] == [
             {"namespace": "eric/claude-code/episodic", "plane": "episodic"},

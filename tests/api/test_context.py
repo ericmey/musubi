@@ -87,6 +87,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
         reranker: object,
         query: dict[str, object],
         account_access: bool,
+        fast_timing: object,
     ) -> object:
         captured_queries.append(query)
 
@@ -295,6 +296,7 @@ def test_context_endpoint_max_items_mix_quota(
         reranker: object,
         query: dict[str, object],
         account_access: bool,
+        fast_timing: object,
     ) -> object:
         if query["mode"] == "recent":
             return Ok(
@@ -418,6 +420,7 @@ def test_context_endpoint_max_chars_mix_quota(
         reranker: object,
         query: dict[str, object],
         account_access: bool,
+        fast_timing: object,
     ) -> object:
         if query["mode"] == "recent":
             return Ok(
@@ -517,6 +520,7 @@ def test_context_endpoint_single_lane_empty_cases(
         reranker: object,
         query: dict[str, object],
         account_access: bool,
+        fast_timing: object,
     ) -> object:
         # If empty_lane is 'ranked', the mode parameter in context.py is 'fast'
         lane_to_mode = {"recent": "recent", "ranked": "fast"}
@@ -616,6 +620,7 @@ def test_context_endpoint_custom_state_filter_applies_to_both_lanes(
         reranker: object,
         query: dict[str, object],
         account_access: bool,
+        fast_timing: object,
     ) -> object:
         captured_queries.append(query)
         return Ok(value=RetrievalEnvelope(results=[], warnings=()))

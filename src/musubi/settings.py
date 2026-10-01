@@ -165,6 +165,15 @@ class Settings(BaseSettings):
             "unhydrated hit before the whole-call deadline."
         ),
     )
+    retrieval_fast_encoding_timeout_s: float = Field(
+        default=0.250, gt=0, description="Fast query encoding budget in seconds."
+    )
+    retrieval_fast_plane_timeout_s: float = Field(
+        default=0.250, gt=0, description="Fast per-plane search budget in seconds."
+    )
+    retrieval_fast_whole_timeout_s: float = Field(
+        default=0.400, gt=0, description="Fast whole-call budget in seconds."
+    )
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
     artifact_max_bytes: int = Field(

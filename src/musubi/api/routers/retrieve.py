@@ -67,6 +67,7 @@ from musubi.api.responses import (
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.retrieve.fast import FastTiming
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.retrieve.warnings import wire_codes
 from musubi.settings import Settings
@@ -582,6 +583,7 @@ async def retrieve(
         embedder=embedder,
         reranker=reranker,
         query=query_body,
+        fast_timing=FastTiming.from_settings(settings),
     )
 
     if isinstance(orchestration_result, Err):

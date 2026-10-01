@@ -27,6 +27,7 @@ from musubi.retrieve.context_pack import (
     ContextPackQuery,
     build_context_pack,
 )
+from musubi.retrieve.fast import FastTiming
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.retrieve.warnings import wire_codes
 from musubi.settings import Settings
@@ -177,6 +178,7 @@ async def context_pack(
         reranker=reranker,
         query=recent_query_body,
         account_access=False,
+        fast_timing=FastTiming.from_settings(settings),
     )
     if isinstance(recent_result, Err):
         retrieval_err = recent_result.error
@@ -189,6 +191,7 @@ async def context_pack(
         reranker=reranker,
         query=fast_query_body,
         account_access=False,
+        fast_timing=FastTiming.from_settings(settings),
     )
     if isinstance(fast_result, Err):
         retrieval_err = fast_result.error

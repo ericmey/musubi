@@ -11,7 +11,7 @@ implements: ["src/musubi/retrieve/fast.py", "tests/retrieve/test_fast.py"]
 ---
 # Fast Path
 
-Retrieval for voice, chat, and any surface where a human is actively waiting. Budget: p50 ≤ 150ms, p95 ≤ 400ms end-to-end, including network round trip from adapter.
+Retrieval for voice, chat, and any surface where a human is actively waiting. The colocated-inference target is p50 ≤ 150ms, p95 ≤ 400ms end-to-end, including the adapter round trip. A deployment with remote inference must measure its own latency before choosing larger deadlines; raising them does not satisfy the colocated target.
 
 ## The plan
 
@@ -41,9 +41,9 @@ Budget: 1ms. Failure: 400/403.
 
 - Check in-memory LRU cache (see [[05-retrieval/hybrid-search#caching]]).
 - On miss: parallel HTTP to TEI for dense + sparse.
-- Timeout: 80ms total; on timeout, degrade to whichever completed.
+- Query-encoding timeout: 250ms by default. If encoding cannot complete, return 503.
 
-Budget: 20–50ms. Failure: if both models timeout, 503. (Very rare — TEI is colocated.)
+Target budget: 20–50ms with colocated TEI. Remote TEI can take longer; its operator sets a measured deadline.
 
 ### Step 3: Hybrid fan-out
 
@@ -53,10 +53,13 @@ For each plane in the query (default: `[curated, concept, episodic]`):
 - `limit = K_pre` where `K_pre = max(20, query.limit * 2)` so we have headroom for merge/dedup.
 - Timeout: 250ms per-collection.
 
-The query is encoded once before the plane fan-out, with its own 250ms bound.
-The 250ms per-collection timer covers that collection's search and hydration,
-while the 400ms whole-call timer still covers encoding and all plane work
-together.
+The query is encoded once before the plane fan-out. Three independent settings
+bound encoding, each collection's search and hydration, and the whole call:
+`RETRIEVAL_FAST_ENCODING_TIMEOUT_S`, `RETRIEVAL_FAST_PLANE_TIMEOUT_S`, and
+`RETRIEVAL_FAST_WHOLE_TIMEOUT_S`. Their defaults are 0.250, 0.250, and 0.400
+seconds. An operator may override them through the deployment inventory after
+measuring the inference path. The whole-call timer includes encoding and all
+plane work; it can still cancel work that fits its individual stage deadline.
 
 All plane queries run **concurrently** via `asyncio.gather(return_exceptions=True)`. A failed or slow plane doesn't block others.
 
@@ -183,3 +186,8 @@ Cold-query budget:
 20. `test_fast_path_encodes_once_before_per_plane_timeout`
 21. `test_fast_path_shares_encoding_with_real_hybrid_search`
 22. `test_fast_path_bounds_cold_encoding_before_fanout`
+23. `test_fast_path_uses_independent_encoding_and_search_deadlines`
+24. `test_fast_timing_override_reaches_pipeline_and_whole_call`
+25. `test_fast_deadline_env_overrides_are_independent`
+26. `test_fast_deadlines_reject_nonpositive_values`
+27. `test_retrieve_http_passes_configured_fast_deadlines`

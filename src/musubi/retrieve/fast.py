@@ -6,7 +6,7 @@ import asyncio
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from qdrant_client import QdrantClient
 
@@ -26,9 +26,29 @@ from musubi.retrieve.warnings import RetrievalWarning, plane_error, plane_timeou
 from musubi.store.specs import collection_has_sparse
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
+if TYPE_CHECKING:
+    from musubi.settings import Settings
+
 _DEFAULT_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
 _DEFAULT_CACHE_MODEL_VERSION = "fast-path-v1"
 _DEFAULT_RESPONSE_TTL_S = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class FastTiming:
+    """Independent fast-path bounds in seconds; defaults preserve the colocated target."""
+
+    encoding_timeout_s: float = 0.250
+    plane_timeout_s: float = 0.250
+    whole_timeout_s: float = 0.400
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> FastTiming:
+        return cls(
+            encoding_timeout_s=settings.retrieval_fast_encoding_timeout_s,
+            plane_timeout_s=settings.retrieval_fast_plane_timeout_s,
+            whole_timeout_s=settings.retrieval_fast_whole_timeout_s,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +139,7 @@ async def run_fast_retrieve(
     state_filter: Sequence[LifecycleState] = _DEFAULT_STATES,
     prefetch_limit: int | None = None,
     plane_timeout_s: float = 0.250,
+    encoding_timeout_s: float | None = None,
     sparse_timeout_s: float | None = None,
     embedding_cache: QueryEmbeddingCache | None = None,
     response_cache: FastResponseCache | None = None,
@@ -176,7 +197,7 @@ async def run_fast_retrieve(
                 ),
                 sparse_timeout_s=sparse_timeout_s,
             ),
-            timeout=plane_timeout_s,
+            timeout=encoding_timeout_s if encoding_timeout_s is not None else plane_timeout_s,
         )
     except TimeoutError:
         return Err(
@@ -477,5 +498,6 @@ __all__ = [
     "FastResponseCache",
     "FastRetrievalError",
     "FastRetrieveResult",
+    "FastTiming",
     "run_fast_retrieve",
 ]

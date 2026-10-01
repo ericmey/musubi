@@ -71,6 +71,12 @@ musubi_otel_otlp_endpoint: ""
 musubi_prometheus_remote_write_url: ""
 musubi_deployment_environment: "production"
 
+# Interactive recall deadlines in seconds. Defaults retain the colocated fast-path contract;
+# deployments with remote inference can override these in private inventory after measurement.
+musubi_fast_encoding_timeout_s: 0.250
+musubi_fast_plane_timeout_s: 0.250
+musubi_fast_whole_timeout_s: 0.400
+
 musubi_required_packages:
   - ca-certificates
   - chrony
