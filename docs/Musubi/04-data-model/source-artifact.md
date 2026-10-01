@@ -4,7 +4,7 @@ section: 04-data-model
 tags: [artifact, data-model, schema, section/data-model, status/draft, type/spec]
 type: spec
 status: draft
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[04-data-model/index]]"
 reviewed: false
 implements: "tests/planes/test_artifact.py"
@@ -15,134 +15,90 @@ Raw, immutable material. Transcripts, documents, channel exports, whatever needs
 
 ## Pydantic models
 
+Both models are in `src/musubi/types/artifact.py`. `SourceArtifact` (`artifact.py:17-82`) extends `MusubiObject`, so it inherits `object_id`, `namespace` (e.g. `alex/shared/artifact`), `identity_family`, `schema_version`, the `created_*` / `updated_*` timestamps and `version`. It is not a `MemoryObject`: it has no lineage, tags, importance or validity fields.
+
 ```python
-# musubi/types/artifact.py
-
-ArtifactState = Literal["indexing", "indexed", "failed", "stored_unindexed"]
-Chunker = Literal["markdown-headings-v1", "vtt-turns-v1", "token-sliding-v1", "json-v1"]
-
-class SourceArtifact(BaseModel):
-    object_id: KSUID
-    namespace: str                      # e.g., "alex/_shared/artifact"
-    schema_version: int = 1
-
-    title: str
-    filename: str
-    sha256: str                         # blob content hash
+class SourceArtifact(MusubiObject):
+    state: Literal["matured", "archived", "superseded"] = "matured"   # lifecycle axis
+    title: str                          # non-empty
+    filename: str                       # non-empty
+    sha256: str                         # 64-char hex of the raw bytes
     content_type: str                   # MIME
     size_bytes: int
-
-    # Chunking
-    chunker: Chunker
-    chunk_count: int
-    chunker_config: dict = Field(default_factory=dict)
-
-    # Temporal
-    created_at: datetime
-    created_epoch: float
-    updated_at: datetime                 # = created_at in almost all cases
-    updated_epoch: float
-
-    # Lifecycle
-    version: int = 1
-    state: LifecycleState = "matured"    # artifacts skip provisional; they're always final
-    artifact_state: ArtifactState = "indexing"
+    chunk_count: int = 0
+    ingestion_metadata: dict = {}       # e.g. {"source_system": "api-upload"}
+    chunker: str                        # e.g. "markdown-headings-v1"
+    artifact_state: Literal["indexing", "indexed", "failed", "stored_unindexed"] = "indexing"
     failure_reason: str | None = None
 
-    # Ingestion metadata
-    source_system: str                   # "livekit-session", "claude-code-session", "manual-upload", "discord-export", etc.
-    source_ref: str | None = None        # URL / session id / message id
-    ingested_by: str                     # presence that uploaded
-    ingestion_metadata: dict = Field(default_factory=dict)
-
-    # Storage
-    blob_url: str                        # internal URL: file:///srv/musubi/artifacts/<sha256[:2]>/<sha256[2:]>/<filename>
-
-    # Relationships (rare for artifacts)
-    derived_from: KSUID | None = None    # e.g., a summarized artifact pointing to the raw one
-    supersedes: list[KSUID] = Field(default_factory=list)  # rare: explicitly-replaced artifact version
+    # Committed-generation head (C4 / ART-001)
+    committed_generation: str | None = None
+    committed_owner: str | None = None
+    index_operation_id: str | None = None
+    publication_version: int = 0
 ```
 
+Validators: `failed` requires `failure_reason`; `indexed` requires `chunk_count ≥ 1`; `stored_unindexed` forbids every indexing-owned field. A reader exposes only chunks whose `(generation, owner_token)` equal the head's committed pair.
+
 ```python
-class ArtifactChunk(BaseModel):
+class ArtifactChunk(BaseModel):          # artifact.py:85-107, frozen
     chunk_id: KSUID
     artifact_id: KSUID
     chunk_index: int
     content: str
     start_offset: int
-    end_offset: int
-    chunk_metadata: dict = Field(default_factory=dict)
+    end_offset: int                      # >= start_offset
+    chunk_metadata: dict = {}
+    generation: str | None = None        # staging fence; None on legacy chunks
+    owner_token: str | None = None
     # Stored as a Qdrant point in musubi_artifact_chunks
 ```
 
 Chunks are not first-class `MusubiObject`s — they're indexed content owned by the parent artifact. Lifecycle of a chunk == lifecycle of its parent.
 
+There are no `source_system`, `source_ref`, `ingested_by`, `blob_url`, `derived_from` or `supersedes` fields on the model. The upload route records the caller's `source_system` (default `"api-upload"`) inside `ingestion_metadata`.
+
 ## Storage layout
 
-**Blob:** content-addressed filesystem (v1):
+**Blob:** one file per artifact at `ARTIFACT_BLOB_PATH/<namespace>/<object_id>` (default root `/var/lib/musubi/artifact-blobs`, `.env.example:37`; `src/musubi/api/routers/writes_artifact.py:105-111`, `src/musubi/api/routers/artifacts.py:75-90`). Uploads stream to `ARTIFACT_BLOB_PATH/.staging/` first and are moved into place. There is no content addressing: two uploads of identical bytes are two blobs. Content-addressed or object-store blob storage is planned, not implemented.
 
-```
-/srv/musubi/artifacts/
-├── ab/
-│   └── cd1234...ffffffff/     # sha256[:2] / sha256[2:]
-│       ├── 20260417-session.vtt   # original filename preserved inside the dir
-│       └── metadata.json          # ingestion-time metadata snapshot
-```
-
-Two artifacts with the same content (identical sha256) share the blob and can have independent `object_id`s (e.g., ingested under different namespaces or with different metadata). Metadata is deduplicated by object_id.
-
-Future (when multi-host): swap filesystem for MinIO without changing the API surface.
-
-**Qdrant:** collection `musubi_artifact_chunks` stores chunk embeddings.
-
-| Field | Type | Purpose |
-|---|---|---|
-| `namespace` | KEYWORD | scope |
-| `artifact_id` | KEYWORD | reverse-join to parent |
-| `chunk_id` | KEYWORD | direct lookup |
-| `chunk_index` | INTEGER | ordering |
-| `content_type` | KEYWORD | filter by MIME |
-| `chunker` | KEYWORD | tooling compat |
-| `source_system` | KEYWORD | provenance filter |
-| `created_epoch` | FLOAT | recency |
-
-Vectors: same named vectors as other planes (`dense_bge_m3_v1`, `sparse_splade_v1`).
+**Qdrant:** collection `musubi_artifact_chunks` stores chunk embeddings, with the universal indexes plus `artifact_id`, `chunk_id`, `chunk_index`, `content_type`, `chunker`, `source_system` (`src/musubi/store/specs.py:196-203`). Vectors: same named vectors as other planes (`dense_bge_m3_v1`, `sparse_splade_v1`).
 
 ## Chunking strategies
 
 | Chunker | For | Approach |
 |---|---|---|
-| `markdown-headings-v1` | `.md`, `.txt` with headings | Split on H2/H3; fall back to token-sliding if sections > 2048 tokens; preserve heading path in `chunk_metadata.heading_path`. |
-| `vtt-turns-v1` | `.vtt`, `.srt` | Group 3–5 speaker turns per chunk; metadata: `speakers`, `start_ts`, `end_ts`. |
+| `markdown-headings-v1` | `.md`, `.txt` with headings | Split on H2/H3; token-split a section that exceeds the 512-token window; heading path in `chunk_metadata.heading_path`. |
+| `vtt-turns-v1` | `.vtt`, `.srt` | Group 3–5 blank-line-separated turns per chunk; metadata: `speakers`. |
 | `token-sliding-v1` | default | 512-token window, 128-token overlap; BGE-M3 tokenizer. |
-| `json-v1` | `.json` export | One chunk per top-level array element up to 2KB; preserves JSONPath. |
+| `json-v1` | `.json` export | One chunk per top-level array element; unparseable JSON becomes one chunk. |
 
-Chunker is selected by content-type + heuristics. Users can override via `chunker` parameter on POST.
+The chunker is not inferred from the content type: the upload's `chunker` form field selects it and defaults to `markdown-headings-v1` (`writes_artifact.py:55`). The registry is `KNOWN_CHUNKERS` in `src/musubi/planes/artifact/chunking.py:336`; the committed-generation indexer rejects an unknown name.
 
 ## Ingestion flow
 
 ```
-POST /v1/artifacts   (multipart: metadata json + file bytes OR pre-signed ref)
+POST /v1/artifacts   (multipart form: namespace, title, content_type,
+                      source_system?, chunker?, file)
   │
   ▼
 Core:
-  1. auth, validate
-  2. compute sha256 of bytes
-  3. if blob already exists at content-address: skip write
-     else: stream to /srv/musubi/artifacts/<ab>/<cd...>/
-  4. create SourceArtifact row (in-memory + Qdrant metadata collection — see below)
-  5. return 202 Accepted, artifact_id, state:"indexing"
-  6. enqueue chunking job (in-process task group; the worker handles the CPU/GPU-heavy parts)
+  1. auth: write scope on the form's namespace
+  2. stream bytes to a staging file, hashing (sha256) and refusing past ARTIFACT_MAX_BYTES
+  3. create the SourceArtifact head (artifact_state="indexing") in musubi_artifact
+  4. move the blob to ARTIFACT_BLOB_PATH/<namespace>/<object_id>
+  5. enqueue a durable indexing intent; at capacity, mark the artifact failed instead
+  6. return 202 with object_id, state (the indexing axis), size_bytes, sha256
 
-Chunking worker (inside Core or Lifecycle Worker):
+Lifecycle Worker (ArtifactIndexer):
   1. open blob
-  2. chunk per selected strategy
+  2. chunk per the named chunker
   3. batch-embed dense + sparse via TEI
-  4. upsert chunks into musubi_artifact_chunks
-  5. update artifact: artifact_state="indexed", chunk_count=N
+  4. stage the chunks under a fresh generation in musubi_artifact_chunks
+  5. publish the head: committed_generation/owner, artifact_state="indexed", chunk_count=N
 ```
 
-Client polls `GET /v1/artifacts/{id}` to see state transition `indexing` → `indexed` / `failed`.
+Client polls `GET /v1/artifacts/{id}` to see state transition `indexing` → `indexed` / `failed`. Other routes: `GET /v1/artifacts` (list), `GET /v1/artifacts/{id}/chunks`, `GET /v1/artifacts/{id}/blob`, `POST /v1/artifacts/{id}/archive` (write scope; lifecycle `archived`), `POST /v1/artifacts/{id}/purge` (operator scope; removes metadata and blob).
 
 `stored_unindexed` is a separate, intentional branch for an artifact whose blob
 is retained for exact by-id reads but never admitted to chunk indexing. Its head
@@ -156,73 +112,68 @@ shape and by-id readability with zero committed chunks.
 
 ## Where artifact metadata lives
 
-We have two options:
-- **A: In a SQLite/Postgres metadata table.** Classical.
-- **B: As a Qdrant point in a metadata collection (`musubi_artifacts`).** No second store.
+Artifact metadata is a Qdrant point in the `musubi_artifact` collection — no second store. The point is written with an all-zero dense vector (`src/musubi/planes/artifact/plane.py:133-141`), so metadata is reached by payload filter, not by similarity; the collection has no sparse vector (`src/musubi/store/specs.py:104`). Embedding title + summary for search-by-artifact is planned, not implemented. See [[13-decisions/0009-artifact-metadata-in-qdrant]].
 
-**Choice: B for v1.** Keeps the number of stores down. Payload fields are indexed. The artifact metadata point has no vector embedding — we create it with a dummy zero vector (or use Qdrant's upcoming metadata-only points feature if available in 1.15+). See [[13-decisions/0009-artifact-metadata-in-qdrant]].
-
-If Qdrant zero-vector storage is awkward, we embed `title + summary` with BGE-M3 and get free search-by-artifact for free — arguably useful.
+The `musubi_artifact` collection also declares payload indexes on `source_system`, `source_ref`, `ingested_by` and `derived_from` (`specs.py:205-212`). Those are not model fields and nothing writes them today, so filtering on them matches nothing.
 
 ## Test Contract
 
-**Module under test:** `musubi/planes/artifact/` + `musubi/store/`
+**Module under test:** `src/musubi/planes/artifact/` + `src/musubi/store/`
+
+Behaviour checklist; implemented tests are in `tests/planes/test_artifact.py` and neighbours under their own names.
 
 Ingestion:
 
-1. `test_upload_new_blob_writes_to_content_addressed_path`
-2. `test_upload_existing_blob_skips_write_and_references`
-3. `test_upload_computes_sha256_correctly_on_arbitrary_bytes`
-4. `test_upload_returns_202_and_artifact_id_immediately`
-5. `test_chunking_markdown_splits_on_h2_h3`
-6. `test_chunking_vtt_groups_turns_with_metadata`
-7. `test_chunking_token_sliding_produces_overlap`
-8. `test_chunking_respects_chunker_override_parameter`
-9. `test_embedding_is_batched_not_per_chunk`
-10. `test_failed_chunking_marks_artifact_state_failed_with_reason`
+1. `test_upload_writes_blob_under_namespace_and_object_id`
+2. `test_upload_computes_sha256_correctly_on_arbitrary_bytes`
+3. `test_upload_returns_202_and_artifact_id_immediately`
+4. `test_chunking_markdown_splits_on_h2_h3`
+5. `test_chunking_vtt_groups_turns_with_metadata`
+6. `test_chunking_token_sliding_produces_overlap`
+7. `test_chunking_respects_chunker_override_parameter`
+8. `test_embedding_is_batched_not_per_chunk`
+9. `test_failed_chunking_marks_artifact_state_failed_with_reason`
 
 Query:
 
-11. `test_get_artifact_returns_metadata_and_chunk_count`
-12. `test_get_artifact_with_include_chunks_returns_chunks_ordered`
-13. `test_query_artifact_chunks_filters_by_artifact_id`
-14. `test_query_artifact_chunks_returns_citation_ready_struct`
+10. `test_get_artifact_returns_metadata_and_chunk_count`
+11. `test_get_artifact_with_include_chunks_returns_chunks_ordered`
+12. `test_query_artifact_chunks_filters_by_artifact_id`
+13. `test_query_artifact_chunks_returns_citation_ready_struct`
 
 Lifecycle:
 
-15. `test_artifact_state_transitions_monotone` (indexing → indexed; or indexing → failed; no backwards)
-16. `test_archive_marks_state_but_keeps_blob`
-17. `test_hard_delete_requires_operator_and_removes_blob_and_chunks`
+14. `test_artifact_state_transitions_monotone` (indexing → indexed; or indexing → failed; no backwards)
+15. `test_archive_marks_state_but_keeps_blob`
+16. `test_hard_delete_requires_operator_and_removes_blob_and_chunks`
 
 Storage:
 
-18. `test_content_addressed_storage_dedups_identical_content_across_namespaces`
-19. `test_blob_url_format_roundtrips`
-20. `test_missing_blob_returns_clear_error_on_read`
+17. `test_missing_blob_returns_clear_error_on_read`
 
 Stored-unindexed state:
 
-21. `test_stored_unindexed_accepts_only_empty_indexing_state`
-22. `test_stored_unindexed_rejects_every_indexing_owned_field`
-23. `test_stored_unindexed_artifact_is_readable_by_id_with_zero_committed_chunks`
-24. `test_escrow_id_matches_adr_golden_vector`
-25. `test_escrow_id_binds_namespace_source_and_digest_while_preserving_timestamp`
-26. `test_escrow_temp_fsync_failure_exposes_no_final_or_head`
-27. `test_escrow_blob_readback_failure_exposes_no_head`
-28. `test_escrow_head_failure_retry_reuses_verified_bytes_at_version_zero`
-29. `test_escrow_corrupt_final_blob_fails_closed_without_overwrite`
-30. `test_existing_divergent_escrow_head_fails_closed`
-31. `test_concurrent_identical_escrows_converge_on_one_blob_and_head`
-32. `test_verified_escrow_is_readable_with_zero_chunks_and_no_intent`
-33. `test_escrow_exact_text_search_misses_with_indexed_positive_control`
-34. `test_legacy_index_door_refuses_live_stored_head_from_stale_caller`
-35. `test_retention_refuses_stored_unindexed_artifact_policy_candidate`
-36. `test_real_storage_escrow_orders_verified_blob_before_head_and_reuses`
+18. `test_stored_unindexed_accepts_only_empty_indexing_state`
+19. `test_stored_unindexed_rejects_every_indexing_owned_field`
+20. `test_stored_unindexed_artifact_is_readable_by_id_with_zero_committed_chunks`
+21. `test_escrow_id_matches_adr_golden_vector`
+22. `test_escrow_id_binds_namespace_source_and_digest_while_preserving_timestamp`
+23. `test_escrow_temp_fsync_failure_exposes_no_final_or_head`
+24. `test_escrow_blob_readback_failure_exposes_no_head`
+25. `test_escrow_head_failure_retry_reuses_verified_bytes_at_version_zero`
+26. `test_escrow_corrupt_final_blob_fails_closed_without_overwrite`
+27. `test_existing_divergent_escrow_head_fails_closed`
+28. `test_concurrent_identical_escrows_converge_on_one_blob_and_head`
+29. `test_verified_escrow_is_readable_with_zero_chunks_and_no_intent`
+30. `test_escrow_exact_text_search_misses_with_indexed_positive_control`
+31. `test_legacy_index_door_refuses_live_stored_head_from_stale_caller`
+32. `test_retention_refuses_stored_unindexed_artifact_policy_candidate`
+33. `test_real_storage_escrow_orders_verified_blob_before_head_and_reuses`
 
 Isolation:
 
-37. `test_namespace_isolation_reads`
-38. `test_cross_namespace_citation_in_supporting_ref_is_logged`
+34. `test_namespace_isolation_reads`
+35. `test_cross_namespace_citation_in_supporting_ref_is_logged`
 
 ## Prior art
 
@@ -231,6 +182,6 @@ Isolation:
 
 ## Open questions
 
-- **OCR for image-bearing PDFs:** v1 uses `pdfminer.six` for text extraction; no OCR. If a PDF is image-only, ingestion fails fast with a clear error. Post-v1: add a local OCR worker (Tesseract or TrOCR on GPU).
-- **Audio artifacts:** v1 expects a pre-transcribed VTT/SRT. We don't ship a speech-to-text pipeline. That's the adapter's job (LiveKit adapter captures transcript; we ingest it).
+- **PDFs and OCR:** there is no PDF text extraction and no OCR. Chunkers read the blob as text. Text extraction (and a local OCR worker for image-only PDFs) is planned, not implemented.
+- **Audio artifacts:** v1 expects a pre-transcribed VTT/SRT. We don't ship a speech-to-text pipeline. That's the adapter's job (the LiveKit adapter captures the transcript; Musubi ingests it).
 - **Multi-part artifacts** (e.g., a PDF + companion spreadsheet): v1 = one artifact per file. Use `derived_from` to link. Post-v1: artifact collections.

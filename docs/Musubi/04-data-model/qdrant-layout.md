@@ -4,14 +4,14 @@ section: 04-data-model
 tags: [data-model, indexes, qdrant, section/data-model, status/complete, type/spec, vectors]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[04-data-model/index]]"
 reviewed: false
 implements: "src/musubi/store/"
 ---
 # Qdrant Layout
 
-Exhaustive reference for the Qdrant schema: collections, named vectors, payload indexes, and parameters. This is the single place to look when asking "what fields can I filter on?" or "what vectors are available?"
+Reference for the Qdrant schema: collections, named vectors, payload indexes, and parameters. The authority is `src/musubi/store/specs.py` (`REGISTRY` for collections, `UNIVERSAL_INDEXES` and `INDEXES_BY_COLLECTION` for payload indexes); this page reads it. This is the single place to look when asking "what fields can I filter on?" or "what vectors are available?"
 
 ## Qdrant version
 
@@ -26,10 +26,12 @@ Exhaustive reference for the Qdrant schema: collections, named vectors, payload 
 | `musubi_concept` | Synthesized concepts | 1 | dense + sparse |
 | `musubi_artifact_chunks` | Chunks from source artifacts | N per artifact | dense + sparse |
 | `musubi_artifact` | Artifact metadata (title + summary only) | 1 | dense (title+summary) |
-| `musubi_thought` | Inter-presence messages | 1 | dense (optional; deferred under load) |
-| `musubi_lifecycle_events` | Audit log mirror (optional) | 1 per event | dense (event reason) |
+| `musubi_thought` | Inter-presence messages | 1 | dense + sparse |
+| `musubi_lifecycle_events` | Audit log mirror. Declared and created at boot, but not written yet (`src/musubi/lifecycle/events.py:13-14`) | 1 per event | dense only |
 
-All collections share the same named-vector scheme (dense + sparse) with identical dimensions, so the retrieval code path is uniform.
+Every collection uses the same dense vector name and size. `musubi_artifact` and `musubi_lifecycle_events` are dense-only (`has_sparse=False`, `src/musubi/store/specs.py:104,108`); the rest also carry the sparse vector. Hybrid queries against a dense-only collection skip the sparse leg (`collection_has_sparse`, `specs.py:115-131`).
+
+**Points per object.** Episodic and curated objects written through the immutable-vector path use a two-kind layout: one stable `anchor` point (the mutable identity row) plus one or more write-once `content` points, marked by the `point_kind` payload field (`specs.py:26-31`). Legacy single-point rows carry no `point_kind`. Read paths strip the layout-only fields before validating the model (`LAYOUT_ONLY_FIELDS`, `specs.py:38-48`).
 
 ## Named vectors
 
@@ -40,7 +42,7 @@ vectors_config = {
     "dense_bge_m3_v1": VectorParams(
         size=1024,
         distance=Distance.COSINE,
-        on_disk=False,              # keep hot; 32GB host has room
+        on_disk=False,              # keep vectors in RAM
         hnsw_config=HnswConfigDiff(
             m=32,                   # slightly higher than default for recall
             ef_construct=256,
@@ -73,10 +75,9 @@ Rationale:
 ```
 dense_bge_m3_v1        — BGE-M3 dense, 1024-d, cosine
 sparse_splade_v1       — SPLADE++ V3, dictionary size = model vocab
-dense_legacy_v0        — migration-only; old Gemini 3072-d (POC); removed post-phase-3
 ```
 
-See [[11-migration/re-embedding]] for the migration plan.
+See [[11-migration/re-embedding]] for the (planned) model-change procedure.
 
 ## Payload schema (cross-cutting)
 
@@ -86,6 +87,7 @@ Every point has this base payload, serialized as the pydantic model's `model_dum
 {
   "object_id": "2W1eP3rZaLlQ4jTuYz0Q9CkZAB1",
   "namespace": "alex/claude-code/episodic",
+  "identity_family": "alex",
   "schema_version": 1,
   "state": "matured",
   "created_at": "2026-04-17T09:00:00Z",
@@ -103,13 +105,14 @@ Plus plane-specific fields defined in the individual docs.
 
 ## Payload indexes
 
-Indexes are created idempotently at boot via `musubi/store/indexes.py`. The full set by collection:
+Indexes are created idempotently at boot by `ensure_indexes` in `src/musubi/store/indexes.py`, from the registries in `src/musubi/store/specs.py:138-242`. The full set by collection:
 
 ### Universal (every collection)
 
 | Field | Type | Reason |
 |---|---|---|
 | `namespace` | KEYWORD | Isolation — every query filters on namespace. |
+| `identity_family` | KEYWORD | Cross-presence filters on the first namespace segment. |
 | `object_id` | KEYWORD | Direct fetch. |
 | `state` | KEYWORD | Lifecycle filters. |
 | `schema_version` | INTEGER | Migration-aware reads. |
@@ -133,6 +136,7 @@ Indexes are created idempotently at boot via `musubi/store/indexes.py`. The full
 | `supported_by.artifact_id` | KEYWORD (array) | Reverse-lookup from artifact. |
 | `merged_into` | KEYWORD | Reverse-lookup from concept. |
 | `superseded_by` | KEYWORD | Chain traversal. |
+| `importance_last_scored_epoch` | FLOAT | Re-enrichment selection. |
 
 ### `musubi_curated` (deltas)
 
@@ -191,6 +195,20 @@ Indexes are created idempotently at boot via `musubi/store/indexes.py`. The full
 | `read` | BOOL | Unread-only filter. |
 | `read_by` | KEYWORD (array) | Per-presence. |
 | `in_reply_to` | KEYWORD | Thread walks. |
+
+### `musubi_lifecycle_events` (deltas)
+
+Declared for the mirror; the collection is empty until mirroring is wired.
+
+| Field | Type | Reason |
+|---|---|---|
+| `event_id` | KEYWORD | Direct fetch. |
+| `object_type` | KEYWORD | Filter by plane. |
+| `from_state` | KEYWORD | Transition filters. |
+| `to_state` | KEYWORD | Transition filters. |
+| `actor` | KEYWORD | Who triggered it. |
+| `occurred_epoch` | FLOAT | Time ranges. |
+| `correlation_id` | KEYWORD | Join to a request. |
 
 ## Query patterns
 
@@ -277,23 +295,21 @@ Ballpark targets for the reference host (see [[03-system-design/process-topology
 - **`musubi_artifact`**: 100K points (one per artifact), ~100MB.
 - **`musubi_thought`**: 50K points, ~500MB.
 
-If storage grows past disk budget, we partition by age (move chunks older than 1 year to on-disk-only collection) or move blobs to MinIO. See `scaling`.
+No age partitioning is implemented. If storage outgrows the disk budget, the options are moving old chunks to an on-disk-only collection or moving blobs to an object store. Both are planned, not implemented.
 
-## Multi-tenant future-proofing
+## Multi-tenant layout
 
-Today: one Qdrant database, one tenant. Tomorrow: we have two options —
+Collections are shared: one `musubi_episodic` holds every namespace, and isolation is a `namespace` filter that the API applies on every query, backed by scoped tokens. A tenant is the first namespace segment (an agent such as `alex` or `sam`), not a separate database.
 
-**A: Collection-per-tenant**: `musubi_episodic__eric` vs `musubi_episodic__other`. Ops overhead, but total isolation.
-
-**B: Shared collections, namespace filter enforced in API**. Less overhead, but relies on filter correctness.
-
-We lean toward **B** (shared collections), with per-tenant auth tokens at the API. Qdrant 1.15 supports strong namespace ACLs via payload filters, and our isolation tests catch mistakes. A future RBAC project can swap to A if a tenant's data needs to be physically separate (e.g., for compliance).
+The alternative, collection-per-tenant (`musubi_episodic__alex`, `musubi_episodic__sam`), gives physical separation at the cost of ops overhead. It is not implemented; it remains the option if a tenant's data must be physically separate (e.g., for compliance).
 
 See [[10-security/auth]] and [[13-decisions/0008-no-relational-store]].
 
 ## Test Contract
 
-**Module under test:** `musubi/store/collections.py`, `musubi/store/indexes.py`
+**Module under test:** `src/musubi/store/collections.py`, `src/musubi/store/indexes.py`, `src/musubi/store/specs.py`
+
+The bullets below are the behaviour checklist. The implemented tests live in `tests/store/test_collections.py`, `tests/store/test_indexes.py` and `tests/store/test_specs.py` under their own names.
 
 1. `test_ensure_collections_idempotent`
 2. `test_ensure_indexes_idempotent`

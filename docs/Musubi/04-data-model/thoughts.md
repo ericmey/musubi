@@ -4,66 +4,58 @@ section: 04-data-model
 tags: [data-model, schema, section/data-model, status/complete, thoughts, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[04-data-model/index]]"
 reviewed: false
 implements: ["src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/test_thoughts.py", "tests/types/"]
 ---
 # Thoughts
 
-Durable, inter-presence messages. Preserved from the POC, unchanged in spirit. Not memory per se — closer to a persistent notification / mailbox.
+Durable, inter-presence messages. Not memory per se — closer to a persistent notification / mailbox.
 
 ## Use cases
 
 - `scheduler → alex/*`: "Synthesis run completed; 3 concepts promoted."
 - `claude-code → alex/claude-desktop`: "Noted that you restarted the LiveKit agent; relevant logs saved as artifact X."
-- `lifecycle-worker → all`: "Daily reflection digest at vault/reflections/2026-04-17.md."
+- `lifecycle-worker → all`: "Daily reflection digest written."
 - `alex/livekit-voice → alex/claude-code`: "Reminder I'll continue this discussion later via chat."
 
 Thoughts are **not** the conversation transcript — they are targeted messages between presences that survive past their session.
 
 ## Pydantic model
 
+The model is `Thought` in `src/musubi/types/thought.py:21-41`. It extends `MusubiObject` (not `MemoryObject`), so it inherits `object_id`, `namespace`, `identity_family`, `schema_version`, `created_at`/`created_epoch`, `updated_at`/`updated_epoch` and `version`, and has none of the memory lineage or reinforcement fields.
+
 ```python
-# musubi/types/thought.py
-
-class Thought(BaseModel):
-    object_id: KSUID
-    namespace: str                      # by convention: always the from_presence's namespace
-    schema_version: int = 1
-
-    content: str = Field(min_length=1, max_length=4000)
-    from_presence: str
-    to_presence: str                    # concrete presence OR "all"
-    channel: str = "default"            # named channel, arbitrary string
-
+class Thought(MusubiObject):
+    state: Literal["provisional", "matured", "archived"] = "provisional"
+    content: str = Field(min_length=1)       # no length cap on the model
+    from_presence: str = Field(min_length=1)
+    to_presence: str = Field(min_length=1)   # concrete presence OR "all"
+    read: bool = False                       # global flag: for unicast, true when recipient reads
+    read_by: list[str] = []                  # per-presence: appended on read
+    channel: str = "default"                 # named channel, arbitrary string
     importance: int = Field(default=5, ge=1, le=10)
-    tags: list[str] = Field(default_factory=list)
-
-    # Read tracking
-    read: bool = False                  # global flag: for unicast, true when recipient reads
-    read_by: list[str] = Field(default_factory=list)  # per-presence: always appended on read
-
-    created_at: datetime
-    created_epoch: float
 
     # Lineage (rare, but supported)
     in_reply_to: KSUID | None = None
-    supersedes: list[KSUID] = Field(default_factory=list)
+    supersedes: list[KSUID] = []
 ```
+
+There is no `tags` field. `namespace` is a `<tenant>/<presence>/thought` namespace.
 
 ## Qdrant layout
 
-Collection: `musubi_thought`.
+Collection: `musubi_thought` (dense + sparse).
 
-Indexes: `namespace`, `object_id`, `from_presence`, `to_presence`, `channel`, `read`, `read_by`, `created_epoch`, `importance`.
+Indexes: the universal set plus `from_presence`, `to_presence`, `channel`, `read`, `read_by`, `in_reply_to` (`src/musubi/store/specs.py:214-221`).
 
 ## Behavior
 
 ### `thought_send`
 
 - Creates a Thought with `read=False`, `read_by=[]`.
-- Embedding is optional — we embed for semantic `thought_history` queries but sending does not require a hot-path embedding wait. An async post-write embed happens if under load.
+- Content is embedded (dense + sparse) on send, for semantic `thought_history` queries. `ThoughtsPlane.send(defer_embedding=True)` stores the thought without vectors; nothing embeds it later.
 
 ### `thought_check`
 
@@ -71,10 +63,11 @@ Returns unread thoughts for `my_presence`. Filter in Qdrant:
 
 ```
 must:
+  namespace = <the namespace asked for>  (exact match)
   to_presence IN [my_presence, "all"]
-  from_presence NOT = my_presence       (don't return your own sends)
 must_not:
   read_by CONTAINS my_presence           (per-presence read state)
+  from_presence = my_presence            (don't return your own sends)
 ```
 
 For unicast (`to_presence != "all"`), the global `read` flag is also an acceptable signal — both are maintained for backward compat.
@@ -89,29 +82,28 @@ Batched via `batch_update_points`.
 
 ### `thought_history`
 
-Semantic search across thoughts for a given presence (as from or to), optionally filtered by channel.
+Search across thoughts in one namespace, filtered by channel (default `default`), and optionally by presence, minimum importance or `in_reply_to`. With a query string it is a semantic search.
 
 ## Channel conventions
 
 - `default` — normal messages.
 - `scheduler` — automated digest + notification.
 - `ops-alerts` — system alerts (degradation, failures).
-- `mentions` — when a thought in another channel @mentions a presence, a copy goes here.
 - Arbitrary custom channels allowed.
 
 Channel filtering is done in query, not storage. We don't partition collections by channel.
 
 ## Isolation
 
-Thoughts follow the standard namespace rules, with one subtlety: a thought sent from `alex/claude-code` to `alex/livekit-voice` is stored with `namespace: alex/claude-code/thought`. The recipient reads it via a query that filters by `to_presence: livekit-voice` — which requires the query to span *namespaces* within the same tenant.
+Thoughts follow the standard namespace rules. `check` and `history` match one namespace exactly (`src/musubi/planes/thoughts/plane.py:173-205`), so a sender and recipient exchange thoughts through a shared thought namespace that both tokens can read, e.g. `alex/shared/thought`; the recipient filters on `to_presence`.
 
-Cross-tenant thoughts are allowed but require the token to carry scope for both tenants. Logged in audit.
+Cross-tenant thoughts are not supported: the plane's `enforce_tenant_scope` flag refuses them, and no multi-tenant scope exists.
 
 ## Test Contract
 
-**Module under test:** `musubi/planes/thoughts/` (direct port of POC `musubi/thoughts.py` with schema upgrades)
+**Module under test:** `src/musubi/planes/thoughts/` (tests in `tests/planes/test_thoughts.py`)
 
-Preserved from POC tests:
+Core:
 
 1. `test_thought_send_creates_unread`
 2. `test_thought_check_returns_unread_only`
@@ -124,7 +116,7 @@ Preserved from POC tests:
 9. `test_thought_history_semantic_match`
 10. `test_thought_history_filters_by_presence`
 
-New for v1:
+Filters, lineage and isolation:
 
 11. `test_thought_channel_filter_applies`
 12. `test_thought_importance_filter_applies`
@@ -132,14 +124,3 @@ New for v1:
 14. `test_thought_namespace_isolation`
 15. `test_cross_tenant_thought_requires_multi_tenant_scope`
 16. `test_thought_embedding_deferred_under_load_does_not_block_send`
-
-## Migration from POC
-
-The POC collection `musubi_thoughts` becomes `musubi_thought` (singular; consistent with other collections). Migration:
-
-1. Create new collection with named vectors + updated index set.
-2. Read POC thoughts, map old payload → new model (set `channel = "default"`, `namespace = from_presence inferred to default tenant`).
-3. Re-embed with named dense + sparse (or copy old dense into `dense_legacy_v0` named vector; see [[11-migration/re-embedding]]).
-4. Alias `musubi_thoughts` → `musubi_thought`.
-
-See `phase-1-schema` for the detailed migration runbook.

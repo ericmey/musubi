@@ -264,3 +264,11 @@ Integration:
 17. `integration: full day simulation — seed corpus, advance clock 24h, assert each scheduled job ran once`
 18. `integration: crash recovery — kill worker mid-synthesis, restart, synthesis completes from cursor`
 19. `integration: ollama-outage scenario — synthesis skips cleanly, maturation skips enrichment, alerts emit`
+
+## Pitfalls
+
+- **Scheduler skew.** If maturation and synthesis overlap, the per-job file locks prevent a double run, but contention slows both. Keep the cron times staggered.
+- **Promotion prompt drift.** LLM output quality varies; keep the promotion prompt under test with golden examples.
+- **Vault write race.** A crash between the vault write and the Qdrant write can leave the two out of sync. Writes are idempotent by `object_id`, and the `vault_reconcile` job repairs drift.
+- **Event write-amplification.** Every transition is one row in the lifecycle sqlite. Nothing purges lifecycle events today, so watch that the table stays bounded.
+- **Promotion-gate tuning.** In the first week the gate is either too loose (floods the vault) or too strict (nothing promotes). Monitor and tune.

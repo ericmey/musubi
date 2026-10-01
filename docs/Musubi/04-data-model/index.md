@@ -4,7 +4,7 @@ section: 04-data-model
 tags: [data-model, schema, section/data-model, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: false
 ---
@@ -28,7 +28,7 @@ Schemas, relationships, lifecycle states. Every memory-like object is defined he
 
 ## Principles
 
-1. **One pydantic model per object type.** Models live in `musubi/types/`. No dict-shaped payloads floating around the codebase.
+1. **One pydantic model per object type.** Models live in `src/musubi/types/`. No dict-shaped payloads floating around the codebase.
 2. **Models are the schema.** We generate JSON Schema + OpenAPI from them. We do not maintain parallel schemas.
 3. **Every model has `schema_version: int`.** Readers are forward-compatible; writers always write latest.
 4. **No optional ID.** Object IDs (KSUID) are assigned at construction; they are never nullable on the wire.
@@ -42,18 +42,19 @@ Schemas, relationships, lifecycle states. Every memory-like object is defined he
 |---|---|---|---|---|
 | `EpisodicMemory` | episodic | Qdrant | — | Adapters via API |
 | `CuratedKnowledge` | curated | Obsidian vault (.md) | Qdrant (`musubi_curated`) | Human via Obsidian; Core via promotion |
-| `SourceArtifact` | artifact | Object store (blob) | Qdrant chunks (`musubi_artifact_chunks`) | Adapters via API (POST /v1/artifacts) |
+| `SourceArtifact` | artifact | Blob files under `ARTIFACT_BLOB_PATH` | Qdrant chunks (`musubi_artifact_chunks`) | Adapters via API (POST /v1/artifacts) |
 | `SynthesizedConcept` | concept | Qdrant (`musubi_concept`) | — | Lifecycle Worker |
 | `Thought` | thought | Qdrant (`musubi_thought`) | — | Adapters via API |
-| `LifecycleEvent` | — (audit) | sqlite (local) + Qdrant mirror | — | Core + Lifecycle Worker |
+| `LifecycleEvent` | — (audit) | sqlite (canonical) | Qdrant mirror `musubi_lifecycle_events` declared, not yet written (`src/musubi/lifecycle/events.py:13-14`) | Core + Lifecycle Worker |
 
 ## Cross-cutting fields
 
-Every object (regardless of plane) has:
+Every object (regardless of plane) has the `MusubiObject` fields (`src/musubi/types/base.py:30-75`):
 
 ```python
-object_id: KSUID                   # 27-char sortable
+object_id: KSUID                   # 27-char sortable; minted at construction
 namespace: str                     # "<tenant>/<presence>/<plane>"
+identity_family: str               # first namespace segment, derived when omitted
 schema_version: int                # current: 1
 created_at: datetime               # UTC
 created_epoch: float               # unix timestamp
@@ -67,7 +68,7 @@ Lifecycle-related fields are detailed in [[04-data-model/lifecycle]].
 
 ## Serialization
 
-- **Wire format**: JSON on HTTP, protobuf on gRPC, both derived from pydantic.
+- **Wire format**: JSON on HTTP, derived from pydantic. There is no other wire format.
 - **Qdrant payload format**: pydantic `.model_dump(mode="json")` — all datetimes as ISO8601, enums as strings, lists as lists.
 - **Markdown frontmatter**: a subset of the model serialized as YAML. See [[04-data-model/vault-schema]].
 
@@ -75,10 +76,10 @@ Lifecycle-related fields are detailed in [[04-data-model/lifecycle]].
 
 Enforced by pydantic + explicit `model_validator`:
 
-- `created_epoch` ≈ `datetime_to_epoch(created_at)` (within 1s).
+- `created_epoch` / `updated_epoch` are filled from the datetimes when omitted; naive datetimes are rejected.
 - `updated_epoch ≥ created_epoch`.
 - `version ≥ 1`.
-- `namespace` matches regex `^[a-z0-9-]+/[a-z0-9-_]+/[a-z]+$`.
+- `namespace` matches `NAMESPACE_RE` (`src/musubi/types/common.py:49-53`): two lowercase segments that start with `[a-z0-9]` and continue with `[a-z0-9_-]`, then a plane, one of `episodic`, `curated`, `concept`, `artifact`, `thought`, `lifecycle`. A segment starting with `_` is rejected.
 - Plane-specific: see individual specs.
 
 ## Migration rules
@@ -86,8 +87,6 @@ Enforced by pydantic + explicit `model_validator`:
 When evolving a schema:
 
 1. **Additive only** for minor versions. New optional field, new optional enum value, new optional relationship.
-2. **Breaking** bumps `schema_version`. Readers must handle all prior versions (forward-compatible). Migration job re-writes old objects to the new version lazily (on next access) or in a background sweep.
+2. **Breaking** bumps `schema_version`. Readers must handle all prior versions (forward-compatible). No migration job exists yet: every payload is still `schema_version: 1` (`src/musubi/types/common.py:26`). When one is needed it rewrites old objects lazily (on next access) or in a background sweep.
 3. **Never rename fields in-place.** Add new field, deprecate old, leave both for one minor version, remove.
 4. **Renames in the vault frontmatter** are handled the same way — but via a one-time migration script committed as an ADR, because human files are involved.
-
-See `schema-evolution`.

@@ -4,7 +4,7 @@ section: 04-data-model
 tags: [data-model, episodic, schema, section/data-model, status/draft, type/spec]
 type: spec
 status: draft
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[04-data-model/index]]"
 reviewed: false
 implements: ["src/musubi/cli/validate.py", "src/musubi/planes/episodic/", "src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/cli/test_validate.py", "tests/planes/test_episodic.py", "tests/types/"]
@@ -15,108 +15,47 @@ Source-first, time-indexed recollection. "At time T, in modality M, between part
 
 ## Pydantic model
 
-```python
-# musubi/types/episodic.py
+The model is `EpisodicMemory` in `src/musubi/types/episodic.py:100-156`. It extends `MemoryObject` (`src/musubi/types/base.py:108-184`), which extends `MusubiObject` (`base.py:30-105`). Read the source for the full field list; the summary below names what is episodic-specific and the defaults that matter.
 
-from datetime import datetime
-from typing import Literal
-from pydantic import BaseModel, Field, model_validator
-from musubi.types.common import KSUID, LifecycleState, ArtifactRef
+Inherited (every memory object): `object_id`, `namespace`, `identity_family`, `schema_version`, `created_at`/`created_epoch`, `updated_at`/`updated_epoch`, `version`, `content` (non-empty), `summary`, `tags`, `importance` (1-10, default 5), `reinforcement_count`, `last_accessed_at`, `access_count`, the lineage fields (`supersedes`, `superseded_by`, `merged_from`, `linked_to_topics`, `supported_by`, `contradicts`, `derived_from`) and the validity fields (`valid_from`, `valid_until` and their epochs).
 
-Modality = Literal["text", "voice-transcript", "tool-call", "system-event"]
+Episodic-specific:
 
-class EpisodicMemory(BaseModel):
-    object_id: KSUID
-    namespace: str                      # e.g., "alex/claude-code/episodic"
-    schema_version: int = 1
+| Field | Type | Default |
+|---|---|---|
+| `state` | `provisional \| matured \| demoted \| archived \| superseded` | `provisional` |
+| `event_at` | `datetime` (UTC) | now; when it happened in the world |
+| `ingested_at` | `datetime` (UTC) | now; when Musubi learned about it |
+| `modality` | `text \| voice-transcript \| tool-call \| system-event` | `text` |
+| `participants` | `list[str]`, e.g. `["admin", "claude-code"]` | `[]` |
+| `source_context` | `str`, freeform origin hint | `""` |
+| `topics` | `list[str]` | `[]` |
+| `importance_last_scored_at` / `importance_last_scored_epoch` | `datetime` / `float` | `None`; set when maturation scores importance |
+| `retraction_evidence` | `RetractionEvidence \| None` | `None`; omitted from serialization when unset (see below) |
 
-    # Core content
-    content: str = Field(min_length=1, max_length=32_000)
-    summary: str | None = Field(default=None, max_length=800)
-    tags: list[str] = Field(default_factory=list)
-    importance: int = Field(default=5, ge=1, le=10)
+There is no `event_epoch` or `last_reinforced_at` on episodic memories. The model is `extra="forbid"`, rejects naive datetimes, and requires `retraction_evidence.artifact_namespace` to be the sibling `<tenant>/<presence>/artifact` namespace.
 
-    # Temporal
-    event_at: datetime                  # UTC; when it actually happened
-    event_epoch: float
-    ingested_at: datetime
-    created_at: datetime
-    created_epoch: float
-    updated_at: datetime
-    updated_epoch: float
-
-    # Lifecycle
-    version: int = 1
-    state: LifecycleState = "provisional"
-    reinforcement_count: int = 0
-    last_reinforced_at: datetime | None = None
-    last_accessed_at: datetime | None = None
-    access_count: int = 0
-
-    # Modality + participants
-    modality: Modality
-    participants: list[str]             # e.g., ["admin", "claude-code"]
-    source_context: str                 # e.g., "Claude Code CLI session 2026-04-17T14:23Z"
-
-    # Relationships
-    supersedes: list[KSUID] = Field(default_factory=list)
-    superseded_by: KSUID | None = None
-    merged_from: list[KSUID] = Field(default_factory=list)
-    linked_to_topics: list[str] = Field(default_factory=list)
-    supported_by: list[ArtifactRef] = Field(default_factory=list)
-    contradicts: list[KSUID] = Field(default_factory=list)
-    derived_from: KSUID | None = None
-
-    @model_validator(mode="after")
-    def _consistency(self):
-        # event_at ≤ ingested_at
-        if self.event_at > self.ingested_at:
-            raise ValueError("event_at cannot be in the future relative to ingested_at")
-        # Lifecycle-valid for this plane
-        if self.state not in {"provisional", "matured", "demoted", "archived"}:
-            raise ValueError(f"invalid state for episodic: {self.state}")
-        # Reinforcement consistency
-        if self.reinforcement_count > 0 and self.last_reinforced_at is None:
-            raise ValueError("last_reinforced_at required when reinforcement_count > 0")
-        return self
-```
+Write-time checks that the model itself does not enforce live in `EpisodicPlane.create` (`src/musubi/planes/episodic/plane.py:219-226`): content over 32 KiB (UTF-8) is refused with a pointer to the artifact plane, and an `event_at` in the future is refused.
 
 ## Qdrant layout
 
 Collection: `musubi_episodic` (shared across tenants).
 
 **Named vectors:**
-- `dense_bge_m3_v1` (1024-d, COSINE) — embedding of `content` (or `summary` if present and content > 2048 tokens).
-- `sparse_splade_v1` (sparse) — SPLADE++ sparse embedding of same.
+- `dense_bge_m3_v1` (1024-d, COSINE) — embedding of `summary` when present, otherwise `content`.
+- `sparse_splade_v1` (sparse) — SPLADE++ sparse embedding of the same text.
 
-**Payload indexes:**
-
-| Field | Type | Purpose |
-|---|---|---|
-| `namespace` | KEYWORD | tenant/presence/plane scoping |
-| `object_id` | KEYWORD | lookup by id |
-| `state` | KEYWORD | filter out demoted/provisional in default reads |
-| `modality` | KEYWORD | filter voice vs text etc. |
-| `tags` | KEYWORD | tag queries |
-| `linked_to_topics` | KEYWORD | topical retrieval |
-| `event_epoch` | FLOAT | recency queries |
-| `ingested_epoch` | FLOAT | "what did we learn recently" |
-| `updated_epoch` | FLOAT | dedup-visibility for recent queries |
-| `created_epoch` | FLOAT | audit |
-| `importance` | INTEGER | threshold filters |
-| `reinforcement_count` | INTEGER | promotion eligibility |
-| `access_count` | INTEGER | reflect modes (stale / frequent) |
-| `participants` | KEYWORD | who-was-involved queries |
+**Payload indexes:** the universal set plus the episodic deltas in `src/musubi/store/specs.py:138-173`. See [[04-data-model/qdrant-layout#Payload indexes]] for the table. Fields not in that list (for example `modality`, `participants`, `event_at`) are stored but not indexed.
 
 ## Storage semantics
 
 - On `create`: always `state = "provisional"`. `version = 1`. `reinforcement_count = 0`.
-- On `dedup hit` (semantic similarity ≥ 0.92 to an existing point in same namespace): **update existing**, do not create new. Merge tags (union), update `content` (new text wins — we assume new is more current), bump `reinforcement_count`, update `updated_at` / `updated_epoch` and `last_reinforced_at`. Increment `version`.
+- On a dedup candidate (dense cosine similarity ≥ 0.92 to an existing point in the same namespace, `plane.py:70`): merge only if the two are factually compatible — normalized content (NFKC, casefolded, whitespace-collapsed, trailing punctuation stripped) is equal **and** the participant sets are equal (`plane.py:133-152`). A compatible hit updates the existing row instead of inserting: union of tags, `reinforcement_count + 1`, `version + 1`, `updated_at` / `updated_epoch` bumped. Content follows the merge strategy, default `longer-wins` (keep whichever text is strictly longer). An incompatible near-match is inserted as a new row.
 - On `maturation` (hourly job): if `state == "provisional"` and `created_epoch < now - 1h`, score importance via LLM, normalize tags, set `state = "matured"`.
-- On `demotion` (weekly job or explicit): `state = "demoted"`, `updated_at` bumped, `version++`. Point remains queryable only with explicit `include_demoted=true`.
-- On `archival`: `state = "archived"`. Removed from default index behaviors; still in snapshots.
+- On `demotion` (weekly job or explicit): `state = "demoted"`, `updated_at` bumped, `version++`. Default retrieval returns only `matured` and `promoted` rows; a demoted row comes back only when the caller asks for it (`state_filter`, or `include_archived: true` in `fast` mode; see `src/musubi/api/routers/retrieve.py:119-160`).
+- On `archival`: `state = "archived"`. Excluded from default retrieval the same way; still in snapshots.
 
-Never deleted except via explicit `DELETE /v1/episodic-memories/{id}` (operator scope only).
+Deletion is `DELETE /v1/episodic/{id}?namespace=...` (`src/musubi/api/routers/writes_episodic.py:544-600`). It needs write scope on the namespace and is a soft delete by default: a `transition()` to `archived`, which the transition table allows only from `provisional`. `?hard=true` requires operator scope and removes the point from Qdrant entirely, recording a LifecycleEvent.
 
 ### Escrow-backed retraction evidence
 
@@ -178,12 +117,14 @@ declares that optional shape.
 
 See [[07-interfaces/canonical-api]]. Relevant endpoints:
 
-- `POST /v1/episodic` — create.
+- `POST /v1/episodic` — create (202).
+- `POST /v1/episodic/batch` — batch create.
+- `GET /v1/episodic` — list a namespace, paged.
 - `GET /v1/episodic/{id}` — fetch.
 - `PATCH /v1/episodic/{id}` — metadata edits; v2 projection replacement is refused.
 - `POST /v1/episodic/{id}/retract` — escrow exact original bytes, then commit a
   bounded evidence-bearing tombstone without re-embedding.
-- `DELETE /v1/episodic/{id}` — soft archive.
+- `DELETE /v1/episodic/{id}` — soft archive; `?hard=true` with operator scope removes the point.
 - `POST /v1/retrieve` — scored retrieval across eligible planes.
 
 Create content is capped at 32 KiB. The retraction route remains available for
@@ -197,7 +138,9 @@ rather than truncated.
 
 ## Test Contract
 
-**Module under test:** `musubi/planes/episodic/`
+**Module under test:** `src/musubi/planes/episodic/`
+
+Behaviour checklist; the implemented tests are in `tests/planes/test_episodic.py` (it lists the bullets it covers).
 
 Required tests:
 
@@ -206,10 +149,10 @@ Required tests:
 3. `test_create_rejects_future_event_at`
 4. `test_create_populates_created_and_updated_identically`
 5. `test_create_auto_embeds_dense_and_sparse_vectors`
-6. `test_create_dedup_hit_updates_existing_instead_of_inserting`
+6. `test_create_dedup_hit_updates_existing_instead_of_inserting` (compatible hit only)
 7. `test_create_dedup_hit_merges_tags`
 8. `test_create_dedup_hit_bumps_reinforcement_count_and_version`
-9. `test_create_dedup_hit_updates_content_with_new_text`
+9. `test_create_dedup_hit_keeps_longer_content`
 10. `test_create_dedup_below_threshold_creates_new`
 11. `test_create_dedup_threshold_is_per_plane_configurable`
 12. `test_maturation_sets_matured_after_ttl_and_scores_importance`
@@ -227,24 +170,23 @@ Required tests:
 24. `test_delete_creates_audit_event`
 25. `test_query_hybrid_returns_scored_results_in_descending_order`
 26. `test_query_respects_state_filter_default_excludes_provisional`
-27. `test_query_respects_include_demoted_flag`
-28. `test_forward_compat_reads_schema_version_0_point`  (POC-compatibility)
+27. `test_query_returns_demoted_only_when_requested`
 
 Edge cases:
 
-29. `test_content_over_32kb_rejected_with_suggestion_to_use_artifact`
-30. `test_concurrent_dedup_race_resolves_to_single_winner`  (two parallel creates with near-identical content; one wins, one reinforces)
-31. `test_vector_dimension_mismatch_rejected_with_clear_error`
+28. `test_content_over_32kb_rejected_with_suggestion_to_use_artifact`
+29. `test_concurrent_dedup_race_resolves_to_single_winner`  (two parallel creates with near-identical content; one wins, one reinforces)
+30. `test_vector_dimension_mismatch_rejected_with_clear_error`
 
 Performance:
 
-32. `test_perf_create_under_100ms_p95_on_reference_host` (integration test)
-33. `test_perf_dedup_query_under_30ms_p95`
+31. `test_perf_create_under_100ms_p95_on_reference_host` (integration test)
+32. `test_perf_dedup_query_under_30ms_p95`
 
 Property tests:
 
-34. `hypothesis: idempotency — re-ingesting same content N times produces 1 memory with reinforcement_count == N`
-35. `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
+33. `hypothesis: idempotency — re-ingesting same content N times produces 1 memory with reinforcement_count == N`
+34. `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
 
 ## Prior art
 

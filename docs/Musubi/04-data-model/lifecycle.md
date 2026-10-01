@@ -4,7 +4,7 @@ section: 04-data-model
 tags: [data-model, lifecycle, section/data-model, state-machine, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[04-data-model/index]]"
 reviewed: false
 implements: ["tests/lifecycle/__init__.py", "tests/lifecycle/test_lifecycle.py"]
@@ -16,7 +16,7 @@ The state machine for every memory object. Transitions are explicit, auditable, 
 ## States
 
 ```python
-# musubi/types/common.py
+# src/musubi/types/common.py:29-37
 
 LifecycleState = Literal[
     "provisional",   # just captured; not eligible for deep retrieval
@@ -28,6 +28,8 @@ LifecycleState = Literal[
     "superseded",    # replaced by a newer version; lineage link set
 ]
 ```
+
+The legal transitions per object type are the `_ALLOWED` table in `src/musubi/types/lifecycle_event.py:32-62`. That table is the authority; the diagrams below are a reading of it.
 
 ## Allowed transitions per type
 
@@ -53,142 +55,157 @@ archived ──(restore)───► matured   (operator scope)
 ```
 matured  (starting state — no provisional for curated)
   │
-  ├──(promotion; ARE we a promoted one?)──► matured            # flag promoted_from; state unchanged
-  │
   ├──(rewrite via supersession)──► superseded
   │
   └──(file deletion)──► archived
+
+archived ──(restore)───► matured   (operator scope)
 ```
 
-Note: CuratedKnowledge doesn't have `promoted` as a state — `promoted` is a concept's state. When a concept is promoted, it stays in `promoted` state; a CuratedKnowledge object is created in `matured` state with `promoted_from: <concept-id>`.
+CuratedKnowledge has no `promoted` state. When a concept is promoted, the concept moves to `promoted`; a new CuratedKnowledge object is created in `matured` with `promoted_from: <concept-id>` and `promoted_at` set.
 
 ### SynthesizedConcept
 
 ```
-synthesized ──(24h, no contradiction)──► matured
-   │                                       │
-   │                                       ├──(promotion gate passes)──► promoted
-   │                                       │
-   │                                       ├──(decay rule)──► demoted
-   │                                       │
-   │                                       └──(supersession)──► superseded
-   │
-   └──(contradiction flagged)──► synthesized  # blocked from maturing until resolved
+synthesized ──(24h AND reinforcement_count ≥ 3 AND no contradictions)──► matured
+                                          │
+                                          ├──(promotion gate passes)──► promoted   (terminal)
+                                          │
+                                          ├──(decay rule)──► demoted
+                                          │
+                                          └──(supersession)──► superseded
+
+demoted ──(reinstate)──► matured   (operator scope)
 ```
+
+A concept with a non-empty `contradicts` list, or with fewer than 3 reinforcements, stays `synthesized` (`src/musubi/lifecycle/maturation.py:813-826`).
 
 ### SourceArtifact
 
-```
-indexing ──► indexed   (happy path)
-indexing ──► failed    (chunking or embedding error)
-indexed ──(explicit)──► archived
-```
+Artifacts have two independent axes:
 
-Artifacts also use `state: matured` throughout their useful life (separate from `artifact_state`). This is a second-axis state: `state` is the lifecycle axis; `artifact_state` is the indexing axis.
+- **Lifecycle axis (`state`):** `matured → archived` or `matured → superseded`. Both targets are terminal.
+- **Indexing axis (`artifact_state`, `src/musubi/types/common.py:39`):** `indexing → indexed`, `indexing → failed`, or `stored_unindexed` (bytes stored, never indexed). It is not governed by `transition()`.
+
+An artifact is typically `state: matured` its whole life and moves only on the indexing axis. The `demotion_artifact` sweep archives old, unreferenced artifacts only when `MUSUBI_ARTIFACT_ARCHIVAL_ENABLED` is set.
+
+### Thought
+
+```
+provisional ──► matured ──► archived
+     └────────────────────► archived
+```
 
 ## Transition function
 
-Every state change goes through `musubi/lifecycle/transitions.py`:
+Every state change goes through `src/musubi/lifecycle/transitions.py:163-176`:
 
 ```python
 def transition(
     client: QdrantClient,
     *,
+    coordinator: LifecycleTransitionCoordinator,
     object_id: KSUID,
     target_state: LifecycleState,
-    actor: str,                         # presence doing the transition
-    reason: str,                        # short human-readable reason
-    lineage_updates: LineageUpdates = None,  # optional: set supersedes, merged_from, etc.
-) -> Result[TransitionResult, TransitionError]:
+    actor: str,                         # presence or system id doing the transition
+    reason: str,                        # short human-readable reason, required
+    lineage_updates: LineageUpdates | None = None,
+    correlation_id: str = "",
+    sink: LifecycleEventSink | None = None,   # compatibility only; the coordinator persists events
+    expected_version: int | None = None,      # optimistic fence
+    namespace: str | None,                    # required; None means "unqualified lookup"
+) -> Result[TransitionResult | TransitionPending, TransitionError]:
     ...
 ```
 
 Behavior:
-1. Fetch current object.
-2. Validate `(current_state, target_state)` is an allowed transition for the object's type.
-3. Apply transition: update `state`, bump `updated_at` / `updated_epoch`, `version++`.
-4. Apply lineage updates (supersession links, merge-in sources, etc.).
-5. Emit a `LifecycleEvent` audit row (see below).
-6. Return `Ok(TransitionResult)`.
+1. Locate the object across the plane collections. An id that resolves to more than one row is refused (`ambiguous_object_id`), never guessed.
+2. If `expected_version` is given and does not match, return `version_fence_violation`.
+3. Validate `(current_state, target_state)` against the allowed-transition table.
+4. Apply lineage updates (`superseded_by`, `supersedes`, `merged_from`, `contradicts`, `promoted_to`, `promoted_at`) and reject supersession cycles.
+5. Hand the intent to the coordinator, which applies the version-fenced mutation (`state`, `updated_at` / `updated_epoch`, `version + 1`) and persists the `LifecycleEvent`.
+6. Return `Ok(TransitionResult)`, `Ok(TransitionPending)` when the coordinator defers, or `Err(TransitionError)`.
 
-Invalid transitions return `Err(InvalidTransitionError(from, to, allowed))`.
+`TransitionError.code` is one of `not_found`, `illegal_transition`, `missing_reason`, `circular_supersession`, `invariant_violation`, `lifecycle_event_write_failed`, `version_fence_violation`, `ambiguous_object_id` (`transitions.py:112-160`). An invalid transition never mutates the payload.
 
 ## LifecycleEvent (audit log)
 
-Every transition produces an event:
+Every transition produces an event. The model is `LifecycleEvent` in `src/musubi/types/lifecycle_event.py:95-140`:
 
 ```python
 class LifecycleEvent(BaseModel):
     event_id: KSUID
     object_id: KSUID                    # subject
+    object_type: str                    # episodic | curated | concept | artifact | thought
     namespace: str
+    schema_version: int
     from_state: LifecycleState
     to_state: LifecycleState
-    actor: str                          # presence
+    actor: str                          # presence or system id
     reason: str
     occurred_at: datetime
     occurred_epoch: float
-    lineage_changes: dict               # e.g., {"supersedes_added": [KSUID]}
-    correlation_id: str                 # request correlation ID
+    lineage_changes: dict               # e.g., {"superseded_by": KSUID}
+    correlation_id: str                 # request correlation ID; "" for background jobs
 ```
 
+The model validator rejects an event whose `(from_state, to_state)` is illegal for its `object_type`. A sibling `CaptureEvent` (same file) records an object's initial creation.
+
 Stored in:
-- **sqlite** at `/srv/musubi/lifecycle-state/events.db` (local, canonical).
-- **Qdrant mirror** `musubi_lifecycle_events` (optional; for semantic search across the audit log — useful in reflection).
+- **sqlite** at `LIFECYCLE_SQLITE_PATH` (default `/var/lib/musubi/lifecycle/work.sqlite`, `.env.example:38`). This is the canonical store (`src/musubi/lifecycle/runner.py:575-576`).
+- **Qdrant mirror** `musubi_lifecycle_events`: the collection and its indexes are declared in `src/musubi/store/specs.py`, but nothing writes to it yet (`src/musubi/lifecycle/events.py:13-14`). Planned, not implemented.
 
 ## Invariants
 
 Enforced in pydantic `model_validator` or at transition time:
 
-1. `state` must be in the allowed set for the object's type.
-2. `state == "promoted"` requires `promoted_at` and `promoted_to` set (for concepts) or `promoted_from` (for the resulting curated).
-3. `state == "superseded"` requires `superseded_by` to reference a live, same-type object in the same namespace.
-4. `state == "demoted"` must have a `demoted_reason` in the lineage event.
-5. `version` never decreases.
-6. `updated_epoch` never decreases.
-7. Circular supersession is rejected (A → B → A).
-8. `merged_from` for a non-concept object is allowed but rare; logged and flagged in audit.
+1. `state` must be in the allowed set for the object's type (the `state` `Literal` on each model, plus the transition table).
+2. A concept in `promoted` requires `promoted_to` and `promoted_at` (`src/musubi/types/concept.py:65-66`). A curated object with `promoted_from` requires `promoted_at` (`src/musubi/types/curated.py:46-50`).
+3. Every transition requires a non-empty `reason` (`missing_reason`).
+4. `version ≥ 1`; each transition increments it.
+5. `updated_epoch ≥ created_epoch`.
+6. Circular supersession is rejected (A → B → A), and an object cannot supersede itself (`src/musubi/types/base.py:179-182`).
 
 ## Decay rules (Lifecycle Worker)
 
-Scheduled jobs apply these:
+Scheduled jobs apply these. Times are UTC cron triggers (`src/musubi/lifecycle/maturation.py`, `src/musubi/lifecycle/demotion.py`); [[06-ingestion/lifecycle-engine]] has the full job registry.
 
-### Episodic maturation (hourly)
+### Episodic maturation (hourly, at :13)
 - Select `state == "provisional"` AND `created_epoch < now - 1h`.
-- For each: score importance via Ollama, normalize tags, transition to `matured`.
+- For each: score importance via the LLM, normalize tags, transition to `matured`.
 
-### Episodic demotion (weekly)
+### Episodic provisional TTL (hourly, at :17)
+- Select `state == "provisional"` AND `created_epoch < now - 7d`.
+- Transition to `archived` (never matured; probably noise). Reason: `provisional-ttl`.
+
+### Episodic demotion (weekly, Sunday 03:45)
 - Select `state == "matured"` AND `access_count == 0` AND `reinforcement_count == 0` AND `updated_epoch < now - 60d` AND `importance < 4`.
 - Transition to `demoted`. Reason: `decay-rule:untouched-low-importance`.
 
-### Episodic provisional TTL (hourly)
-- Select `state == "provisional"` AND `created_epoch < now - 7d`.
-- Transition to `archived` (never matured; probably noise).
-
-### Concept maturation (daily)
-- Select `state == "synthesized"` AND `created_epoch < now - 24h` AND no active contradictions.
+### Concept maturation (daily, 03:30)
+- Select `state == "synthesized"` AND `created_epoch < now - 24h` AND `reinforcement_count ≥ 3` AND empty `contradicts`.
 - Transition to `matured`.
 
-### Concept demotion (daily)
-- Select `state == "matured"` AND `last_reinforced_at < now - 30d`.
+### Concept demotion (daily, 05:00)
+- Select `state == "matured"` AND `last_reinforced_epoch < now - 30d` (or, if never reinforced, `created_epoch < now - 30d`).
 - Transition to `demoted`. Reason: `decay-rule:no-reinforcement`.
 
-All rules have hand-tunable thresholds in `config.py` with sensible defaults.
+Thresholds: the maturation thresholds are fields of `MaturationConfig` (`src/musubi/lifecycle/maturation.py:297-316`), overridable at `build_maturation_jobs(config=...)`; the demotion thresholds are module constants (`src/musubi/lifecycle/demotion.py:30-34`). None of them is an environment setting yet.
 
 ## "No silent mutation" rule
 
 It is an invariant of Musubi that **every state change produces a LifecycleEvent**. This means:
 
-- Every Qdrant point update that changes `state` or `version` must be paired with an event row.
-- The API's PATCH endpoints produce events.
+- Every Qdrant point update that changes `state` must go through `transition()` and its coordinator, which pairs it with an event row.
+- The API's state-changing endpoints produce events.
 - Background jobs produce events.
-- Events are batched to sqlite; flushed at most every 5s or every 100 events.
+- `LifecycleEventSink.record()` commits each event to sqlite synchronously and returns `Ok` only after the commit; there is no batching or background flusher (`src/musubi/lifecycle/events.py:6-9`).
 
-If a coder writes `set_payload` directly bypassing `transition()`, they've violated the rule. There's a lint rule + an integration test that scrolls recent Qdrant updates and checks for matching events.
+Writing `set_payload` on `state` directly, bypassing `transition()`, violates the rule.
 
 ## Test Contract
 
-**Module under test:** `musubi/lifecycle/transitions.py`, `musubi/lifecycle/states.py`
+**Module under test:** `src/musubi/lifecycle/transitions.py`, `src/musubi/types/lifecycle_event.py` (tests in `tests/lifecycle/test_lifecycle.py`)
 
 1. `test_valid_transition_succeeds_and_emits_event`
 2. `test_invalid_transition_returns_typed_error`
@@ -202,14 +219,15 @@ If a coder writes `set_payload` directly bypassing `transition()`, they've viola
 10. `test_concept_maturation_blocked_by_contradiction`
 11. `test_concept_promotion_sets_all_required_fields`
 12. `test_event_written_for_every_transition`
-13. `test_concurrent_transitions_last_writer_wins_with_logged_warning`  (we accept last-write-wins for v1; conflicts are rare and surface in audit)
-14. `test_event_batch_flushed_within_5s_under_load`
-15. `test_sqlite_event_db_survives_worker_restart`  (events persist across crashes)
+13. `test_concurrent_transitions_stale_expected_version_fence_violation` (a stale `expected_version` is refused, not last-writer-wins)
+14. `test_sqlite_event_db_survives_worker_restart`  (events persist across crashes)
+
+Bullets 7-11 are currently `skip`-marked in that file and covered by the per-sweep test modules (`tests/lifecycle/test_maturation.py`, `test_demotion.py`, `test_promotion.py`).
 
 Property tests:
 
-16. `hypothesis: state-machine reachability — every declared allowed transition is reachable from some state; no state is orphaned`
-17. `hypothesis: monotone invariants — version, updated_epoch never decrease across any sequence of legal transitions`
+15. `test_hypothesis_state_machine_reachability` — every declared allowed transition is reachable from some state; no state is orphaned.
+16. `test_hypothesis_monotone_invariants` — version, updated_epoch never decrease across any sequence of legal transitions.
 
 ## Why this much ceremony
 
