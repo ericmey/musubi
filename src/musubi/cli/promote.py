@@ -30,7 +30,7 @@ promote_app = typer.Typer(help="Concept promotion and rejection.", no_args_is_he
 def force_promote(
     concept_id: str = typer.Argument(..., help="KSUID of the synthesized concept to promote."),
     namespace: str = typer.Option(
-        ..., "--namespace", help="Concept's namespace (eg. `nyla/voice/concept`)."
+        ..., "--namespace", help="Concept's namespace (eg. `example/assistant/concept`)."
     ),
     curated_id: str = typer.Option(
         ...,
