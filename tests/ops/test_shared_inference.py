@@ -154,24 +154,22 @@ def test_log_privacy_probe_uses_the_curl_image_entrypoint_once() -> None:
 
 def test_consumers_receive_distinct_runtime_credentials() -> None:
     secrets = SECRETS.read_text()
-    assert "musubi-v2:op://" in secrets
-    assert "chord:op://" in secrets
-    assert "op://" in secrets
-    assert not secrets.startswith("#")
+    assert "musubi_shared_inference_auth_consumers" in secrets
+    assert "consumer.name" in secrets and "consumer.ref" in secrets
+    assert "musubi-v2:" not in secrets and "chord:" not in secrets
     compose = INFERENCE_COMPOSE.read_text()
     assert "/run/shared-inference-secrets/shared-inference.htpasswd" in compose
     app_secrets = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
-        assert re.search(rf"^{key}=op://", app_secrets, re.M)
-    assert "musubi_v2_username" in app_secrets
-    assert "musubi_v2_password" in app_secrets
+        assert re.search(rf"^{key}=\{{\{{ refs\.", app_secrets, re.M)
+    assert "refs.tei_basic_auth_username" in app_secrets
+    assert "refs.tei_basic_auth_password" in app_secrets
 
 
 def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> None:
     transition = TRANSITION_HTPASSWD.read_text()
-    assert "musubi:op://" in transition
-    assert "musubi-v2:op://" in transition
-    assert "chord:op://" in transition
+    assert "musubi_shared_inference_transition_consumers" in transition
+    assert "consumer.name" in transition and "consumer.ref" in transition
 
     playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
     tasks = playbook[0]["tasks"]
@@ -738,7 +736,7 @@ def test_migration_requires_the_private_tls_hostname() -> None:
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:
     env = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
-        assert re.search(rf"^{key}=op://", env, re.M)
+        assert re.search(rf"^{key}=\{{\{{ refs\.", env, re.M)
     assert all(
         f"{key}=" not in ENV.read_text()
         for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL")

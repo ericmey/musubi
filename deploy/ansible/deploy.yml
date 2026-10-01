@@ -53,6 +53,9 @@
           internal Docker alias matches the certificate without publishing live
           topology in this repository.
 
+    - name: Validate operator-owned secret references and consumers
+      ansible.builtin.import_tasks: validate-operator-refs.yml
+
   tasks:
     - name: Create the private shared inference network
       ansible.builtin.shell:

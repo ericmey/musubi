@@ -136,7 +136,14 @@ host must have the 1Password CLI at `/usr/bin/op` and a root-owned `0600`
 Every runtime playbook fails closed when that file is absent or has the wrong
 owner or mode.
 
-The committed templates contain references, not credential values:
+The committed templates take operator-owned 1Password item references and
+shared-inference consumer rows from `musubi_op_refs`,
+`musubi_shared_inference_auth_consumers`, and (for the one-time auth migration)
+`musubi_shared_inference_transition_consumers` in the private
+`inventory-vars.yml`. The setup script creates empty fields so a new deployment
+must supply its own references and consumer names. Missing or empty inputs fail
+template rendering. The rendered files still contain references, not credential
+values:
 
 - `secrets.tpl` is resolved by `op run` into the Compose process environment.
 - `qdrant.token.tpl` is resolved by `op inject` into

@@ -54,6 +54,9 @@
       changed_when: false
       check_mode: false
 
+    - name: Validate operator-owned secret references and consumers
+      ansible.builtin.import_tasks: validate-operator-refs.yml
+
     # ---- Prereqs for adding third-party apt sources ---------------------
     - name: Install prerequisites for adding third-party apt repos
       ansible.builtin.apt:
