@@ -4,20 +4,20 @@ section: 05-retrieval
 tags: [dense, hybrid, retrieval, rrf, section/retrieval, sparse, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
 implements: "tests/retrieve/test_hybrid.py"
 ---
 # Hybrid Search
 
-Dense + sparse, fused server-side by Reciprocal Rank Fusion. Every retrieval in Musubi goes through this — fast path, deep path, blended cross-plane — all start with the same hybrid step.
+Dense + sparse, fused server-side by Reciprocal Rank Fusion. Every ranked retrieval in Musubi goes through this — fast, deep and blended all start with the same hybrid step (`src/musubi/retrieve/hybrid.py`). Only `recent` mode skips it.
 
 ## Why hybrid (not just dense)
 
-Dense embeddings (BGE-M3) are strong on **semantic** matches — "tell me about GPU setup" pulls files about CUDA, drivers, nvidia-container-toolkit even when none of those words match the query.
+Dense embeddings (BGE-M3) are strong on **semantic** matches — "how do we ship a release" pulls notes about deploy checklists and rollbacks even when none of those words match the query.
 
-Sparse embeddings (SPLADE++) are strong on **lexical** matches — a rare token like `nvidia-container-toolkit` hits the exact file that mentions it by name, even when semantic similarity is weak.
+Sparse embeddings (SPLADE) are strong on **lexical** matches — a rare token like an error code or a package name hits the exact note that mentions it, even when semantic similarity is weak.
 
 Neither is a superset of the other. A BEIR-style evaluation ([https://arxiv.org/abs/2104.08663](https://arxiv.org/abs/2104.08663)) consistently shows hybrid + RRF at 2–7 points NDCG@10 above either alone on heterogeneous corpora. Our corpus is heterogeneous (code, prose, transcripts, runbooks), so hybrid pays.
 
@@ -25,13 +25,13 @@ See [[13-decisions/0005-hybrid-search]] for the decision record.
 
 ## Models
 
-**Dense**: BGE-M3 (1024-d, cosine). Runs on GPU via Text Embeddings Inference (TEI). April 2026 model: `BAAI/bge-m3` — multilingual, 8K context, strong both on short queries and long passages.
+**Dense**: BGE-M3 (`BAAI/bge-m3`, 1024-d, cosine) via Text Embeddings Inference (TEI) — multilingual, 8K context, strong both on short queries and long passages.
 
-**Sparse**: SPLADE++ V3 (`naver/splade-cocondenser-ensembledistil` or later). Produces term-weight dictionaries. Fits in ~700MB VRAM on the RTX 3080.
+**Sparse**: SPLADE v3 (`naver/splade-v3`, the `SPARSE_MODEL` default in `.env.example`) via TEI. Produces term-weight dictionaries. Fits in ~700 MB VRAM on the measured reference host (RTX 3080 10 GB).
 
 Both models are pinned in TEI at boot (see [[08-deployment/gpu-inference-topology]]).
 
-Why not e5 or GTE? BGE-M3 beats both on BEIR at similar size, and its sparse companion (BGE-M3 itself can emit sparse vectors) is an option — but SPLADE++ V3 outperforms BGE-M3's sparse head on retrieval quality in our April 2026 benchmarks. We use SPLADE++ for sparse.
+Why not e5 or GTE? BGE-M3 is competitive with both on BEIR at similar size. BGE-M3 can also emit sparse vectors itself; we use a dedicated SPLADE model for the sparse channel instead.
 
 ## Fusion: server-side RRF
 
@@ -89,41 +89,23 @@ not silently turn an unavailable requested mode into an empty query.
 
 ## Configuring the prefetch step
 
-Each prefetch `limit` is 50 (configurable, `HYBRID_PREFETCH_LIMIT`). Rationale:
+Each prefetch `limit` is 50: the module constant `HYBRID_PREFETCH_LIMIT` in `src/musubi/retrieve/hybrid.py`. Callers can pass `prefetch_limit` to `hybrid_search`; there is no settings field for it. Rationale:
 
 - Too low: poor recall — RRF can't lift a hit into top-20 if neither ranker returned it.
-- Too high: latency bloat for no retrieval gain past ~50 (diminishing returns per BEIR tests).
-- 50 balances p50 latency (~60ms on the reference host for both prefetches in parallel) with recall.
+- Too high: latency bloat for diminishing retrieval gain.
+- 50 balances latency with recall.
 
-The final `limit` (20 by default) is the returned result count after fusion.
+The final `limit` is the returned result count after fusion; the fast and deep paths pass their own (see [[05-retrieval/fast-path]], [[05-retrieval/deep-path]]).
 
 ## Query encoding
 
-Query encoding happens in the Core, not in TEI (which is model inference only):
-
-```python
-async def encode_query(text: str) -> tuple[list[float], SparseVector]:
-    dense_task = tei_client.embed_dense(model="bge-m3", text=text)
-    sparse_task = tei_client.embed_sparse(model="splade-v3", text=text)
-    dense, sparse = await asyncio.gather(dense_task, sparse_task)
-    return dense, sparse
-```
-
-Parallel HTTP calls to TEI. Both return ~30ms on hot cache for short queries.
+Core asks TEI for both encodings concurrently (`_encode_query` in `src/musubi/retrieve/hybrid.py`): the dense and sparse requests are started as separate tasks and awaited together. If a `sparse_timeout_s` is set and the sparse request exceeds it, the query continues dense-only with a `sparse_embedding_failed` warning. A dense failure, or a non-timeout sparse failure, is an error (`dense_embedding_failed` / `sparse_embedding_failed`). A collection without a sparse vector skips the sparse request.
 
 ## Caching
 
-A small query-embedding cache in Core:
+`QueryEmbeddingCache` is an in-process LRU (default `maxsize=10_000`), keyed on the raw query text and tagged with a model version; changing the model version clears it. It is not normalised (lowercasing changes embeddings).
 
-```python
-# In-memory LRU, 10K entries
-@lru_cache(maxsize=10_000)
-def query_embedding_cache(query_text: str) -> tuple[list[float], SparseVector]: ...
-```
-
-Hit rate is meaningful for assistant-y workloads — users repeat "what's on my plate today" type queries. Cache is keyed on the raw query text; we don't normalize (lowercasing changes embeddings). Misses fall through to TEI.
-
-Cache invalidation: model swap → cache cleared at boot. Not something we need runtime invalidation for.
+**The cache is per request, not process-wide.** The fast path creates a new cache for each `run_fast_retrieve` call, so the plane searches inside that call share one encoding; the deep path and the orchestrator pass no cache at all. Nothing keeps embeddings across requests, so a repeated query re-encodes.
 
 ## Filter pushdown
 
@@ -133,50 +115,43 @@ Most-frequent filter: `namespace` (always set). Index hit rate on this field mus
 
 > **Decision — #510 supersedes #332, for retrieval of a CONCRETE target only.** `namespace` is the **exact** deployment namespace (`tenant/presence/plane`); a concrete target returns only that presence's rows. The `identity_family` federation introduced by #332 (scoping to the first path segment so every presence of one identity was cross-visible) is reversed here for concrete-target retrieval. Cross-presence / identity-family retrieval is still supported, but ONLY when the request explicitly resolves to multiple concrete `namespace_targets` — i.e. a wildcard like `sam/*/episodic` expanded upstream by `retrieve._expand_wildcard_targets`, each concrete leg exact-filtered and unioned. **Unchanged:** wildcard-expanded multi-target retrieval, scope/auth wildcard matching, and lifecycle **synthesis** family federation (`lifecycle/synthesis.py`), which is intentionally identity-scoped. No ADR (per the routing decision); this note + Issue #510 + the discrimination tests are the record.
 
-Secondary filters: `state IN (matured, promoted)`, `tags`, `topics`, `created_epoch BETWEEN ...`. All indexed; see [[04-data-model/qdrant-layout]].
+Secondary filter on ranked queries: lifecycle `state` (default `matured`, `promoted`; `include_archived` with no explicit `state_filter` removes the state restriction). For the episodic and curated collections, `state` is applied after the point is resolved to its authoritative row, and curated also applies its validity window there. `tags` and `since` are consumed only by `recent` mode. Indexes: see [[04-data-model/qdrant-layout]].
 
 ## Multi-collection queries
 
-Hybrid search is per-collection. When a `RetrievalQuery.planes` spans multiple, we **fan out** one query per collection in parallel, then **merge and re-score** in Core. See [[05-retrieval/blended]].
+Hybrid search is per-collection. When a request spans multiple planes, Core **fans out** one query per collection in parallel and merges in Core. See [[05-retrieval/orchestration]] and [[05-retrieval/blended]].
 
 Why not one Qdrant query over multiple collections? Qdrant doesn't support cross-collection search in a single call; collections are independent indexes. Fan-out + merge is our answer.
 
 ## Query timeouts
 
-Every hybrid call has a hard timeout:
+Every hybrid call has a timeout:
 
-- Fast path: 250ms per-collection
-- Deep path: 1500ms per-collection
+- Fast path: `retrieval_fast_plane_timeout_s` (default 0.25 s) per collection.
+- Deep path: 1.5 s per collection, with sparse encoding bounded at 1.0 s.
 
-On timeout: return what we have (empty if no prefetch has completed), log a `retrieval.timeout` metric, fall back to dense-only if sparse is the slow path. We don't block on a slow sparse vector encode — the user gets *something* under budget.
+The two timeouts behave differently:
+
+- **Qdrant query timeout** → the call returns the error `qdrant_timeout`, never an empty success. The caller turns it into a `plane_timeout_<plane>` warning if other planes survived.
+- **Sparse encoding timeout** → the call continues **dense-only** and carries a `sparse_embedding_failed` warning. We don't block on a slow sparse encode.
 
 ## Local-inference budgets
 
-TEI + our reference host:
-
-| Operation | p50 | p95 | Notes |
-|---|---|---|---|
-| BGE-M3 encode (query, ≤ 64 tokens) | 20ms | 45ms | warm, INT8 quant |
-| SPLADE++ encode (query) | 25ms | 55ms | warm |
-| Both in parallel | 30ms | 60ms | dominated by slower |
-| Qdrant hybrid query (50+50 prefetch, 100K corpus) | 25ms | 70ms | after warmup |
-| Total encode + search | 60ms | 130ms | |
-
-These numbers hold for our corpus size; see [[05-retrieval/evals]] for benchmarks.
+The fast-path target (p95 ≤ 400 ms end to end) assumes colocated inference: TEI and Qdrant on the same host as core. Per-operation figures are not published as guarantees; measure on your own host. The nightly eval gate tracks latency regressions (see [[05-retrieval/evals]]).
 
 ## Test Contract
 
-**Module under test:** `musubi/retrieval/hybrid.py`, `musubi/retrieval/embed.py`
+**Module under test:** `src/musubi/retrieve/hybrid.py`, `src/musubi/embedding/`
 
 1. `test_hybrid_query_uses_both_prefetch_steps`
 2. `test_rrf_fusion_requested_server_side`
 3. `test_namespace_filter_applied_not_identity_family`
 4. `test_prefetch_limit_comes_from_config`
-5. `test_empty_query_returns_empty_not_error`
+5. `test_empty_query_returns_empty_not_error` (asserts a typed `empty_query` error without querying Qdrant)
 6. `test_query_encoding_runs_in_parallel` (instrumented)
 7. `test_query_embedding_cache_hit_on_repeat`
 8. `test_cache_cleared_on_model_version_change`
-9. `test_hybrid_timeout_returns_partial_results`
+9. `test_hybrid_timeout_returns_err`
 10. `test_dense_only_fallback_when_sparse_timeout`
 11. `test_fanout_over_planes_parallel` (instrumented)
 12. `test_results_deduped_within_single_collection`
@@ -185,8 +160,8 @@ These numbers hold for our corpus size; see [[05-retrieval/evals]] for benchmark
 
 Property tests:
 
-15. `hypothesis: RRF result is deterministic for fixed (seed, corpus, query)`
-16. `hypothesis: increasing prefetch_limit never reduces recall on fixed query`
+15. `test_hypothesis_rrf_result_is_deterministic_for_fixed_seed_corpus_query`
+16. `test_hypothesis_increasing_prefetch_limit_never_reduces_recall_on_fixed_query`
 
 RET-011 exact deployment-namespace consistency (#510) — realized in
 `tests/retrieve/test_ret011_exact_namespace.py`, `tests/api/test_ret011_streaming_namespace.py`,
@@ -201,5 +176,5 @@ and `tests/retrieve/test_ret011_exact_namespace_integration.py`:
 
 Integration:
 
-17. `integration: BEIR-style eval on 1000-doc synthetic corpus, hybrid beats dense-only by ≥ 2 NDCG@10 points`
-18. `integration: live Qdrant, hybrid with real BGE-M3 + SPLADE, p95 ≤ 150ms`
+23. `test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points`
+24. `test_integration_live_qdrant_hybrid_with_real_bge_m3_splade_p95_150ms` — deferred (skipped stub)

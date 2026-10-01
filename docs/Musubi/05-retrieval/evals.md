@@ -1,89 +1,51 @@
 ---
 title: Retrieval Evals
 section: 05-retrieval
-tags: [benchmarks, evals, quality, retrieval, section/retrieval, status/research-needed, type/spec]
+tags: [benchmarks, evals, quality, retrieval, section/retrieval, status/complete, type/spec]
 type: spec
-status: research-needed
-updated: 2026-04-17
+status: complete
+updated: 2026-10-01
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: ["src/musubi/evals/", "tests/evals/"]
 ---
 # Retrieval Evals
 
 How we measure retrieval quality. Without evals, tuning is vibes; with them, every weight change and model swap is defensible.
 
-## Current Implementation Status (v1.11.8)
-**The content of this document is a TARGET CONTRACT, not current executable reality.**
-As of `v1.11.8`, there is zero evaluation implementation in the source tree:
-- There is no `src/musubi/evals` module.
-- There are no golden query sets (query/answer pairs) or `evals/corpus/` directories. (`tests/integration/_corpus` contains a structured integration/performance fixture, but it completely lacks relevance labels or evaluation data).
-- There is no `musubi.evals` CLI tooling.
-- There is no GitHub Action workflow wired for quality metric testing.
-- Four distinct mathematical quality gate tests are currently skipped via `@pytest.mark.skip`:
-  - `test_eval_golden_query_set_mrr_ge_0_7_with_default_weights` (scoring.py:380)
-  - `test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points` (hybrid.py:403)
-  - `test_integration_deep_path_ndcg_10_on_golden_set_improves_vs_fast_path_by_ge_5_points` (rerank.py:210)
-  - `test_integration_end_to_end_deep_path_with_rerank_NDCG_10_on_golden_set_ge_threshold` (orchestration.py:50)
+## What exists
 
-The structures, commands, and workflows detailed below define the contract for the future `slice-ret004-evals` implementation.
+- **Code:** `src/musubi/evals/` — `cli.py` (entry point), `metrics.py` (NDCG@k, reciprocal rank, Recall@k), `gates.py` (thresholds and regression checks), `live_gate.py` and `scheduled_gate.py` (the live gate), `runner.py` (smoke gate), `schema.py` and `corpus.py` (fixture schema and manifest checksums).
+- **Data:** `tests/evals/data/` — `corpus.yaml` (query-file schema sample), `scheduled_corpus.yaml` (the graded corpus the live gate seeds), `smoke_fixture.json` (fixed embeddings for the PR smoke gate), `baseline.json` (smoke baseline) and `manifest.json` (SHA-256 of each data file).
+- **CI:** `.github/workflows/evals.yml` — a smoke gate on every pull request to `main`, and a nightly scheduled gate (cron `0 0 * * *`, also runnable on demand) against a real Qdrant + TEI stack.
 
-## Layers (Proposed Target)
+## Layers
 
-Three layers of evaluation, increasing in cost:
+1. **Unit + property tests** — deterministic, fast, run on every commit (`tests/retrieve/`, `tests/evals/`).
+2. **PR smoke gate** — `python -m musubi.evals smoke`: a deterministic, network-free run over fixed embeddings. Fails below NDCG@10 0.5, or on a drop of more than 0.02 from `baseline.json`.
+3. **Scheduled live gate** — `python -m musubi.evals scheduled`: boots Qdrant + TEI (`deploy/test-env/docker-compose.test.yml`), seeds the checksum-pinned `scheduled_corpus.yaml` into a fresh run-scoped namespace through the production write path, runs every query through real retrieval, enforces the per-mode thresholds below, and tears the run data down. Without TEI it fails loud (exit 3) rather than inventing numbers. The same nightly job also runs the BEIR-style hybrid-vs-dense measurement (`test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points`). A failed nightly run opens or updates a tracking issue; a green run closes it.
 
-1. **Unit + property tests** — deterministic, fast, run on every commit.
-2. **Golden set replay** — hand-curated query/answer pairs with ground-truth object IDs, run nightly and pre-release.
-3. **Live shadow evals** — periodically sample real queries, shadow-run with an alt config, measure NDCG@10 delta offline.
+Live shadow evals (replaying sampled real queries against an alternative config) are **planned, not implemented**.
 
-## Golden sets
-
-### Structure
-
-```
-musubi/evals/golden/
-├── README.md
-├── corpora/
-│   ├── sample-2026-04/
-│   │   ├── manifest.json             # source snapshots (git SHA, data hash)
-│   │   └── qdrant-backup/            # snapshot of collections (volume backup)
-│   └── synthetic-beir-mini/
-│       └── ...
-└── queries/
-    ├── sample-2026-04.yaml
-    └── synthetic-beir-mini.yaml
-```
+## Corpora
 
 ### Query file format
 
-```yaml
-# queries/sample-2026-04.yaml
-corpus: sample-2026-04
-queries:
-  - id: q001
-    text: "how do I restart the livekit agent"
-    relevant:
-      - object_id: 2W1eA1aaaaaaaaaaaaaaaa
-        relevance: 3            # 0-3 graded; 3 = perfect, 2 = good, 1 = partial, 0 = not relevant
-      - object_id: 2W1eB2bbbbbbbbbbbbbbbb
-        relevance: 2
-    mode: fast
-    namespace: alex/claude-code/episodic
-    # expected budget
-    latency_p95_ms: 400
+The golden query schema is `GoldenQuery` in `src/musubi/evals/schema.py`:
 
-  - id: q002
-    text: "what did we decide about promoting concepts to curated knowledge"
-    relevant:
-      - object_id: 2W1eC3cccccccccccccccc
-        relevance: 3
-      - object_id: 2W1eD4dddddddddddddddd
-        relevance: 2
-    mode: deep
-    namespace: alex/_shared/curated
-    latency_p95_ms: 3000
+```yaml
+id: q001
+text: "how do I restart the voice agent"
+relevant:
+  - object_id: "2W1eA1aaaaaaaaaaaaaaaa"
+    relevance: 3            # 0-3 graded; 3 = perfect, 2 = good, 1 = partial, 0 = not relevant
+  - object_id: "2W1eB2bbbbbbbbbbbbbbbb"
+    relevance: 2
+mode: fast
+namespace: alex/claude-code/episodic
 ```
 
-~200 queries is a healthy small-team-sized golden set. We seed with 50 hand-written queries + 150 LLM-expanded ones (a local LLM generates paraphrases from the 50 originals; a human reviews and keeps the good ones).
+The scheduled corpus (`tests/evals/data/scheduled_corpus.yaml`) lists the documents to seed and the graded queries against them. It deliberately includes hard distractors that echo a query's surface words while meaning something else, so a naive lexical ranker fails the thresholds (`tests/evals/test_scheduled_corpus_contract.py`).
 
 ### Graded relevance (0-3)
 
@@ -98,83 +60,42 @@ Missing a `3` at rank 1 is worse than missing a `1` at rank 10; NDCG captures th
 
 ## Metrics
 
-Computed per query, averaged across the set:
+Computed per query, averaged per mode (`src/musubi/evals/live_gate.py`):
 
-| Metric | Meaning | Target (default weights) |
+| Metric | Meaning | Nightly threshold (`gates.py`) |
 |---|---|---|
 | **NDCG@10** | Rank-sensitive quality of top-10 | Fast ≥ 0.55; Deep ≥ 0.65 |
 | **MRR** | 1/rank of first relevant | Fast ≥ 0.55; Deep ≥ 0.70 |
 | **Recall@20** | Fraction of relevant hits in top-20 | Fast ≥ 0.70; Deep ≥ 0.85 |
 | **P@1** | Is the first result perfect (relevance=3)? | Fast ≥ 0.40; Deep ≥ 0.55 |
-| **Latency p50 / p95** | End-to-end retrieve time | per-query `latency_p95_ms` |
 
-Thresholds are hand-tuned on initial seed queries — they'll shift as the golden set grows. Every weight / model change commits an eval report before merging.
+Thresholds are frozen: a run below them reports the raw per-query and per-mode results and fails, and the thresholds are never tuned to make a run green. Every weight or model change should commit an eval report before merging.
 
 ## Tooling
 
 ```bash
-uv run python -m musubi.evals run --corpus sample-2026-04 --mode fast # (proposed)
-uv run python -m musubi.evals run --corpus sample-2026-04 --mode deep # (proposed)
-uv run python -m musubi.evals compare --before main --after pr-123       # (proposed)
+uv run python -m musubi.evals smoke --data-dir tests/evals/data
+uv run python -m musubi.evals scheduled --data-dir tests/evals/data   # needs Qdrant + TEI
 ```
 
-`eval compare` diffs two runs and reports:
+Those are the only two commands. Comparison helpers exist as library functions in `src/musubi/evals/gates.py`, not as CLI commands:
 
-- Per-metric delta (NDCG@10 ±, MRR ±, …)
-- Queries where rank of top-relevant changed by ≥ 3 positions
-- Queries where a relevant hit dropped out of top-10 (regression)
+- `check_delta_tolerances` — fails on an NDCG@10 drop of more than 0.02, an MRR drop of more than 0.03, or a p95 latency regression of more than 20%.
+- `check_top_hit_drops` — fails when a query's top hit drops out of the candidate's top-10.
+- `check_abstention_fpr` — false-positive / false-negative rates against per-mode score thresholds, for queries that should return nothing.
 
-All golden runs are reproducible: same corpus snapshot + same model versions + same weights + same seed = same metrics. Non-reproducible runs are a bug.
+Runs are meant to be reproducible: same corpus + same model versions + same weights = same metrics. Non-reproducible runs are a bug.
 
-### Continuous Integration (CI)
-- **PR Smoke Gate:** A fast, deterministic subset of the corpus runs entirely in-memory using pre-computed embeddings on every PR to `src/musubi/retrieve/`. This isolates logic regressions from model drift.
-- **Scheduled/Pre-Release Gate:** The full corpus runs against the live local Qdrant/TEI harness during nightly or pre-release checks, enforcing the absolute MRR/NDCG thresholds.
+## Corpus integrity
 
-### False-Positive Rate (FPR) & Abstention
-The evaluation framework does not assume the retrieval engine naturally returns empty results for noise. It requires explicit score thresholds. A dedicated metric (`Abstention FPR`) measures the engine's ability to return 0 hits for explicitly non-relevant queries.
-
-## Corpus snapshots
-
-Each corpus directory has a `manifest.json`:
-
-```json
-{
-  "name": "sample-2026-04",
-  "created_at": "2026-04-17T00:00:00Z",
-  "qdrant_snapshot_sha256": "...",
-  "model_versions": {
-    "dense": "BAAI/bge-m3@v1.0",
-    "sparse": "naver/splade-v3@v1.0",
-    "reranker": "BAAI/bge-reranker-v2-m3@v1.0"
-  },
-  "point_counts": {
-    "musubi_episodic": 8432,
-    "musubi_curated": 412,
-    "musubi_concept": 88,
-    "musubi_artifact_chunks": 21035
-  },
-  "schema_version": 1
-}
-```
-
-When we re-embed (model swap), the corpus snapshot is re-created — we don't mutate an existing snapshot.
+`tests/evals/data/manifest.json` maps each data file to its SHA-256. The CLI verifies the manifest before every run and refuses files outside the data directory. When the corpus changes, the manifest is regenerated in the same commit.
 
 ## Regression gates
 
-CI gates on eval delta:
-
-- **NDCG@10 drop > 2 points** → CI fails, commit blocked.
-- **MRR drop > 3 points** → CI fails.
-- **Latency p95 regression > 20%** → CI fails.
-- **Any golden query drops its top-relevant hit out of top-10** → CI fails with the list.
+- **PR smoke:** NDCG@10 below 0.5, or more than 0.02 below `baseline.json`, fails the PR check.
+- **Nightly:** any per-mode metric below its threshold fails the scheduled job; so does the BEIR hybrid-vs-dense step.
 
 Overrides require an ADR documenting why. No silent regressions.
-
-## Live shadow eval
-
-Periodically (weekly), a sample of real queries from production is replayed offline against an alt config (e.g., new weights, new model). Metrics are computed offline; alt config is promoted only if metrics are non-negative.
-
-Privacy: only query-text and result IDs are stored, never full response content. All shadow data is purgeable on request.
 
 ## Ragas-style metrics (future)
 
@@ -188,36 +109,17 @@ These require ground-truth citations from LLM traces. We'll add them once LLM-in
 
 ## Anti-gaming
 
-Because retrieval weights affect eval metrics, a common trap is overfitting: tune weights until the golden set shines, but real queries regress.
+Because retrieval weights affect eval metrics, a common trap is overfitting: tune weights until the corpus shines, but real queries regress.
 
 Mitigations:
 
-- **Holdout split**: 20% of golden queries are never used for tuning — only for validation. If the holdout NDCG@10 drops, that's a real regression.
-- **Cross-corpus evals**: we keep the BEIR-mini synthetic corpus as a second benchmark. Improvements should generalize.
-- **Shadow eval**: as above — real traffic sampling is the strongest anti-overfitting signal.
+- **Holdout split**: `run_isolated_eval` (`src/musubi/evals/runner.py`) keeps holdout queries out of tuning runs.
+- **Cross-corpus evals**: the BEIR-style synthetic corpus is a second benchmark. Improvements should generalize.
+- **Hard distractors**: the scheduled corpus is built so a surface-token ranker fails.
 
-## Running evals as tests
+## Test Contract
 
-Golden-set replay is a pytest fixture:
-
-```python
-@pytest.mark.evals
-def test_sample_golden_fast_ndcg():
-    results = run_evals(corpus="sample-2026-04", mode="fast")
-    assert results.metrics.ndcg_at_10 >= 0.55
-    assert results.metrics.mrr >= 0.55
-
-@pytest.mark.evals
-def test_sample_golden_deep_ndcg():
-    results = run_evals(corpus="sample-2026-04", mode="deep")
-    assert results.metrics.ndcg_at_10 >= 0.65
-```
-
-Marked `evals` so they can be excluded from the fast unit test suite and run in a separate CI stage with the corpus snapshot mounted.
-
-## Test contract (meta)
-
-**Module under test:** `musubi/evals/`
+**Module under test:** `src/musubi/evals/`
 
 Harness:
 
@@ -228,10 +130,12 @@ Harness:
 5. `test_eval_compare_reports_per_query_diffs`
 6. `test_ci_gate_fails_on_ndcg_regression`
 7. `test_holdout_split_excluded_from_tuning_runs`
+8. `test_eval_nightly_qdrant_tei_thresholds`
+9. `test_eval_abstention_fpr`
 
-Integration (slow, gated by `@pytest.mark.evals`):
+Live gate and CLI:
 
-8. `integration: synthetic BEIR-mini fast NDCG@10 ≥ 0.50`
-9. `integration: synthetic BEIR-mini deep NDCG@10 ≥ 0.60`
-10. `integration: small-team corpus fast + deep meet all threshold metrics`
-11. `integration: repeat run produces identical metrics` (reproducibility)
+10. `test_run_live_gate_groups_by_mode_and_enforce_catches_subthreshold`
+11. `test_scheduled_command_fails_loud_without_tei`
+12. `test_naive_lexical_ranker_does_not_clear_the_frozen_thresholds`
+13. `test_scheduled_workflow_live_gate_contract`
