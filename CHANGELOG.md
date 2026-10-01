@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.27.9](https://github.com/sourceblender/musubi/compare/v1.27.8...v1.27.9) (2026-10-01)
+
+
+### Documentation
+
+* neutralize MCP and OpenAPI descriptions ([#871](https://github.com/sourceblender/musubi/issues/871)) ([3001d71](https://github.com/sourceblender/musubi/commit/3001d719e73808cdaa4d4d1dd706d900aeda7b9c))
+* use neutral public namespace and operator examples ([#868](https://github.com/sourceblender/musubi/issues/868)) ([31bc95c](https://github.com/sourceblender/musubi/commit/31bc95cda4652c956b7845280956228e81931e97))
+
 ## [1.27.8](https://github.com/sourceblender/musubi/compare/v1.27.7...v1.27.8) (2026-10-01)
 
 
