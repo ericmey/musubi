@@ -38,19 +38,21 @@
           internal Docker alias matches the certificate without publishing live
           topology in this repository.
 
-    - name: Require explicit SSH and Core ingress sources before firewall changes
-      ansible.builtin.assert:
-        that:
-          - musubi_admin_ssh_cidr is defined
-          - musubi_admin_ssh_cidr | default('') | length > 0
-          - musubi_admin_ssh_cidr | default('') not in ['0.0.0.0/0', '::/0']
-          - >-
-            musubi_kong_ip | default('') | length > 0 or
-            musubi_vlan_cidr | default('') | length > 0
-          - musubi_vlan_cidr | default('') not in ['0.0.0.0/0', '::/0']
-        fail_msg: >-
-          Set musubi_admin_ssh_cidr and either musubi_kong_ip or
-          musubi_vlan_cidr in private inventory before bootstrap.
+    - name: Validate bounded SSH and Core ingress sources before firewall changes
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/validate_ingress.py"
+        stdin: >-
+          {{ {
+            'musubi_admin_ssh_cidr': musubi_admin_ssh_cidr | default(''),
+            'musubi_kong_ip': musubi_kong_ip | default(''),
+            'musubi_vlan_cidr': musubi_vlan_cidr | default('')
+          } | to_json }}
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
 
     # ---- Prereqs for adding third-party apt sources ---------------------
     - name: Install prerequisites for adding third-party apt repos
