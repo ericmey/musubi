@@ -3,7 +3,7 @@
 The publish-core-image.yml workflow intentionally builds and
 signs BOTH a moving main channel (bleeding-edge) AND an
 immutable release channel (v* tags). This is the CURRENT
-INTENTIONAL CONTRACT (Option C),
+INTENTIONAL CONTRACT,
 NOT a newly discovered production defect.
 
 The auto-digest-bump.yml workflow gates on workflow_run
