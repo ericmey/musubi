@@ -135,8 +135,13 @@ If one plane returns 100 hits and another returns 2, each is reranked within its
 
 ### Cross-namespace retrieval
 
-Use a scoped wildcard retrieve to search multiple namespaces. Token scope must
-cover the requested tenant; cross-tenant retrieval remains disallowed in v1.
+Use a wildcard retrieve to search multiple namespaces. `alex/*/episodic` spans
+every presence in one tenant; `*/voice/curated` spans tenants for one presence.
+Wildcards are expanded against the stored data, and the token needs read scope on
+every expanded target or the request is refused (`src/musubi/api/routers/retrieve.py:24-30`).
+Cross-tenant retrieval therefore requires a wildcard-tenant scope such as
+`*/*/episodic:r`; a scope that names a concrete tenant must name the token's own
+(`src/musubi/auth/tokens.py:228-245`).
 
 ## Test Contract
 
