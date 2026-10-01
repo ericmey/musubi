@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.13](https://github.com/sourceblender/musubi/compare/v1.27.12...v1.27.13) (2026-10-01)
+
+
+### Bug Fixes
+
+* **ops:** run every declared consumer smoke row ([#889](https://github.com/sourceblender/musubi/issues/889)) ([bfbaad6](https://github.com/sourceblender/musubi/commit/bfbaad6ea76d5f254d4674b2d329474c0a6836a2))
+
 ## [1.27.12](https://github.com/sourceblender/musubi/compare/v1.27.11...v1.27.12) (2026-10-01)
 
 
