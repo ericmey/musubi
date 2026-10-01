@@ -10677,8 +10677,8 @@ def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
 
 def _lifecycle_storage_migration_task_files() -> list[str]:
     """deploy/ files that BUILD a FILE->DIR lifecycle storage migration per ``_is_lifecycle_migration_artifact``.
-    Today none exist (deploy/migration/ is the POC->v1 Qdrant migration, unrelated to lifecycle SQLite
-    storage; the runbooks are prose)."""
+    Today none exist (the retired POC->v1 Qdrant migration is archived separately;
+    the runbooks are prose)."""
     deploy = _P0C_REPO_ROOT / "deploy"
     hits: list[str] = []
     for p in sorted(deploy.rglob("*")):
@@ -10885,8 +10885,8 @@ def test_p0c_storage_migration_task_unbuilt() -> None:
     tasks = _lifecycle_storage_migration_task_files()
     if not tasks:
         raise DefectStillPresent(
-            "no lifecycle FILE->DIR storage-migration task is built under deploy/ yet (deploy/migration/ is "
-            "the unrelated POC->v1 Qdrant migration). The task is downstream + R20-gated; author it per the "
+            "no lifecycle FILE->DIR storage-migration task is built under deploy/ yet. "
+            "The task is downstream + R20-gated; author it per the "
             "§E migration contract before source cutover."
         )
 
