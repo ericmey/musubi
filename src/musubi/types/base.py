@@ -57,10 +57,10 @@ class MusubiObject(BaseModel):
     #   unvalidated payloads (e.g. during partial migrations).
     # - The validator derives this from `namespace` only when the caller
     #   passes the auto-sentinel `None`. Explicit values (including
-    #   "legacy-aoi" for migration scenarios) are preserved as-is.
+    #   "legacy-alex" for migration scenarios) are preserved as-is.
     # - This validator runs again on assignment (`validate_assignment=True`),
     #   but because the auto-derive only kicks in for the sentinel, a
-    #   later `obj.namespace = "yua/..."` will NOT silently re-derive
+    #   later `obj.namespace = "sam/..."` will NOT silently re-derive
     #   `identity_family`. If a migration genuinely needs both to move
     #   together, the caller assigns both, or assigns `identity_family =
     #   None` to re-trigger derivation. This is intentional: it prevents

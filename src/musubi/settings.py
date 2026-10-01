@@ -92,8 +92,8 @@ class Settings(BaseSettings):
     # across two nightly passes. Structured-output reliability scales
     # with model capability, and the co-located GPU also carries all
     # three TEI models. These fields let the worker target any
-    # OpenAI-compatible endpoint (LiteLLM -> house/backup 35B in this
-    # deployment) without touching the interactive lane. Defaults
+    # OpenAI-compatible endpoint (for example, one routed through LiteLLM)
+    # without touching the interactive lane. Defaults
     # preserve the existing Ollama behavior exactly.
     # ------------------------------------------------------------------
     lifecycle_llm_api: str = Field(
