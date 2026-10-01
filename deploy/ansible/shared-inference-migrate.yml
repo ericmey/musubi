@@ -10,6 +10,9 @@
         state: absent
       check_mode: false
   tasks:
+    - name: Validate operator-owned secret references and consumers
+      ansible.builtin.import_tasks: validate-operator-refs.yml
+
     - name: Require the private shared inference hostname
       ansible.builtin.assert:
         that:

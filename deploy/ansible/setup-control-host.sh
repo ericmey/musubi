@@ -71,6 +71,26 @@ kong_ip: "" # e.g. 10.0.0.50
 musubi_otel_otlp_endpoint: ""
 musubi_prometheus_remote_write_url: ""
 musubi_deployment_environment: "production"
+
+# 1Password references used by the runtime templates. These are item paths,
+# not credential values. Fill all fields before bootstrap/config/deploy/update.
+musubi_op_refs:
+  jwt_signing_key: ""
+  qdrant_api_key: ""
+  lifecycle_llm_api_key: ""
+  tei_dense_url: ""
+  tei_sparse_url: ""
+  tei_reranker_url: ""
+  tei_basic_auth_username: ""
+  tei_basic_auth_password: ""
+  shared_inference_tls_cert: ""
+  shared_inference_tls_key: ""
+
+# Each entry is a Basic Auth username and a 1Password reference to its
+# password hash. Keep only consumers that use this inference deployment.
+musubi_shared_inference_auth_consumers: []
+# Only needed for the one-time shared-inference authentication migration.
+musubi_shared_inference_transition_consumers: []
 YAML
  chmod 600 "$INVENTORY_VARS"
  echo "created $INVENTORY_VARS"
@@ -105,7 +125,7 @@ be committed anywhere.
 ## Files
 
 - \`inventory-vars.yml\` — non-secret operator overrides (hostnames, IPs, ssh user,
- firewall source networks).
+ firewall source networks, 1Password item references and inference consumers).
 - \`vault.yml\` — ansible-vault-encrypted secrets. See \`$ANSIBLE_DIR/vault.example.yml\`
  for the key list. Encrypt with:
  \`\`\`

@@ -14,6 +14,11 @@
         - "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl"
       check_mode: false
   tasks:
+    - name: Validate operator-owned secret references and consumers
+      ansible.builtin.import_tasks: validate-operator-refs.yml
+      vars:
+        musubi_require_transition_consumers: true
+
     - name: Inspect completed authentication migration marker
       ansible.builtin.stat:
         path: "{{ musubi_config_dir }}/shared-inference-auth-v2"

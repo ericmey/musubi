@@ -136,6 +136,9 @@
         enabled: true
         state: started
 
+    - name: Validate operator-owned secret references and consumers
+      ansible.builtin.import_tasks: validate-operator-refs.yml
+
   tasks:
     - name: Create Musubi group
       ansible.builtin.group:

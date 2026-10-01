@@ -61,13 +61,14 @@ def test_material_musubi_secrets_are_not_rendered_to_persistent_files() -> None:
     assert "vault_qdrant_api_key" not in VAULT_EXAMPLE.read_text()
 
 
-def test_reference_templates_contain_only_expected_op_paths() -> None:
+def test_reference_templates_require_operator_supplied_op_paths() -> None:
     secrets_text = SECRETS_TEMPLATE.read_text()
     qdrant_text = QDRANT_TEMPLATE.read_text()
 
-    assert "JWT_SIGNING_KEY=op://Harem World/musubi-jwt-signing-key/credential" in secrets_text
-    assert "QDRANT_API_KEY=op://Harem World/musubi-qdrant-auth/credential" in secrets_text
-    assert "op://Harem World/musubi-qdrant-auth/credential" in qdrant_text
+    assert "JWT_SIGNING_KEY={{ refs.jwt_signing_key" in secrets_text
+    assert "QDRANT_API_KEY={{ refs.qdrant_api_key" in secrets_text
+    assert "refs.qdrant_api_key" in qdrant_text
+    assert "op://Harem World/" not in secrets_text + qdrant_text
     assert "vault_" not in secrets_text + qdrant_text
 
 
@@ -79,10 +80,7 @@ def test_lifecycle_llm_key_uses_runtime_secret_boundary() -> None:
     worker_block = worker_and_rest.split("  qdrant:", maxsplit=1)[0]
 
     assert "LIFECYCLE_LLM_API_KEY" not in env_text
-    assert (
-        "LIFECYCLE_LLM_API_KEY=op://Harem World/litellm-musubi-service-account/credential"
-        in secrets_text
-    )
+    assert "LIFECYCLE_LLM_API_KEY={{ refs.lifecycle_llm_api_key" in secrets_text
     assert "LIFECYCLE_LLM_API_KEY" not in core_block
     assert "LIFECYCLE_LLM_API_KEY: ${LIFECYCLE_LLM_API_KEY}" in worker_block
 

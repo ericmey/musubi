@@ -219,6 +219,9 @@
       check_mode: false
       no_log: true
 
+    - name: Validate operator-owned secret references and consumers
+      ansible.builtin.import_tasks: validate-operator-refs.yml
+
   tasks:
     - name: Re-render docker-compose anchor (may have new services / mounts / env refs)
       ansible.builtin.template:
