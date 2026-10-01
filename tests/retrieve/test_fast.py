@@ -277,6 +277,31 @@ async def test_fast_path_shares_encoding_with_real_hybrid_search(
 
 
 @pytest.mark.asyncio
+async def test_fast_path_bounds_cold_encoding_before_fanout() -> None:
+    class SlowEncoder(_CountingEmbedder):
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            await asyncio.sleep(0.05)
+            return await super().embed_dense(texts)
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            await asyncio.sleep(0.05)
+            return await super().embed_sparse(texts)
+
+    result = await run_fast_retrieve(
+        _client(),
+        SlowEncoder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+        plane_timeout_s=0.005,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "embeddings_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_fast_path_timeout_on_one_plane_returns_partial_with_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
