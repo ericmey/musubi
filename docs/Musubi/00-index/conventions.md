@@ -102,7 +102,6 @@ section: 13-decisions
 type: adr
 status: proposed | accepted | superseded | rejected
 date: YYYY-MM-DD
-deciders: [<name>]
 supersedes: <ADR-path>         # optional
 superseded-by: <ADR-path>      # if status=superseded
 tags: [section/decisions, status/<value>, type/adr]

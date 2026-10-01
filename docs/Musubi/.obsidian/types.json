@@ -12,7 +12,6 @@
     "last-reviewed": "date",
     "reviewed": "checkbox",
     "date": "date",
-    "deciders": "multitext",
     "depends-on": "multitext",
     "blocks": "multitext",
     "supersedes": "text",

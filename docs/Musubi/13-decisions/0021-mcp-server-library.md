@@ -4,7 +4,6 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-19
-deciders: [Admin, Maintainers]
 tags: [section/decisions, status/accepted, type/adr, mcp, dependencies]
 updated: 2026-04-19
 up: "[[13-decisions/index]]"
@@ -15,7 +14,6 @@ reviewed: true
 
 **Status:** accepted
 **Date:** 2026-04-19
-**Deciders:** Admin, Maintainers
 
 ## Context
 `slice-adapter-mcp` exposes the Musubi client capabilities via the Model Context Protocol. We need a robust implementation of the MCP server-side protocol that handles both local (`stdio`) and remote (`streamable-http` with SSE) transports.

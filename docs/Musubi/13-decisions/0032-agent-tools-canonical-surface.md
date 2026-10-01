@@ -5,7 +5,6 @@ tags: [adapters, adr, agent-tools, architecture, section/decisions, status/accep
 type: adr
 status: accepted
 date: 2026-04-29
-deciders: [Admin]
 updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
@@ -14,7 +13,6 @@ reviewed: false
 
 **Status:** accepted (proposed 2026-04-29). Acceptance covers the five-tool surface as the target contract; it does not mean every adapter implements it today.
 **Date:** 2026-04-29
-**Deciders:** Admin
 
 > **Note (2026-10-01):** the five-tool surface is the accepted target. Implementation is per adapter and is not uniform today. The in-repo MCP adapter implements all five (`src/musubi/adapters/mcp/tools.py`, covered by `tests/adapters/test_mcp_canonical_tools.py`). The in-repo LiveKit shim (`src/musubi/adapters/livekit/`) exposes none of them as agent tools. Other adapters live in their own repositories and may expose only a subset; this repository does not verify their tool lists. The decision text below is as proposed.
 

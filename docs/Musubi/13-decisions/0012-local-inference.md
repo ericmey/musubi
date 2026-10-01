@@ -13,7 +13,6 @@ superseded-by: "[[13-decisions/0019-qwen-on-musubi-gpu-phase-1]] (LLM model choi
 
 **Status:** partially superseded — see note.
 **Date:** 2026-03-20
-**Deciders:** Admin
 
 > **Note (2026-10-01):** the Qwen2.5-7B choice was replaced by [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]]; the lifecycle LLM moved to an operator-configured OpenAI-compatible endpoint (which may run on another host) in [[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint]]; TEI became independently managed shared services in [[13-decisions/0045-authenticated-shared-inference-services]]. The "no content leaves the host" default no longer holds for lifecycle LLM calls when that endpoint is remote. The record below is unchanged.
 

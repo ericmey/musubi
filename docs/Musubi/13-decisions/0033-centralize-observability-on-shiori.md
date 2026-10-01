@@ -5,7 +5,6 @@ tags: [adr, architecture, observability, ops, section/decisions, status/accepted
 type: adr
 status: accepted
 date: 2026-05-03
-deciders: [Admin]
 updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
@@ -16,7 +15,6 @@ superseded-by: []
 
 **Status:** accepted (proposed 2026-05-03; status updated 2026-10-01 from implementation evidence)
 **Date:** 2026-05-03
-**Deciders:** Admin
 
 > **Note (2026-10-01):** implemented. `deploy/grafana/`, `deploy/loki/` and `deploy/tempo/` are gone; node-exporter and an optional, off-by-default `remote_write` were added to the deploy templates. `deploy/prometheus/alertmanager.yml` still exists as a config file, but no Alertmanager service is deployed by any compose file. The title was neutralized on 2026-10-01; the filename is kept so links resolve. The decision text below is as proposed.
 

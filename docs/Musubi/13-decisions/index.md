@@ -20,7 +20,6 @@ Lightweight ADR:
 Title
 Status: [proposed|accepted|partially-superseded|superseded|deprecated]
 Date: YYYY-MM-DD
-Deciders: Admin (+ anyone else)
 ---
 Context
 Decision

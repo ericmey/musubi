@@ -4,7 +4,6 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-04-19
-deciders: [Admin, Maintainers]
 tags: [section/decisions, status/accepted, type/adr, api, dependencies]
 updated: 2026-04-19
 up: "[[13-decisions/index]]"
@@ -15,7 +14,6 @@ reviewed: false
 
 **Status:** accepted
 **Date:** 2026-04-19
-**Deciders:** Admin, Maintainers
 
 ## Context
 

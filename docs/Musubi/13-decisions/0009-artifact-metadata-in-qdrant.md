@@ -12,7 +12,6 @@ reviewed: false
 
 **Status:** accepted
 **Date:** 2026-03-17
-**Deciders:** Admin
 
 ## Context
 
