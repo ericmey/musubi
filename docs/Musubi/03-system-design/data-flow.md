@@ -82,12 +82,12 @@ Adapter             Core                       TEI            Qdrant        TEI 
 
 `mode` is one of `fast`, `deep`, `blended` or `recent` (`src/musubi/api/routers/retrieve.py`). A reranker failure or timeout (default budget 1.5 s) falls back to the hybrid order and adds a `reranker_failed` warning. `POST /v1/retrieve/stream` streams the same results.
 
-## 3. Fast path (voice turn start)
+## 3. Fast path (voice context on a prefetch-cache miss)
 
 ```
 LiveKit integration         Core (POST /v1/retrieve, mode=fast)         Qdrant
       │                                 │                                 │
-      │ turn starts                     │                                 │
+      │ prefetch cache miss             │                                 │
       ├────────────────────────────────►│                                 │
       │                                 │ in-process response cache       │
       │                                 │ (exact query, 30 s TTL)         │
@@ -203,21 +203,28 @@ See [[06-ingestion/promotion]].
 ## 8. Voice agent blended recall (LiveKit integration)
 
 ```
-  LiveKit agent turn begins
-         │
-         │ in parallel:
-         │  - fast-path retrieval (400 ms budget)
-         │  - deep or blended retrieval (streams back)
+  user is speaking: each transcript segment
+         │  Slow Thinker cancels any in-flight prefetch and starts a new
+         │  mode="deep" retrieve on the transcript so far; results go to a cache
          ▼
-  agent starts talking using fast-path hits
-         │
-         │ if deep results arrive mid-turn: agent's toolset has the new context
-         │ if deep results arrive late: agent completes the turn on fast-path hits
+  user turn completes
+         │  one final mode="deep" prefetch on the full utterance
          ▼
-  turn ends; the integration POSTs the exchange as an episodic memory
+  agent needs context (Fast Talker get_context)
+         │  1. read the prefetch cache (similarity match on the query)
+         │  2. hit  -> use the cached deep results and their warnings
+         │     miss -> mode="fast" retrieve (400 ms budget); on error, []
+         ▼
+  agent speaks
+         │  maybe_capture_fact(utterance): heuristic episodic capture,
+         │  when the integration calls it (capture_facts, on by default)
+         ▼
+  session ends (capture_transcripts, on by default)
+         │  upload the transcript as an artifact (falls back to an
+         │  episodic capture), then send a session-summary thought
 ```
 
-This logic lives in `sourceblender/musubi-livekit`. See [[07-interfaces/livekit-adapter]] and [[05-retrieval/fast-path]].
+Fast and deep do not start in parallel: deep runs ahead as a prefetch while the user speaks, and fast is used only on a cache miss. This logic lives in `sourceblender/musubi-livekit` (`adapter.py`, `slow_thinker.py`, `fast_talker.py`). See [[07-interfaces/livekit-adapter]] and [[05-retrieval/fast-path]].
 
 ## Test Contract
 

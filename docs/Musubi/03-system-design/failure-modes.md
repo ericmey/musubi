@@ -127,8 +127,8 @@ Corresponds to the Qdrant-down case above from the client's perspective.
 
 **Response:**
 - `401` with the typed error envelope.
-- The adapter should refresh its token and retry.
-- If refresh fails, this is a misconfiguration, not a transient fault.
+- Retrying with the same token cannot recover. Musubi has no token refresh (Core, the SDK and the published adapters all lack it); tokens are credentials the operator issues.
+- The operator must supply a valid token. Retry only after the credentials are updated.
 
 ## Cross-cutting degradation modes
 

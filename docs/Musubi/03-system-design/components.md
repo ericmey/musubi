@@ -47,7 +47,7 @@ Every component in Musubi. Each has a clear responsibility, inputs, outputs, and
 
 **What it owns:** running background jobs. Same image and codebase as Core, different entrypoint: `python -m musubi.lifecycle.runner`.
 
-**Process:** one long-running asyncio process with a minute-resolution tick runner, no APScheduler ([[13-decisions/0025-lifecycle-runner-without-apscheduler|ADR 0025]]). No HTTP API; it serves Prometheus metrics on `:8101/metrics` (`LIFECYCLE_METRICS_PORT`), and its Compose health check requires `musubi_lifecycle_coordinator_ready 1` there. It starts after Core is healthy.
+**Process:** one long-running asyncio process with a tick runner, no APScheduler. The tick is `min(60, LIFECYCLE_RECONCILE_INTERVAL_S)` seconds, so 5 s by default (`src/musubi/settings.py:226`, `src/musubi/lifecycle/runner.py:738`); cron-style jobs still fire on their named minute ([[13-decisions/0025-lifecycle-runner-without-apscheduler|ADR 0025]]). No HTTP API; it serves Prometheus metrics on `:8101/metrics` (`LIFECYCLE_METRICS_PORT`), and its Compose health check requires `musubi_lifecycle_coordinator_ready 1` there. It starts after Core is healthy.
 
 **Jobs** (registered in `src/musubi/lifecycle/runner.py`; times are UTC):
 
