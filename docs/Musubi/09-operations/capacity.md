@@ -14,7 +14,7 @@ What size is Musubi? When does it outgrow one box? What's the signal to look at 
 
 ## v1 scope
 
-Household / small-team:
+Small team:
 
 - **Users:** 1-5 humans, 3-10 agent presences.
 - **Captures:** 100-5,000 / day.
@@ -144,7 +144,7 @@ At current GPU capacity, we could saturate with ~3 simultaneous clients at full 
 v1 is self-hosted on owned hardware. Marginal cost:
 
 - Electricity: ~$15-30/month for the box.
-- Internet: shared with household; negligible increment.
+- Internet: shared with other traffic; negligible increment.
 - Backup storage (off-site): optional; $5-10/month if using B2.
 - Domain + cert: ~$15/year.
 

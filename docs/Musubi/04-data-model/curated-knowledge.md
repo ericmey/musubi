@@ -20,7 +20,7 @@ Topic-first, human-authoritative, durable facts. The Obsidian vault is the **sto
 
 class CuratedKnowledge(BaseModel):
     object_id: KSUID
-    namespace: str                      # e.g., "eric/_shared/curated"
+    namespace: str                      # e.g., "alex/_shared/curated"
     schema_version: int = 1
 
     title: str
@@ -45,7 +45,7 @@ class CuratedKnowledge(BaseModel):
     state: LifecycleState = "matured"   # curated never starts "provisional"
 
     # Vault binding
-    vault_path: str                     # relative to vault root, e.g., "curated/eric/projects/musubi.md"
+    vault_path: str                     # relative to vault root, e.g., "curated/alex/projects/musubi.md"
     body_hash: str                      # sha256 of content (post-frontmatter)
     musubi_managed: bool                # False = human-only write; True = auto-promotion wrote
     file_size_bytes: int
@@ -69,7 +69,7 @@ class CuratedKnowledge(BaseModel):
 ```markdown
 ---
 object_id: 2W1eP3rZaLlQ4jTuYz0Q9CkZAB1
-namespace: eric/_shared/curated
+namespace: alex/_shared/curated
 schema_version: 1
 title: "CUDA 13 setup notes for the musubi host"
 topics:
@@ -152,7 +152,7 @@ which reads from the vault filesystem by `vault_path`.
 ### Write path
 
 **Primary: human edits in Obsidian.**
-1. Human saves `vault/curated/eric/projects/musubi.md`.
+1. Human saves `vault/curated/alex/projects/musubi.md`.
 2. Filesystem event → Vault Watcher (2s debounce).
 3. Watcher reads file, parses frontmatter, validates schema.
 4. If the file lacks `object_id`: generate one, write frontmatter back (this IS a write by Musubi; flag `musubi-managed: true` is *not* set automatically — the file remains human-managed; we just bootstrapped the id). Record the write in the write-log so the echo event is ignored.

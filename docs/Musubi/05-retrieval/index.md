@@ -123,4 +123,4 @@ The section specs each declare their own test contract. Aggregated:
 2. **Deterministic.** Given the same corpus and query, retrieval is reproducible. RNG is banned in the pipeline.
 3. **Cheap before expensive.** Filter first. Hybrid next. Rerank last (deep path only). LLM never, in retrieval itself — only in `deep-path` orchestration, which is its own thing.
 4. **Explain yourself.** Every result carries score components. We can always answer "why did this surface?"
-5. **Small-world-aware.** For a household-sized corpus (10K–1M points), we optimize for single-box latency over sharded throughput.
+5. **Small-world-aware.** For a small-team-sized corpus (10K–1M points), we optimize for single-box latency over sharded throughput.

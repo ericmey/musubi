@@ -9,7 +9,7 @@ section: 13-decisions
 type: adr
 status: proposed
 date: <% tp.date.now("YYYY-MM-DD") %>
-deciders: [Eric]
+deciders: [<name>]
 tags: [section/decisions, status/proposed, type/adr]
 updated: <% tp.date.now("YYYY-MM-DD") %>
 supersedes: ""
@@ -20,7 +20,7 @@ superseded-by: ""
 
 **Status:** proposed
 **Date:** <% tp.date.now("YYYY-MM-DD") %>
-**Deciders:** Eric
+**Deciders:** <name>
 
 ## Context
 

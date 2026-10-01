@@ -12,8 +12,8 @@ reviewed: false
 
 ## Humans
 
-### Eric (Primary operator)
-Single power-user, developer. Edits curated knowledge directly in Obsidian. Runs the Ansible playbooks. Triages lifecycle events. Owns the vault git repo.
+### Admin (Primary operator)
+The person who runs the deployment: a power user and developer. Edits curated knowledge directly in Obsidian. Runs the Ansible playbooks. Triages lifecycle events. Owns the vault git repo.
 
 ### Small-team members (up to ~5 humans)
 Use the system via their AI presences (voice, chat, code). May occasionally edit the vault but expect the majority of curated knowledge to be promoted from conversation. Each has a tenant identifier; their episodic memories are namespace-scoped to them.

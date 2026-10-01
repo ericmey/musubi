@@ -25,12 +25,12 @@ Format:
   "ts": "2026-04-17T10:21:34.512Z",
   "event": "auth.allow",
   "request_id": "abc-123",
-  "sub": "eric-claude-code",
+  "sub": "alex-claude-code",
   "client_id": "musubi-mcp",
-  "presence": "eric/claude-code",
+  "presence": "alex/claude-code",
   "endpoint": "POST /v1/episodic",
-  "namespace": "eric/claude-code/episodic",
-  "scope_used": "eric/claude-code/episodic:rw",
+  "namespace": "alex/claude-code/episodic",
+  "scope_used": "alex/claude-code/episodic:rw",
   "source_ip": "10.0.0.5"
 }
 ```
@@ -42,11 +42,11 @@ Deny example:
   "ts": "...",
   "event": "auth.deny",
   "request_id": "...",
-  "sub": "eric-mcp",
+  "sub": "alex-mcp",
   "endpoint": "POST /v1/episodic",
-  "namespace_requested": "eric/other/episodic",
+  "namespace_requested": "alex/other/episodic",
   "reason": "scope_mismatch",
-  "scope_available": ["eric/claude-code/episodic:rw"]
+  "scope_available": ["alex/claude-code/episodic:rw"]
 }
 ```
 
@@ -82,7 +82,7 @@ Auth log kept longer because investigations may lag. Shorter than lifecycle beca
 - Lifecycle events: operator-only endpoint `GET /v1/lifecycle/events` (with filters).
 - App log: same as auth.
 
-No user-facing audit API — household scope; operator reads on demand.
+No user-facing audit API — small-team scope; operator reads on demand.
 
 ## Tamper resistance
 
@@ -99,7 +99,7 @@ Common queries the operator runs:
 
 ```
 # Who captured to namespace X in the last day?
-grep '"namespace": "eric/claude-code/episodic"' /var/log/musubi/auth.log \
+grep '"namespace": "alex/claude-code/episodic"' /var/log/musubi/auth.log \
   | jq 'select(.event == "auth.allow" and .endpoint | startswith("POST"))'
 
 # All denies in last 24h:

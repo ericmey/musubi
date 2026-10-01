@@ -35,7 +35,7 @@ Concretely, it answers four questions for any agent at any moment:
 ## Who Musubi is not for
 
 - Not a general-purpose vector DB. It's a memory system built on one.
-- Not a multi-org SaaS product. Auth and isolation are sized for a household, not a tenant of 10,000.
+- Not a multi-org SaaS product. Auth and isolation are sized for a small team, not a tenant of 10,000.
 - Not an agent runtime. It does not *run* agents; it *serves memory to* them.
 - Not a document management system. Artifacts are ingested by reference; Musubi doesn't own file editing.
 

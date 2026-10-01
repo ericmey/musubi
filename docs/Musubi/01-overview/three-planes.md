@@ -32,7 +32,7 @@ See [[04-data-model/episodic-memory]] for schema.
 
 ## Plane 2 — Curated Knowledge
 
-**What:** A durable, topic-first fact or concept. "Eric's preferred coding style is X." "Musubi uses BGE-M3 for dense embeddings." Authoritative.
+**What:** A durable, topic-first fact or concept. "The admin's preferred coding style is X." "Musubi uses BGE-M3 for dense embeddings." Authoritative.
 
 **Primary question it answers:** "What does this team hold as true about this topic?"
 
@@ -71,7 +71,7 @@ See [[04-data-model/source-artifact]] for schema.
 
 ## The bridge layer — Synthesized Concept Memory
 
-**What:** A higher-order memory that emerges when multiple episodic memories converge on the same idea. Created by the [[06-ingestion/concept-synthesis|synthesis job]] in the Lifecycle Engine. Example: five separate episodic memories of Eric mentioning different aspects of "CUDA 13 setup" → one synthesized concept `CUDA 13 setup notes` linked to all five.
+**What:** A higher-order memory that emerges when multiple episodic memories converge on the same idea. Created by the [[06-ingestion/concept-synthesis|synthesis job]] in the Lifecycle Engine. Example: five separate episodic memories of the admin mentioning different aspects of "CUDA 13 setup" → one synthesized concept `CUDA 13 setup notes` linked to all five.
 
 **Why it's a separate type, not just curated:**
 - Synthesized concepts are *system-generated hypotheses*, not human-authoritative facts.

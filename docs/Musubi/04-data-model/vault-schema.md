@@ -23,7 +23,7 @@ See [[13-decisions/0003-obsidian-as-sor]] for why Obsidian is SoR.
 ├── .obsidian/                         # Obsidian config (theme, plugins, ignore)
 ├── README.md                          # vault orientation for humans
 ├── curated/                           # CuratedKnowledge files — indexed
-│   ├── eric/
+│   ├── alex/
 │   │   ├── projects/
 │   │   │   ├── musubi.md
 │   │   │   └── livekit-agent.md
@@ -39,7 +39,7 @@ See [[13-decisions/0003-obsidian-as-sor]] for why Obsidian is SoR.
 │       └── 2026-04-17.md
 ├── _archive/                          # soft-deleted files — not indexed
 │   └── 2026-04-15/
-│       └── curated/eric/projects/deprecated.md
+│       └── curated/alex/projects/deprecated.md
 └── _inbox/                            # untriaged human input — optionally indexed
     └── scratch-2026-04-17.md
 ```
@@ -55,14 +55,14 @@ Rules:
 ## Namespace ↔ path mapping
 
 ```
-namespace:  eric/_shared/curated
-path:       /srv/musubi/vault/curated/eric/_shared/<...>.md
+namespace:  alex/_shared/curated
+path:       /srv/musubi/vault/curated/alex/_shared/<...>.md
 
-namespace:  eric/claude-desktop/curated       (rare — per-presence curated)
-path:       /srv/musubi/vault/curated/eric/claude-desktop/<...>.md
+namespace:  alex/claude-desktop/curated       (rare — per-presence curated)
+path:       /srv/musubi/vault/curated/alex/claude-desktop/<...>.md
 ```
 
-By convention, most curated knowledge lives in `eric/_shared/curated` (no per-presence siloing for human knowledge). Per-presence curated is supported but used sparingly — it's mainly for presence-specific runbooks.
+By convention, most curated knowledge lives in `alex/_shared/curated` (no per-presence siloing for human knowledge). Per-presence curated is supported but used sparingly — it's mainly for presence-specific runbooks.
 
 ## Frontmatter schema
 
@@ -72,7 +72,7 @@ YAML frontmatter, enforced by `musubi/vault/frontmatter.py` (pydantic):
 ---
 # Identity (managed by Musubi; humans don't edit these)
 object_id: 2W1eP3rZaLlQ4jTuYz0Q9CkZAB1        # KSUID, unique
-namespace: eric/_shared/curated
+namespace: alex/_shared/curated
 schema_version: 1
 
 # Content metadata
@@ -132,7 +132,7 @@ Vault Watcher detects a mismatch (`object_id` changed from the last-indexed valu
 
 1. Treats the new KSUID as an error (does not re-index as a new object).
 2. Logs to the audit log with severity `warn`.
-3. Emits a `Thought` to `eric/*` on channel `ops-alerts`: "Object ID was edited; please revert or confirm."
+3. Emits a `Thought` to `alex/*` on channel `ops-alerts`: "Object ID was edited; please revert or confirm."
 4. Stops re-indexing that file until resolution.
 
 ## Body content

@@ -203,7 +203,7 @@ We test both.
 
 ## Cost
 
-Per run, typical household-scale:
+Per run, typical small-team scale:
 
 - ~500 memories → ~30 clusters → ~30 LLM calls for generation + ~60 for contradiction pairs = 90 LLM calls × ~2s = ~3 minutes of Qwen2.5-7B Q4 inference.
 - ~30 Qdrant writes (one per cluster). A batched-write optimization is deferred.

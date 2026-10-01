@@ -21,7 +21,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "namespace": "eric/claude-code/episodic",
+  "namespace": "alex/claude-code/episodic",
   "content": "CUDA 13.0 driver 575 installed on musubi host; reboot required.",
   "tags": ["cuda", "nvidia", "ops"],
   "topics": ["infrastructure/gpu"],
@@ -55,7 +55,7 @@ The adapter does not choose the `object_id`, `state`, or `version` — Core sets
 202 Accepted
 {
   "object_id": "2W1eP3rZaLlQ4jTuYz0Q9CkZAB1",
-  "namespace": "eric/claude-code/episodic",
+  "namespace": "alex/claude-code/episodic",
   "state": "provisional",
   "version": 1,
   "created_at": "2026-04-17T09:00:00Z",
@@ -131,7 +131,7 @@ Content-Type: multipart/form-data
 
 ```
 {
-  "namespace": "eric/_shared/artifact",
+  "namespace": "alex/_shared/artifact",
   "title": "LiveKit session 2026-04-17",
   "content_type": "text/vtt",
   "source_system": "livekit-session",

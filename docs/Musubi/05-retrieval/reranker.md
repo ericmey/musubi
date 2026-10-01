@@ -56,7 +56,7 @@ async def rerank(
 - For episodic / concept / curated: `f"{hit.title or ''}\n\n{hit.content[:2048]}"`
 - For artifact chunks: `hit.chunk_content` verbatim
 
-Truncation at 2048 chars (~1000 tokens) for the passage side keeps batch size manageable. The reranker's max context is 8K, so we could go longer — we don't, because it bloats latency with little recall gain on a household corpus.
+Truncation at 2048 chars (~1000 tokens) for the passage side keeps batch size manageable. The reranker's max context is 8K, so we could go longer — we don't, because it bloats latency with little recall gain on a small-team corpus.
 
 ## Latency budget
 

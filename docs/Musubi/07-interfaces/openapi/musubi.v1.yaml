@@ -156,7 +156,7 @@ components:
       in: header
       name: X-Musubi-Namespace
       required: true
-      schema: { type: string, example: "eric/claude-code/episodic" }
+      schema: { type: string, example: "alex/claude-code/episodic" }
       description: "`{tenant}/{presence}/{plane}` scope. Never defaulted."
 
   responses:

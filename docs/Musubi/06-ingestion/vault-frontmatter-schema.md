@@ -144,7 +144,7 @@ Unpreserved (normalized on rewrite):
 When a file has invalid frontmatter:
 
 ```
-vault/curated/eric/_shared/projects/musubi.md — validation failed:
+vault/curated/alex/_shared/projects/musubi.md — validation failed:
   importance: value 15 > 10
   created: must be timezone-aware
   object_id: must be a valid KSUID (27 chars)
@@ -202,7 +202,7 @@ After Watcher processes: `object_id`, `namespace`, `created`, `updated`, etc. ar
 ```markdown
 ---
 object_id: 2W1eP3rZaLlQ4jTuYz0Q9CkZAB1
-namespace: eric/_shared/curated
+namespace: alex/_shared/curated
 schema_version: 1
 title: "CUDA 13 setup notes for the musubi host"
 topics:
@@ -230,7 +230,7 @@ supported_by:
 ```markdown
 ---
 object_id: 2W1fA...
-namespace: eric/_shared/curated
+namespace: alex/_shared/curated
 title: "CUDA 13 installation pattern"
 topics:
   - infrastructure/gpu

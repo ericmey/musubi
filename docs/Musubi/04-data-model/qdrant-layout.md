@@ -85,7 +85,7 @@ Every point has this base payload, serialized as the pydantic model's `model_dum
 ```json
 {
   "object_id": "2W1eP3rZaLlQ4jTuYz0Q9CkZAB1",
-  "namespace": "eric/claude-code/episodic",
+  "namespace": "alex/claude-code/episodic",
   "schema_version": 1,
   "state": "matured",
   "created_at": "2026-04-17T09:00:00Z",

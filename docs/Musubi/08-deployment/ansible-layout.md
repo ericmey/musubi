@@ -60,7 +60,7 @@ all:
  hosts:
  musubi-1:
  ansible_host: 192.168.1.42
- ansible_user: eric
+ ansible_user: admin
  ansible_become: true
  musubi_hostname: musubi.example.local.example.com
  musubi_cert_mode: selfsigned # or 'letsencrypt'

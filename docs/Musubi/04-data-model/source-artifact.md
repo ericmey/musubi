@@ -23,7 +23,7 @@ Chunker = Literal["markdown-headings-v1", "vtt-turns-v1", "token-sliding-v1", "j
 
 class SourceArtifact(BaseModel):
     object_id: KSUID
-    namespace: str                      # e.g., "eric/_shared/artifact"
+    namespace: str                      # e.g., "alex/_shared/artifact"
     schema_version: int = 1
 
     title: str

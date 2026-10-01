@@ -143,7 +143,7 @@ At session end, the full session transcript is uploaded:
 async def on_session_end(session: LiveKitSession):
     vtt = session.to_vtt()   # WebVTT transcript
     artifact = await client.artifacts.upload(
-        namespace=f"eric/_shared/artifact",
+        namespace=f"alex/_shared/artifact",
         title=f"Voice session {session.id}",
         content_type="text/vtt",
         source_system="livekit-session",
@@ -165,8 +165,8 @@ Transcripts are chunked server-side via `vtt-turns-v1`. See [[04-data-model/sour
 
 Per voice session:
 
-- `namespace: eric/livekit-voice/episodic` — new memories captured during the session (3-segment).
-- `namespace: eric/livekit-voice` + `planes: ["curated", "concept", "episodic"]` — retrieval scope (2-segment cross-plane per [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md); server-side fanout + merge, one HTTP call).
+- `namespace: alex/livekit-voice/episodic` — new memories captured during the session (3-segment).
+- `namespace: alex/livekit-voice` + `planes: ["curated", "concept", "episodic"]` — retrieval scope (2-segment cross-plane per [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md); server-side fanout + merge, one HTTP call).
 
 ## Latency budget
 

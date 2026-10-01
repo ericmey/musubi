@@ -53,7 +53,7 @@ The sweep selects candidates via Qdrant payload filters; checks the remaining co
      j. set concept.promoted_to = new KSUID    payload
      k. set curated.promoted_from = concept_id payload (already in step h)
      l. emit LifecycleEvent (both sides)
-     m. emit Thought to eric/* on channel ops-alerts
+     m. emit Thought to alex/* on channel ops-alerts
 ```
 
 Steps a–m are per-concept; concurrency within a sweep is bounded (1 at a time by default — promotion is a careful, human-reviewable action). Configurable to 4-way parallel (`PROMOTION_CONCURRENCY`).
@@ -113,10 +113,10 @@ def compute_path(concept) -> str:
     return f"curated/{namespace_to_dir(concept.namespace)}/{primary_topic}/{slug}.md"
 ```
 
-E.g., for namespace `eric/_shared/concept` and primary topic `infrastructure/gpu`, title "CUDA 13 driver 575":
+E.g., for namespace `alex/_shared/concept` and primary topic `infrastructure/gpu`, title "CUDA 13 driver 575":
 
 ```
-curated/eric/_shared/infrastructure/gpu/cuda-13-driver-575.md
+curated/alex/_shared/infrastructure/gpu/cuda-13-driver-575.md
 ```
 
 Path is deterministic from concept metadata. Renames happen later (human rename in Obsidian).

@@ -27,7 +27,7 @@ Modality = Literal["text", "voice-transcript", "tool-call", "system-event"]
 
 class EpisodicMemory(BaseModel):
     object_id: KSUID
-    namespace: str                      # e.g., "eric/claude-code/episodic"
+    namespace: str                      # e.g., "alex/claude-code/episodic"
     schema_version: int = 1
 
     # Core content
@@ -55,7 +55,7 @@ class EpisodicMemory(BaseModel):
 
     # Modality + participants
     modality: Modality
-    participants: list[str]             # e.g., ["eric", "claude-code"]
+    participants: list[str]             # e.g., ["admin", "claude-code"]
     source_context: str                 # e.g., "Claude Code CLI session 2026-04-17T14:23Z"
 
     # Relationships

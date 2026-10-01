@@ -294,9 +294,9 @@ def test_error_shape_consistent(...):
 
 ```python
 def test_out_of_scope_namespace_returns_403(...):
-    # Token scope: eric/test-a/episodic:rw
-    # Capture to eric/test-b/episodic → 403.
-    r = post_capture(..., namespace="eric/test-b/episodic")
+    # Token scope: alex/test-a/episodic:rw
+    # Capture to alex/test-b/episodic → 403.
+    r = post_capture(..., namespace="alex/test-b/episodic")
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "FORBIDDEN"
 ```

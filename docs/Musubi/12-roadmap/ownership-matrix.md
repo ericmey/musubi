@@ -18,9 +18,9 @@ Musubi is a **single-repo monorepo** per [[13-decisions/0015-monorepo-supersedes
 
 | Repo | Primary owner | Backup | Access | Contents |
 |---|---|---|---|---|
-| `github.com/sourceblender/musubi` | Eric | — | public | Everything: Core, SDK, MCP/Obsidian/CLI adapters, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
+| `github.com/sourceblender/musubi` | Maintainer | — | public | Everything: Core, SDK, MCP/Obsidian/CLI adapters, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
 
-If a second contributor joins, the "backup" column fills in. For now, Eric holds all bus factor.
+If a second contributor joins, the "backup" column fills in. For now, one maintainer holds all bus factor.
 
 ## Modules within `musubi` (monorepo)
 
@@ -95,7 +95,7 @@ For a single-developer shop, ownership is mostly about what I pay attention to t
 When a second person joins:
 
 1. They pick a module as primary (likely one that needs help).
-2. Eric becomes backup on that module; they become backup on one other.
+2. The current maintainer becomes backup on that module; they become backup on one other.
 3. Credentials split: both have GitHub admin; 1Password vault shared; ansible-vault password rotated.
 4. Code review required on PRs touching each other's primary modules.
 
