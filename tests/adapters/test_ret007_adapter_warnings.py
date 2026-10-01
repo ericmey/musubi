@@ -1,23 +1,15 @@
-"""RET-007 — adapter degradation surfacing (MCP + LiveKit reds).
+"""RET-007 — MCP adapter degradation surfacing.
 
-Owner slice: slice-ret007-degradation (Musubi MCP + LiveKit adapters). Tests/docs only, no src.
+The LiveKit tests moved to sourceblender/musubi-livekit with the adapter.
 
 Contract §5: the adapters MUST surface the allowlisted ``warnings`` to the agent, not discard them.
-Today every adapter does ``res.get("results")`` and throws the rest of the response dict away, so the
-agent is blind to retrieval degradation. Each red fails for its named contract reason; the fix flips
-it. For LiveKit, **this red contract DEFINES ``last_warnings`` (a list of allowlisted codes) as the
-minimal surfacing channel** the fix must populate on FastTalker/SlowThinker after each retrieval; the
-ChatContext non-memory status-message rendering is layered on top of that channel and is out of scope
-for this red.
+The MCP result must keep the allowlisted warning codes visible to the agent.
 
     uv run pytest tests/adapters/test_ret007_adapter_warnings.py -v
 """
 
 from typing import Any, cast
 
-from musubi.adapters.livekit.cache import ContextCache
-from musubi.adapters.livekit.fast_talker import FastTalker
-from musubi.adapters.livekit.slow_thinker import SlowThinker
 from musubi.adapters.mcp.tools import _do_search
 
 
@@ -67,45 +59,10 @@ async def test_mcp_adapter_surfaces_warnings() -> None:
         )
 
 
-# --------------------------------------------------------------------------- #
-# LiveKit — FastTalker + SlowThinker
-# --------------------------------------------------------------------------- #
-
-
-async def test_livekit_fast_talker_surfaces_warnings() -> None:
-    ft = FastTalker(client=cast(Any, _WarningClient()), namespace="test/ns", cache=ContextCache())
-    await ft.get_context("q")
-    # Contract §5: the warnings must be reachable so the fix can inject a non-memory runtime status
-    # message into ChatContext. Today FastTalker exposes no warnings channel.
-    surfaced = getattr(ft, "last_warnings", None)
-    if not surfaced or "sparse_embedding_failed" not in surfaced:
-        raise DefectStillPresent(
-            "FastTalker discarded the retrieval warnings — no channel surfaces them to ChatContext"
-        )
-
-
-async def test_livekit_slow_thinker_surfaces_warnings() -> None:
-    st = SlowThinker(client=cast(Any, _WarningClient()), namespace="test/ns", cache=ContextCache())
-    await st._prefetch("q")
-    surfaced = getattr(st, "last_warnings", None)
-    if not surfaced or "sparse_embedding_failed" not in surfaced:
-        raise DefectStillPresent(
-            "SlowThinker discarded the retrieval warnings — no channel surfaces them to ChatContext"
-        )
-
-
-async def test_mcp_and_livekit_preserve_reranker_cause_detail() -> None:
+async def test_mcp_preserves_reranker_cause_detail() -> None:
     client = cast(Any, _RerankerCauseClient())
     mcp_output = await _do_search(
         client, namespace="test/ns", query="q", limit=5, planes=["episodic"]
     )
     assert "reranker_failed" in mcp_output
     assert "reranker_failed_request_rejected" in mcp_output
-
-    fast = FastTalker(client=client, namespace="test/ns", cache=ContextCache())
-    await fast.get_context("q")
-    assert fast.last_warnings == ["reranker_failed", "reranker_failed_request_rejected"]
-
-    slow = SlowThinker(client=client, namespace="test/ns", cache=ContextCache())
-    await slow._prefetch("q")
-    assert slow.last_warnings == ["reranker_failed", "reranker_failed_request_rejected"]

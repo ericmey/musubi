@@ -1,24 +1,14 @@
-"""Cheap heuristics for opportunistic memory capture during voice sessions.
+"""Compatibility imports for the extracted musubi-livekit package.
 
-Per [[07-interfaces/livekit-adapter]] § Event mapping —
-``interesting_fact_detected`` is described as optional and pattern-based.
-Keeping it as a small, explicit regex set lets the adapter capture
-"remember…" / "I always forget…" style asides without needing an
-LLM judge in the speech loop.
+Install musubi-livekit to use this legacy import path. New code should import
+from musubi_livekit directly.
 """
 
-from __future__ import annotations
+try:
+    from musubi_livekit.heuristics import detect_interesting_fact
+except ModuleNotFoundError as exc:
+    if exc.name == "musubi_livekit":
+        raise ModuleNotFoundError("Install musubi-livekit to use musubi.adapters.livekit") from exc
+    raise
 
-import re
-
-_INTERESTING_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bremember\b", re.IGNORECASE),
-    re.compile(r"\bI (?:always )?forget\b", re.IGNORECASE),
-    re.compile(r"\b(?:save|store|note) (?:this|that) (?:to|in) memory\b", re.IGNORECASE),
-    re.compile(r"\bnever forget\b", re.IGNORECASE),
-)
-
-
-def detect_interesting_fact(utterance: str) -> bool:
-    """True if the utterance matches any of the heuristic patterns."""
-    return any(p.search(utterance) for p in _INTERESTING_PATTERNS)
+__all__ = ["detect_interesting_fact"]

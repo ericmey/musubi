@@ -37,3 +37,9 @@ jobs:
 
       - name: pytest
         run: uv run pytest --cov=musubi --cov-report=term
+
+      - name: Legacy LiveKit imports resolve to the published plugin
+        run: |
+          uv pip install --python .venv/bin/python musubi-livekit==0.1.0
+          uv run --no-sync python -c 'import musubi_livekit'
+          uv run --no-sync pytest -q tests/adapters/test_livekit_compat.py
