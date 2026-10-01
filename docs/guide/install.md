@@ -76,10 +76,19 @@ before you run `docker compose config` or `up`: the secrets (see
   volumes.
 
 - **Models on this host's GPU:** add the GPU override, which also runs the three
-  embedding services and Ollama. Set two images in `.env`, choosing explicit
-  versions: `MUSUBI_TEI_IMAGE` (the text-embeddings-inference build for your GPU's
-  architecture) and `MUSUBI_OLLAMA_IMAGE`. The override refuses to start
-  without either, rather than guess.
+  embedding services and Ollama. Pin both of its images in `.env`, choosing the
+  versions yourself:
+
+  - `MUSUBI_TEI_IMAGE`: the text-embeddings-inference image and a tag built for
+    your GPU's architecture, as `repo:tag`;
+  - `MUSUBI_TEI_DIGEST`: that image's digest, 64 hex characters, without the
+    `sha256:` prefix;
+  - `MUSUBI_OLLAMA_IMAGE` and `MUSUBI_OLLAMA_DIGEST`: the same for Ollama.
+
+  Read a digest with
+  `docker buildx imagetools inspect <repo:tag> --format '{{json .Manifest.Digest}}'`.
+  The override refuses to start without all four, so it never runs an
+  unpinned image.
 
   ```bash
   docker compose -f docker-compose.yml -f deploy/docker/compose.local-gpu.yml up -d --wait
