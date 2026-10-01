@@ -14,7 +14,7 @@ Who owns what. Musubi is (for now) effectively a single-developer project — bu
 
 ## Repos
 
-Musubi is a **single-repo monorepo** per [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]]. The 8-repo layout originally proposed in [[13-decisions/0011-canonical-api-and-adapters]] is retired; its interface discipline survives as import-lint rules. The Obsidian architecture vault lives in the same repo at `docs/Musubi/`. The published SDK, the LiveKit integration and the client plugins have since moved to their own repos (listed below).
+Musubi Core is one repo. [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]] originally consolidated everything there and retired the 8-repo layout proposed in [[13-decisions/0011-canonical-api-and-adapters]]; its interface discipline survives as import-lint rules. Since then, the published SDK, the LiveKit integration and the client plugins have moved out to their own repos, while the core service, its in-repo SDK and MCP adapter, and the Obsidian architecture vault (`docs/Musubi/`) stay here. The table lists both.
 
 | Repo | Primary owner | Backup | Access | Contents |
 |---|---|---|---|---|
