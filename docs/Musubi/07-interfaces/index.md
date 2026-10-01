@@ -4,89 +4,75 @@ section: 07-interfaces
 tags: [adapters, api, interfaces, sdk, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: false
 ---
 # 07 — Interfaces
 
-How the world reaches Musubi. One canonical API at the core; one SDK that speaks it; several adapters (independent projects) that translate between that SDK and specific surfaces (MCP, LiveKit, OpenClaw, HTTP, gRPC).
+How the world reaches Musubi: one canonical HTTP API in Core, thin clients that speak it, and integrations that translate between those clients and specific surfaces (MCP, voice, agent hosts).
 
 ## Documents in this section
 
-- [[07-interfaces/canonical-api]] — The authoritative interface contract. All surfaces derive from this.
-- [[07-interfaces/sdk]] — The Python SDK. Adapters consume it; Musubi ships it.
-- [[07-interfaces/agent-tools]] — Canonical five-tool surface (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`) every adapter exposes to its agents. Backed by [[13-decisions/0032-agent-tools-canonical-surface]].
-- [[07-interfaces/mcp-adapter]] — Maps Musubi SDK to the Model Context Protocol (OAuth 2.1 finalized June 2025). Independent repo.
-- [[07-interfaces/livekit-adapter]] — Maps Musubi SDK to LiveKit voice agents (Slow Thinker / Fast Talker). Independent repo.
-- [[07-interfaces/openclaw-adapter]] — Maps Musubi SDK to the OpenClaw browser-extension agent. Independent repo.
-- [[07-interfaces/contract-tests]] — The shared contract test suite every adapter passes.
+- [[07-interfaces/canonical-api]]: the authoritative interface contract (with the root `openapi.yaml`). Everything else derives from it.
+- [[07-interfaces/sdk]]: the Python clients. The public `musubi-sdk` lives in its own repository; the in-repo `musubi.sdk` backs the MCP adapter.
+- [[07-interfaces/agent-tools]]: the canonical five-tool surface (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`). Backed by [[13-decisions/0032-agent-tools-canonical-surface]].
+- [[07-interfaces/mcp-adapter]]: the in-repo MCP server (`src/musubi/adapters/mcp/`).
+- [[07-interfaces/livekit-adapter]]: pointer to `musubi-livekit`; core keeps only a compatibility shim.
+- [[07-interfaces/openclaw-adapter]]: pointer to `musubi-openclaw`.
+- [[07-interfaces/contract-tests]]: what covers the API contract today; a shared cross-integration suite is future work.
+- [[07-interfaces/openapi/README|OpenAPI snapshots]]: where the normative OpenAPI document lives.
 
 ## The ring
 
 ```
                      ┌────────────────────────────┐
-                     │       Canonical API        │
-                     │     (HTTP + gRPC + SDK)    │
+                     │        Canonical API       │
+                     │     (HTTP/JSON, /v1/...)   │
                      └──────────────┬─────────────┘
                                     │
-                ┌───────────────────┼───────────────────┐
-                ▼                   ▼                   ▼
-      ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-      │   MCP Adapter    │  │ LiveKit Adapter  │  │ OpenClaw Adapter │
-      │  (independent    │  │  (independent    │  │  (independent    │
-      │      repo)       │  │       repo)      │  │       repo)      │
-      └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
-               │                     │                     │
-               ▼                     ▼                     ▼
-            MCP tools           voice sessions         browser surface
-         (coding agents)      (Slow Thinker/          (OpenClaw extension)
-                              Fast Talker)
+        ┌───────────────┬───────────┼───────────────┬──────────────────┐
+        ▼               ▼           ▼               ▼                  ▼
+   in-repo MCP     musubi-sdk   musubi CLI    agent-host plugins   musubi-livekit
+   adapter         (PyPI)       (operator)    (musubi-claude,      (voice workers)
+   (musubi.sdk)                               -codex, -openclaw,
+                                               -opencode, -grok,
+                                               -hermes; most on
+                                               musubi-harness)
 ```
 
-Adapters are **independent projects** — separate repos, separate deploy schedules, separate maintainers (even if the same person works on multiple). The Musubi core team owns the canonical API and the SDK; adapter teams own the mapping between their surface and the SDK.
+Core owns the canonical API, the in-repo SDK, the MCP adapter and the CLI. The other integrations are **independent projects** in sibling repositories with their own release schedules. The list of integrations and where each one lives is in [Connect](../../guide/connect.md).
 
 ## Why this separation
 
-See [[03-system-design/abstraction-boundary]]. Summary:
+See [[03-system-design/abstraction-boundary]]. In short:
 
-- **Musubi Core** should not know what MCP is. An MCP adapter maps an MCP tool invocation to an SDK call and back.
-- **LiveKit** should not know the details of vault sync or concept promotion. It consumes retrieval via the SDK.
-- **Adapters evolve faster than Core.** MCP spec iterations, LiveKit SDK changes, browser extension quirks — those should not ripple into Musubi.
+- **Core should not know what MCP is.** An adapter maps an MCP tool call to an API call and back.
+- **A voice worker should not know about vault sync or promotion.** It consumes retrieval through the API.
+- **Integrations move faster than Core.** MCP revisions, LiveKit SDK changes and agent-host plugin APIs should not ripple into Musubi.
 
-## Contract test pattern
+## Testing the contract
 
-Every adapter's CI runs the [[07-interfaces/contract-tests]] suite against a local Musubi instance:
-
-- Capture an episodic memory → appears in retrieval.
-- Send a thought → appears in `thought_check`.
-- Concurrent writes → no lost updates.
-- Forbidden namespace → 403.
-- (…50+ canonical cases…)
-
-If the Musubi version the adapter is built against doesn't pass the contract tests, the adapter build fails.
+Core's own coverage lives in `tests/api/`, `tests/sdk/` and `tests/adapters/`, plus OpenAPI drift tests that compare the committed `openapi.yaml` with the running app. Each sibling integration tests itself against its own fixtures. A shared contract suite that every integration runs is future work; see [[07-interfaces/contract-tests]].
 
 ## Versioning
 
-- **Canonical API**: SemVer per endpoint group. Breaking changes require a new path prefix (`/v2/…`) and a deprecation period of 180 days on `/v1/…`.
-- **SDK**: SemVer tied to API version.
-- **Adapters**: each adapter has its own SemVer; adapters pin a minimum Musubi version they support.
+- **Canonical API:** path-prefixed. Within `/v1/` changes are additive only; a breaking change needs `/v2/` and a deprecation window during which both run.
+- **Clients and integrations:** each has its own SemVer and pins the Core version range it supports.
 
-## Surfaces supported in v1
+## Surfaces
 
-1. **HTTP / REST** — the canonical wire format. Every Musubi Core ships with it.
-2. **gRPC** — same contract as HTTP, generated from `.proto`. Optional (behind a build flag); default-off in v1 for small-deployment simplicity.
-3. **Python SDK** — `musubi-client` package, wraps HTTP.
-4. **MCP Adapter** — uses the SDK. Runs as a separate service.
-5. **LiveKit Adapter** — uses the SDK. Embedded in the voice agent worker.
-6. **OpenClaw Adapter** — uses the SDK. Embedded in the extension's background service worker.
+1. **HTTP/JSON:** the only wire protocol. Every Core ships it. There is no gRPC service.
+2. **Python:** the public `musubi-sdk` package for your own code; the in-repo `musubi.sdk` for code inside Core.
+3. **MCP adapter:** in this repository, run as `python -m musubi.adapters.mcp.server` (stdio) or with `sse`.
+4. **Agent-host plugins and voice:** sibling repositories, as listed above.
 
-CLI (`musubi-cli`) is separate — an ops tool, not an end-user-facing adapter. Lives in the Musubi Core repo.
+The CLI (`musubi`: `context`, `promote force|reject`, `validate rows`; plus `musubi-context`) is an operator tool in this repository, not an end-user adapter.
 
 ## Principles
 
-1. **API is the only contract.** No adapter uses internal functions directly. Every adapter-test runs against the API.
-2. **No surface-specific logic in Core.** Core doesn't know about MCP, LiveKit, or OpenClaw.
-3. **Structured errors.** Typed errors with codes; human-readable messages; safe to show users.
-4. **Idempotency by default.** Optional `Idempotency-Key` header supported everywhere that writes.
-5. **Backward-compat first.** We keep old versions around long enough for adapters to catch up.
+1. **The API is the only contract.** No integration calls Core internals. Integrations are tested against the API.
+2. **No surface-specific logic in Core.** Core does not know about MCP, LiveKit or any agent host.
+3. **Structured errors.** Typed error codes with readable messages that are safe to show users.
+4. **Idempotent writes.** An optional `Idempotency-Key` header makes every write replay-safe.
+5. **Backward compatibility first.** Old API versions stay long enough for integrations to catch up.

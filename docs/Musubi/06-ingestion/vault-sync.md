@@ -5,111 +5,88 @@ tags: [ingestion, obsidian, section/ingestion, status/complete, type/spec, vault
 type: spec
 status: complete
 implements: src/musubi/vault/watcher.py
-updated: 2026-04-19
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
 ---
 # Vault Sync
 
-Syncing the Obsidian vault (source of record for curated knowledge) to Qdrant (derived index). Bidirectional flow: human edits propagate to the index; promotion writes propagate to the index; neither re-triggers the other.
+Keeping the Obsidian vault (the source of record for curated knowledge) in sync with Qdrant (the derived index). Human edits reach the index, Musubi's own writes (promotion, reflection) reach the index, and neither re-triggers the other.
 
-See [[04-data-model/vault-schema]] for the schema details and [[13-decisions/0003-obsidian-as-sor]] for the rationale.
+See [[04-data-model/vault-schema]] for the schema and [[13-decisions/0003-obsidian-as-sor]] for the rationale.
 
-## The component
+## Two mechanisms
 
-`musubi-vault-watcher` is a dedicated process (not a thread in Core). Why separate:
+1. **`vault_reconcile`** (`src/musubi/vault/reconciler.py`): a lifecycle-worker job, every 6 hours and once at worker boot. It always runs and is enough on its own; edits land within one interval.
+2. **Vault watcher** (`src/musubi/vault/watcher.py`): an **optional** real-time process, `python -m musubi.vault.watcher`, wired by `src/musubi/vault/runtime.py`. The root Compose stack has no watcher service. A systemd unit is provided (`deploy/systemd/musubi-vault-sync.service`) for deployments that want sub-minute sync.
 
-- **Isolation**: if Watcher OOMs or crashes, it doesn't take Core with it.
-- **Restart safety**: Watcher on boot does a full scan; slow on large vaults. Better not to block Core's startup.
-- **Resource profile**: Watcher is I/O bound; Core is CPU/GPU-bound. Separate processes let us size them independently.
+Running the watcher as its own process (not a thread in Core) keeps a crash or a slow boot scan from affecting the API.
 
-## Technologies
+## Watcher
 
-- **watchdog** (Python) for filesystem events — cross-platform, reliable on ext4 + APFS.
-- **inotify** directly when watchdog's polling fallback would be needed (we're on Linux; inotify is fine).
-- **pydantic** for frontmatter validation.
-- **ruamel.yaml** for round-tripping YAML (preserves formatting, unlike PyYAML).
+### Technologies
 
-## File event handling
+- **watchdog** for filesystem events.
+- **pydantic** (`CuratedFrontmatter`) for frontmatter validation.
+- **ruamel.yaml** for frontmatter parsing and dumping. Comment, key-order and quote-style preservation are not guaranteed yet (the tests for them are skipped; see [[06-ingestion/vault-frontmatter-schema]]).
 
-Events we care about:
+### Events
 
-- `on_created(path)`
-- `on_modified(path)`
-- `on_moved(src, dest)`
-- `on_deleted(path)`
+Handled: created, modified, moved (processed at the destination path), deleted.
 
-Events we ignore:
+Ignored:
 
-- `.obsidian/*`, `.git/*`, any dotfile or `_`-prefixed directory.
-- Non-`.md` files in `curated/` (we only index markdown).
-- Temporary files: `*.tmp`, `*~`, `.*.swp`.
+- Any path with a segment starting with `.` or `_` (`.obsidian/`, `.git/`, `_archive/`, `_meta/`, ...).
+- Non-`.md` files.
+- Markdown files over **10 MB** (`_MAX_VAULT_MD_BYTES`), skipped with a warning. Put large content in the artifact plane instead.
 
-## Debouncing
+### Debounce and backpressure
 
-Obsidian often writes a file multiple times in quick succession (autosave + manual save). We debounce per-path: after an event, wait 2s (`WATCHER_DEBOUNCE_SEC`). If the same path fires again during that window, extend. On quiet, process.
+Obsidian often saves a file several times in a row. The watcher debounces per path: each event (re)starts a **2-second** timer, and the file is processed once the path is quiet. Debounce state is in memory; pending events are lost on restart, and the boot scan picks them up.
 
-Debounce state lives in memory. On Watcher restart, all pending events are lost — the boot-time scan will catch them.
+Backpressure, constructor defaults:
 
-## Handling each event
+- Event intake: token bucket at **10 events/second**. Events beyond that are dropped with a warning.
+- Indexing: at most **10** concurrent handlers (`asyncio.Semaphore`).
 
-### on_created / on_modified
+### Created / modified
 
 ```
-1. Check write-log — did we (Core) just write this ourselves?
-   → if yes and body_hash matches: consume, return.
-2. Read file bytes.
-3. Parse YAML frontmatter.
-   → on parse error: log, emit Thought to ops-alerts, return.
-4. Validate frontmatter (pydantic CuratedFrontmatter).
-   → on validation error: emit Thought with details, return.
-5. Compute body_hash (sha256 of body bytes).
-6. If file has no object_id: generate KSUID, write frontmatter back.
-   → this is a write; add write-log entry (written_by=core), but keep
-     musubi-managed: false (we're bootstrapping an ID, not taking over).
-7. Look up existing Qdrant point by (namespace, object_id).
-   → if no existing point, or body_hash changed: re-embed + upsert.
-   → else: no-op (frontmatter-only change, maybe just a wikilink add — re-index metadata only).
-8. If state frontmatter field changed: emit LifecycleEvent via transition().
-9. Update `vault_path` in the Qdrant point if it differs.
+1. Size gate (10 MB).
+2. Parse frontmatter; body_hash = sha256(body).
+3. Write-log check: if (path, body_hash) is an unconsumed Core write,
+   mark it consumed and stop (echo prevention).
+4. No object_id in frontmatter: generate a KSUID, infer the namespace from
+   the path, write the frontmatter back (through the write-log) and stop.
+   The rewrite is indexed on the next event.
+5. Validate CuratedFrontmatter. On failure: log an error and stop.
+6. Build the CuratedKnowledge row and CuratedPlane.create(...) (keyed by
+   object_id / vault_path).
 ```
 
-### on_moved (rename)
+Invalid frontmatter is **logged only**; emitting an ops-alerts Thought is not implemented yet.
+
+### Deleted
+
+The watcher looks up the curated row by `vault_path` and, if exactly one live row matches, transitions it to `archived` through the lifecycle coordinator. A repeat delete of an archived row is a no-op. An ambiguous match (several rows) or a lookup error is refused and logged rather than guessed. Deleting a file never deletes the Qdrant row.
+
+To retire a note while keeping the file, set `state: archived` in its frontmatter or move it into an `_`-prefixed folder such as `_archive/`.
+
+There is no configurable delete behaviour and no restore-from-git mode.
+
+### Boot scan
+
+On start the watcher scrolls `musubi_curated` for `(vault_path, body_hash)`, walks every non-ignored `.md` file in the vault, and re-processes any file whose body hash differs or that has no row. There is no separate watcher state database.
+
+## Echo prevention
+
+The write-log is a small SQLite database shared by every Musubi writer and the watcher:
 
 ```
-1. Check write-log.
-2. Read file, parse frontmatter, confirm object_id.
-3. Update `vault_path` in Qdrant — no re-embedding needed.
-4. Log the move.
+<parent of LIFECYCLE_SQLITE_PATH>/vault-writelog.db
 ```
 
-### on_deleted
-
-```
-1. Check write-log.
-2. Look up Qdrant point by (namespace, object_id-from-last-known-state).
-   → The on-disk file is gone; we remember the mapping via Watcher's sqlite state.
-3. Transition state to 'archived'.
-4. Move the file to _archive/YYYY-MM-DD/ — but wait, the file is already gone.
-   → This means we missed the move-to-archive (rare). Log a warning.
-```
-
-Normal delete flow: **user deletes in Obsidian** → on_deleted fires → we archive. But the **recommended flow** is to use `state: archived` in frontmatter OR move to `_archive/` manually; that way the file is preserved.
-
-A delete-vs-archive preference is stored in `config.VAULT_DELETE_BEHAVIOR`:
-
-- `"archive-only"` (default): on_deleted transitions to `archived` but *does not* re-create the file. A hard delete happened. Emit an ops-alerts Thought for safety.
-- `"refuse"`: on_deleted triggers a `VaultRestore` — rehydrate the file from git HEAD. Aggressive; for paranoid setups.
-
-## Echo prevention (detail)
-
-The write-log is a sqlite DB shared by Core and Watcher:
-
-```
-/srv/musubi/vault-state/write-log.sqlite
-```
-
-Schema:
+Schema (`src/musubi/vault/writelog.py`):
 
 ```sql
 CREATE TABLE writes (
@@ -120,139 +97,98 @@ CREATE TABLE writes (
   consumed_at REAL DEFAULT NULL,
   PRIMARY KEY (file_path, body_hash)
 );
-CREATE INDEX idx_written_at ON writes(written_at);
 ```
 
 Flow:
 
 ```
-Core promotion → writes row (written_by='core', consumed_at=NULL)
-              → writes file
+VaultWriter (promotion, reflection, id bootstrap)
+  -> record_write(path, body_hash)       before the file is written
+  -> write the file
 
-Watcher sees event → checks log for (path, body_hash)
-                  → if row exists, written_by='core', consumed_at=NULL:
-                    → set consumed_at=now; ignore event.
-                  → else: process the event.
-
-Cleanup: rows older than 5m with consumed_at=NULL → warning ("orphaned Core write").
-         rows older than 1h → purged.
+Watcher event -> consume_if_exists(path, body_hash)
+  -> matching unconsumed 'core' row: mark consumed, ignore the event
+  -> otherwise: process the event
 ```
 
-## Boot-time scan
-
-On Watcher startup:
-
-1. Read all `.md` files under `curated/` (and `reflections/` if enabled).
-2. For each file: parse frontmatter, compute body_hash.
-3. Compare against last-indexed state (stored in Watcher's sqlite `/srv/musubi/vault-state/index-state.sqlite`).
-4. Diff:
-   - New files: index.
-   - Modified (body_hash or frontmatter meta changed): re-index.
-   - Removed: archive (if `VAULT_DELETE_BEHAVIOR != "refuse"`).
-
-For 10K curated files, expected boot scan time is ~60s (most of which is pydantic validation + hashing, not I/O).
-
-## Large file handling
-
-Files > 2KB or with > 4 H2 sections are chunked into artifact chunks:
-
-1. The `CuratedKnowledge` point embeds `title + summary + first 2K of content`.
-2. Additional content is stored as `ArtifactChunk` rows in `musubi_artifact_chunks` under a synthetic artifact (`source_system: "vault-curated"`, `derived_from: <curated_id>`).
-3. Retrieval considers both — a chunk hit resolves back to the parent curated via `derived_from`.
-
-The threshold is configurable (`VAULT_LARGE_FILE_THRESHOLD_BYTES`).
+`WriteLog` also has `purge_old_entries` (rows older than 1 hour) and `get_orphaned_writes` (unconsumed Core writes older than 5 minutes). No production code path calls them yet, so the table is not pruned automatically. (Not implemented.)
 
 ## Reconciler
 
-Runs every 6 hours, checks for drift between vault and Qdrant:
+`vault_reconcile` runs every 6 hours (lock `vault_reconcile.lock`):
 
 ```
-for each curated_point in musubi_curated:
-    if not fs.exists(curated_point.vault_path):
-        → orphan index: archive it.
-for each file in vault/curated/**/*.md:
-    if file.object_id not in musubi_curated:
-        → orphan file: re-index it.
-    elif point.body_hash != file.body_hash:
-        → drift: re-index.
+for each .md file under VAULT_PATH (skipping . and _ segments):
+    no object_id in frontmatter        -> skip (the watcher bootstraps ids)
+    body_hash unchanged since last pass -> skip
+    otherwise                          -> upsert into the curated plane
+for each live curated row with a vault_path:
+    file missing on disk               -> archive the row (via the coordinator)
 ```
 
-Reconciler is idempotent; running twice back-to-back is a no-op on the second run.
+One file's failure does not abort the pass. The reconciler is idempotent: a second back-to-back run changes nothing. See [[09-operations/asset-matrix]] for the canonical-vs-derived catalog.
 
-See [[09-operations/asset-matrix]] for the canonical vs derived catalog.
+## Large files
 
-## Rate limits
-
-A malicious or broken editor could thrash the vault:
-
-- Max events per second: 100 (drops with a warning beyond that).
-- Max indexing writes per minute: 1000 (batched; drops with alert beyond).
-
-These protect Qdrant and TEI from a pathological human who runs a shell script on the vault.
+Large-file chunking is **not implemented**. A curated file is indexed as one row regardless of length (files over 10 MB are skipped by the watcher). Put long reference material in the artifact plane.
 
 ## Test Contract
 
-**Module under test:** `musubi/vault/watcher.py`, `musubi/vault/writer.py`, `musubi/vault/reconciler.py`
+**Module under test:** `src/musubi/vault/watcher.py`, `src/musubi/vault/writer.py`, `src/musubi/vault/writelog.py`, `src/musubi/vault/reconciler.py`
 
-Events:
+Events (`tests/vault/test_sync.py`):
 
 1. `test_on_created_indexes_new_file`
 2. `test_on_modified_reindexes_body_change`
-3. `test_on_modified_frontmatter_only_no_reembed`
-4. `test_on_moved_updates_vault_path`
-5. `test_on_deleted_archives_point`
-6. `test_dotfile_ignored`
-7. `test_underscore_dir_ignored`
+3. `test_on_moved_updates_vault_path`
+4. `test_dotfile_ignored`
+5. `test_underscore_dir_ignored`
+6. `test_oversize_markdown_skipped_with_warning`
+7. `test_binary_extension_skipped_with_warning`
 
-Debounce:
+Debounce and backpressure:
 
 8. `test_debounce_multiple_rapid_writes_process_once`
 9. `test_debounce_extends_on_new_event_during_window`
+10. `test_event_rate_limit_drops_with_warning`
+11. `test_indexing_rate_limit_backpressure`
 
 Validation:
 
-10. `test_invalid_yaml_emits_thought_and_skips`
-11. `test_missing_required_field_emits_thought`
-12. `test_body_only_no_frontmatter_rejected`
-13. `test_missing_object_id_gets_generated_and_written_back`
+12. `test_invalid_yaml_emits_thought_and_skips`
+13. `test_missing_required_field_emits_thought`
+14. `test_missing_object_id_gets_generated_and_written_back`
 
 Echo prevention:
 
-14. `test_writelog_matches_core_write_event_consumed`
-15. `test_writelog_mismatch_body_hash_reindexes`
-16. `test_writelog_orphan_older_than_5m_logged_as_warning`
-17. `test_writelog_entry_purged_after_1h`
+15. `test_writelog_matches_core_write_event_consumed`
+16. `test_writelog_mismatch_body_hash_reindexes`
+17. `test_writelog_orphan_older_than_5m_logged_as_warning`
+18. `test_writelog_entry_purged_after_1h`
 
-Boot scan:
+Delete (`tests/vault/test_vault003_live_delete.py`):
 
-18. `test_boot_scan_indexes_new_files`
-19. `test_boot_scan_detects_body_hash_change`
-20. `test_boot_scan_archives_removed_files`
+19. `test_delete_archives_matching_row_via_canonical_transition`
+20. `test_repeat_delete_is_idempotent`
+21. `test_delete_broken_or_unknown_code_warns_and_refuses`
+22. `test_two_namespaces_same_vault_path_neither_archives`
 
-Large files:
+Boot scan (`tests/vault/test_watcher_boot_scan.py`):
 
-21. `test_large_file_body_chunked_as_artifact`
-22. `test_large_file_curated_embeds_summary`
+23. `test_boot_scan_indexes_new_files`
+24. `test_boot_scan_detects_body_hash_change`
 
-Reconciler:
+Reconciler (`tests/vault/test_reconciler.py`, `tests/vault/test_sync.py`):
 
-23. `test_reconciler_detects_orphan_point`
-24. `test_reconciler_detects_orphan_file`
-25. `test_reconciler_reindexes_drifted_body_hash`
-26. `test_reconciler_idempotent_on_second_run`
+25. `test_reconciler_detects_orphan_point`
+26. `test_reconciler_detects_orphan_file`
+27. `test_reconciler_reindexes_drifted_body_hash`
+28. `test_reconciler_idempotent_on_second_run`
+29. `test_reconcile_skips_files_without_object_id`
+30. `test_reconcile_individual_failure_doesnt_abort_pass`
 
-Rate limits:
+Skipped:
 
-27. `test_event_rate_limit_drops_with_warning`
-28. `test_indexing_rate_limit_backpressure`
-
-Property:
-
-29. `hypothesis: for any sequence of file-system events, Watcher + Reconciler converge to a state where vault ≡ Qdrant`
-
-Integration:
-
-30. `integration: human-edit-round-trip — save .md file, watcher indexes, retrieval returns it`
-31. `integration: Core-promotion-round-trip — Core writes file, watcher ignores via write-log, point correct`
-32. `integration: reconciler recovery — delete a Qdrant point behind Watcher's back, reconciler re-indexes from file`
-33. `integration: 10K file boot scan completes under 60s`
+31. `test_on_modified_frontmatter_only_no_reembed`
+32. `test_body_only_no_frontmatter_rejected`
+33. `hypothesis: for any sequence of file-system events, Watcher + Reconciler converge to a state where vault ≡ Qdrant`

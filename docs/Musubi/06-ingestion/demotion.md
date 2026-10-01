@@ -4,31 +4,33 @@ section: 06-ingestion
 tags: [decay, demotion, ingestion, lifecycle, section/ingestion, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
-implements: ["src/musubi/lifecycle/demotion.py", "src/musubi/lifecycle/promotion.py", "tests/lifecycle/test_demotion.py", "tests/lifecycle/test_promotion.py"]
+implements: ["src/musubi/lifecycle/demotion.py", "tests/lifecycle/test_demotion.py"]
 ---
 # Demotion
 
-The opposite of promotion. Matured memories and concepts that haven't earned their place over time are demoted (not deleted). Demoted objects stay in the index for lineage and forensics but are filtered out of default retrieval.
+The opposite of promotion. Matured memories and concepts that have not earned their place over time are demoted, not deleted. Demoted objects stay in the index for lineage and forensics but are filtered out of default retrieval.
+
+Code: `src/musubi/lifecycle/demotion.py`.
 
 ## Why demote instead of delete
 
-- **Forensics**: "Why does this concept say X?" can only be answered if the evidence (old memories) is still around.
-- **Lineage**: Supersession chains require the superseded object to exist.
-- **Reversibility**: A human can reinstate a demoted memory. Deletes are permanent.
-- **Safety**: We'd rather keep too much than accidentally erase a memory the user cared about.
+- **Forensics:** "Why does this concept say X?" can only be answered if the evidence (old memories) still exists.
+- **Lineage:** supersession chains need the superseded object to exist.
+- **Reversibility:** a demoted object can be brought back. A delete cannot.
+- **Safety:** keeping too much is better than erasing a memory someone cared about.
 
-Hard deletes require operator scope and a reason. See [[10-security/auth]] for operator scope; the destructive-path docs are in [[09-operations/runbooks]].
+Hard deletes need operator scope (for example `POST /v1/artifacts/{id}/purge`). See [[10-security/auth]] and [[09-operations/runbooks]].
 
 ## Rules
 
+All schedules are UTC and run in the lifecycle worker ([[06-ingestion/lifecycle-engine]]). Each job takes its own lock (`demotion_episodic.lock`, `demotion_concept.lock`, `demotion_artifact.lock`).
+
 ### Episodic demotion (weekly)
 
-Runs Sunday 03:00, `demotion_episodic`.
-
-Select:
+`demotion_episodic`, **Sundays 03:45**.
 
 ```
 state == "matured"
@@ -40,108 +42,86 @@ state == "matured"
 
 Rationale:
 
-- Never accessed, never reinforced — no signal it was useful.
-- Older than 60 days — enough time for synthesis/retrieval to have surfaced it if relevant.
-- Low importance — captured as noise.
+- Never accessed and never reinforced: no signal it was useful.
+- Older than 60 days: synthesis and retrieval have had time to surface it.
+- Low importance: captured as noise.
 
-Transition to `demoted`. Reason: `decay-rule:untouched-low-importance`.
+All conditions must hold. Any one failing protects the memory. Selected rows transition to `demoted` with reason `decay-rule:untouched-low-importance`.
 
 ### Concept demotion (daily)
 
-Runs 05:00, `demotion_concept`.
-
-Select:
+`demotion_concept`, **daily 05:00**.
 
 ```
 state == "matured"
-  AND last_reinforced_at < now - 30 days
+  AND (last_reinforced_epoch < now - 30 days
+       OR (last_reinforced_epoch is null AND created_epoch < now - 30 days))
 ```
 
-Rationale: a concept should keep getting reinforced by new memories. 30 days without reinforcement means either the pattern isn't recurring, or new synthesis found a replacement concept.
+A concept should keep being reinforced by new memories. Thirty days without reinforcement means the pattern is not recurring, or newer synthesis replaced it. Selected concepts transition to `demoted` with reason `decay-rule:no-reinforcement`, and the job emits an `ops-alerts` Thought for each.
 
-Transition to `demoted`. Reason: `decay-rule:no-reinforcement`.
+### Artifact archival (weekly, opt-in)
 
-Emit a Thought on `ops-alerts` ("Concept X demoted; reinforcement tapered off").
-
-### Artifact archival (monthly, opt-in)
-
-Artifacts are rarely demoted — they're raw evidence, cheap to keep. But for very large artifacts not cited in any curated or concept for 180 days:
+`demotion_artifact`, **Sundays 04:15**, right after episodic demotion so the reference check sees fresh demotions. It is a no-op unless the deployment sets **`MUSUBI_ARTIFACT_ARCHIVAL_ENABLED=true`**. The switch is global, not per-namespace.
 
 ```
 state == "matured"
-  AND NOT referenced_by_any_curated_or_concept
-  AND size_bytes > 1_000_000
   AND created_epoch < now - 180 days
+  AND not referenced (supported_by) by any episodic, curated or concept row, in any state
 ```
 
-Transition `state=archived`. Blob stays; chunks stay; excluded from default retrieval. Operator can purge blob via `musubi-cli artifacts purge --hard <id>`.
-
-Off by default; opt-in per-namespace.
+Selected artifacts transition to `archived` with reason `decay-rule:unreferenced-expired`. The blob and chunks are kept, and the artifact drops out of default retrieval. There is no size threshold: `DEMOTION_ARTIFACT_MIN_SIZE` is defined but not applied. Reclaiming storage is a separate, explicit operator action: `POST /v1/artifacts/{id}/purge?namespace=<ns>` (operator scope) deletes the metadata and the blob.
 
 ## Reinstatement
 
-Any demoted object can be reinstated:
+There is no reinstatement command or endpoint. An operator can move a demoted object back with the generic transition endpoint:
 
-```bash
-musubi-cli reinstate <object-id> --reason "used this yesterday"
+```
+POST /v1/lifecycle/transition            (operator scope)
+{"object_id": "<ksuid>", "to_state": "matured", "actor": "admin", "reason": "used this yesterday"}
 ```
 
-- Transition `demoted → matured`.
-- Reset `last_reinforced_at = now`.
-- Emit LifecycleEvent.
+This records a LifecycleEvent. It does **not** reset `last_reinforced_at`, so a reinstated concept that is not reinforced may be demoted again by the next daily sweep. `demotion.reinstate()` resets the clock as well, but nothing in the API, CLI or worker calls it. (Not exposed.)
 
-## Parameters (tunable)
+## Parameters
+
+Module constants in `src/musubi/lifecycle/demotion.py`, not environment settings:
 
 ```python
-# config.py
 DEMOTION_EPISODIC_AGE_DAYS = 60
 DEMOTION_EPISODIC_MAX_IMPORTANCE = 4
 DEMOTION_CONCEPT_NO_REINFORCE_DAYS = 30
 DEMOTION_ARTIFACT_AGE_DAYS = 180
-DEMOTION_ARTIFACT_MIN_SIZE = 1_000_000
+DEMOTION_ARTIFACT_MIN_SIZE = 1_000_000   # defined, not applied
 ```
 
-Every threshold is a config key. We expect tuning from evals data over time.
+The only runtime switch is `MUSUBI_ARTIFACT_ARCHIVAL_ENABLED`.
 
 ## Interaction with retrieval
 
-Default retrieval filter:
-
-```
-state IN ("matured", "promoted")
-```
-
-So demoted, archived, superseded are all hidden. Callers can opt in via `include_archived=True` and `include_superseded=True` on `RetrievalQuery`.
+Ranked retrieval (`fast`, `deep`, `blended`) defaults to `state IN ("matured", "promoted")`, so demoted, archived and superseded rows are hidden. In `fast` mode, `include_archived: true` adds `demoted`, `archived` and `superseded`. In `deep` and `blended` modes `include_archived` is ignored; pass `state_filter` explicitly.
 
 ## Interaction with scoring
 
-If a demoted object does surface (via an `include_archived=True` query), its `provenance` component drops to 0.1 (see [[05-retrieval/scoring-model#provenance]]). It'll almost certainly rank below any non-demoted result.
+When a demoted or archived row does surface, its provenance component is 0.1 (see [[05-retrieval/scoring-model]]), so it almost always ranks below active results.
 
 ## Anti-patterns to watch for
 
-### The "access count always 0" bug
+### "access_count is always 0"
 
-If the access_count field isn't correctly incremented by retrieval, demotion will over-fire (demote memories that are actually being used). Test: `test_memory_recall_increments_access_count` in retrieval tests.
+If retrieval stops incrementing `access_count`, episodic demotion over-fires and demotes memories that are in use. Retrieval access accounting lives in `src/musubi/retrieve/accounting.py`.
 
-### The "demotion hides recent reinforcement" bug
+### Demotion right after reinforcement
 
-If a memory was reinforced 29 days ago, it's safe today but will be demoted tomorrow. Seems harsh. The `reinforcement_count > 0` rule mitigates this — once reinforced even once, the memory is protected for far longer (until the combined age + no-access criteria).
-
-Episodic demotion rule is:
-
-```
-access_count == 0 AND reinforcement_count == 0 AND age > 60d AND importance < 4
-```
-
-All four must hold. Any one being false protects the memory.
+A concept reinforced 29 days ago is safe today and eligible tomorrow. That is deliberate: concepts must keep earning their place. Episodic rows are protected more strongly, because any reinforcement (`reinforcement_count > 0`) or any access exempts them.
 
 ### Avalanche demotion after a migration
 
-When we re-embed (see [[11-migration/re-embedding]]), `last_reinforced_at` and `updated_epoch` might not reflect real reinforcement. We pause demotion for 14 days after any re-embed migration via a flag `DEMOTION_PAUSED_UNTIL`.
+A re-embedding migration (see [[11-migration/re-embedding]]) can disturb `updated_epoch`. There is **no pause flag**: `DEMOTION_PAUSED_UNTIL` is not implemented. Plan migrations so they do not rewrite `updated_epoch` on untouched rows, or stop the lifecycle worker until the migration has been checked.
 
 ## Test Contract
 
-**Module under test:** `musubi/lifecycle/demotion.py`
+**Module under test:** `src/musubi/lifecycle/demotion.py`
 
 Episodic:
 
@@ -155,37 +135,27 @@ Episodic:
 Concept:
 
 7. `test_concept_demotion_selects_by_last_reinforced`
-8. `test_concept_demotion_emits_ops_thought`
-9. `test_concept_reinforcement_resets_demotion_clock`
+8. `test_concept_demotion_selects_when_never_reinforced_and_stale`
+9. `test_concept_demotion_emits_ops_thought`
+10. `test_concept_reinforcement_resets_demotion_clock`
 
 Artifact:
 
-10. `test_artifact_archival_off_by_default`
-11. `test_artifact_archival_respects_referenced_by`
-12. `test_artifact_archival_transitions_to_archived_keeps_blob`
+11. `test_artifact_archival_off_by_default`
+12. `test_artifact_archival_respects_referenced_by`
+13. `test_artifact_archival_transitions_to_archived_keeps_blob`
 
-Reinstatement:
+Reinstatement (of the unexposed `reinstate()` helper):
 
-13. `test_reinstate_moves_back_to_matured`
-14. `test_reinstate_resets_reinforced_clock`
-15. `test_reinstate_emits_event`
+14. `test_reinstate_moves_back_to_matured`
+15. `test_reinstate_resets_reinforced_clock`
+16. `test_reinstate_emits_event` (skipped)
 
-Filter:
+Skipped (pause flag not implemented; property and integration):
 
-16. `test_default_retrieval_excludes_demoted`
-17. `test_include_archived_includes_demoted`
-
-Migration safety:
-
-18. `test_demotion_paused_flag_honored`
-19. `test_demotion_paused_expired_resumes`
-
-Property:
-
-20. `hypothesis: demotion is idempotent across runs with no change in criteria`
-21. `hypothesis: no object that transitions to demoted was accessed within the selection window`
-
-Integration:
-
-22. `integration: seed 1000 memories with varied properties, run weekly demotion, count transitions matches criteria`
-23. `integration: reinstatement round-trip — demote → reinstate → appears in default retrieval`
+17. `test_demotion_paused_flag_honored`
+18. `test_demotion_paused_expired_resumes`
+19. `hypothesis: demotion is idempotent across runs with no change in criteria`
+20. `hypothesis: no object that transitions to demoted was accessed within the selection window`
+21. `integration: seed 1000 memories with varied properties, run weekly demotion, count transitions matches criteria`
+22. `integration: reinstatement round-trip — demote → reinstate → appears in default retrieval`

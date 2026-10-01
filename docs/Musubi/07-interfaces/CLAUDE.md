@@ -4,41 +4,44 @@ section: 07-interfaces
 type: index
 status: complete
 tags: [section/interfaces, status/complete, type/index, agents]
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[07-interfaces/index]]"
 reviewed: true
 ---
 
 # Agent Rules — Interfaces (07)
 
-Local rules for `musubi/api/`, `openapi.yaml`, `proto/`, and all adapter/SDK repos. Supplements [[CLAUDE]].
+Local rules for `src/musubi/api/`, the root `openapi.yaml`, `src/musubi/sdk/` and `src/musubi/adapters/`. Supplements [[CLAUDE]].
 
 ## Must
 
-- **Additive change only within a major version.** New endpoints, new optional request fields, new optional response fields — fine. Anything else bumps the API major (`/v1/` → `/v2/`).
-- **Contract tests gate every adapter.** The canonical API carries a shared contract suite (`musubi-contract-tests`). Every adapter imports and runs it against its local deployment before merge. See [[07-interfaces/contract-tests]].
-- **SDK version tracks API major.** `musubi-sdk-py@1.x` implements `/v1/*`. Adapter pins SDK version range.
-- **Errors are typed.** Every error returned by the API has a `code` (enum) and `detail` (string). Adapters translate; they never re-invent.
-- **Correlation ID propagates.** The API reads `X-Correlation-Id` if present, generates one otherwise. The SDK carries it in every call.
+- **Additive change only within a major version.** New endpoints, new optional request fields and new optional response fields are fine. Anything else bumps the API major (`/v1/` to `/v2/`).
+- **Keep `openapi.yaml` in step with the routes.** The committed root `openapi.yaml` is the normative contract. `tests/api/test_api_v0_read.py::test_runtime_openapi_matches_committed_paths` fails when runtime paths and committed paths diverge. Changes to `src/musubi/api/` or `openapi.yaml` need an ADR (additive) or a version bump (breaking).
+- **Errors are typed.** Every API error uses the envelope `{"error": {"code", "detail", "hint"}}` with a `code` from the fixed set in `src/musubi/api/errors.py`. The SDK and adapters translate it; they never invent new codes.
+- **The request id propagates.** Core reads `X-Request-Id` if present, generates one otherwise, and echoes it on the response. The in-repo SDK sends it when the caller supplies one.
+- **Cover what you change.** API changes need tests in `tests/api/`; SDK changes in `tests/sdk/`; MCP adapter changes in `tests/adapters/`. There is no shared contract-test package; see [[07-interfaces/contract-tests]].
 
 ## Must not
 
-- Add a new public endpoint without updating [[07-interfaces/canonical-api]] in the same PR.
-- Introduce protocol-specific logic (MCP-isms, LiveKit-isms) into `musubi/api/`. Adapters own protocol translation.
-- Expose Qdrant or pydantic internals in the public surface. API types are their own pydantic layer.
-- Ship an adapter change without a contract-tests run in its CI.
+- Add a public endpoint without updating [[07-interfaces/canonical-api]] and `openapi.yaml` in the same PR.
+- Put protocol-specific logic (MCP-isms, LiveKit-isms) in `src/musubi/api/`. Adapters own protocol translation.
+- Expose Qdrant or internal storage shapes in the public surface. API request and response models are their own pydantic layer.
+- Add a second wire protocol (gRPC or anything else) without an ADR.
 
 ## API versioning
 
-- URL prefix `/v1/`, proto package `musubi.v1.*`.
-- Breaking change → new prefix `/v2/`, new package. Both live side-by-side for a deprecation window (minimum 6 months).
-- ADRs record every API-version bump.
+- URL prefix `/v1/`.
+- A breaking change gets a new prefix (`/v2/`); both versions run side by side through a deprecation window.
+- ADRs record every API version bump.
 
-## Adapter ownership
+## Where each surface lives
 
-| Adapter             | Language   | Responsibility                                                         |
-|---------------------|------------|------------------------------------------------------------------------|
-| `musubi-mcp`        | Python     | FastMCP over stdio + streamable-HTTP. OAuth 2.1 per spec. Tool mapping. |
-| `musubi-livekit`    | Python     | LiveKit Agents toolkit. Fast Talker + Slow Thinker pattern. Hard 200ms. |
-| `musubi-openclaw`   | TypeScript | Desktop-app extension. Blended retrieval. Identity proxy.              |
-| (`curl` / direct)   | n/a        | REST is a first-class consumer; no translation layer needed.           |
+| Surface | Where | Notes |
+|---|---|---|
+| HTTP API | `src/musubi/api/` | Canonical. `curl` and any language can call it directly. |
+| Python SDK (in-repo) | `src/musubi/sdk/` | Used by the MCP adapter and tests. See [[07-interfaces/sdk]]. |
+| Python SDK (public) | `sourceblender/musubi-sdk` (`musubi_sdk`) | Separate repository and PyPI package. |
+| MCP adapter | `src/musubi/adapters/mcp/` | `python -m musubi.adapters.mcp.server [sse]`. See [[07-interfaces/mcp-adapter]]. |
+| LiveKit | `sourceblender/musubi-livekit` | Core keeps only the `musubi.adapters.livekit` compatibility shim. |
+| Agent-host plugins | `sourceblender/musubi-claude`, `musubi-codex`, `musubi-openclaw`, `musubi-opencode`, `musubi-grok`, `musubi-hermes` | Mostly built on `sourceblender/musubi-harness`. |
+| CLI | `src/musubi/cli/` | `musubi context`, `musubi promote force\|reject`, `musubi validate rows`, plus `musubi-context`. An operator tool, not an adapter. |

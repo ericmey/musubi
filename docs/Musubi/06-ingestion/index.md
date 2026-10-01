@@ -4,63 +4,67 @@ section: 06-ingestion
 tags: [ingestion, lifecycle, maturation, promotion, section/ingestion, status/stub, synthesis, type/spec]
 type: spec
 status: stub
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: false
 ---
 # 06 — Ingestion & Lifecycle
 
-How memory enters the system, ripens, gets synthesized into concepts, and gets promoted to curated. The write-side of Musubi.
+How memory enters the system, ripens, gets synthesized into concepts and gets promoted to curated knowledge. This is the write side of Musubi.
 
 ## Documents in this section
 
-- [[06-ingestion/capture]] — The capture API. What shape comes in, what validation, what writes.
-- [[06-ingestion/maturation]] — Provisional → matured. Hourly sweep. Importance scoring + tag normalization.
-- [[06-ingestion/concept-synthesis]] — Daily clustering of matured memories into concepts.
-- [[06-ingestion/promotion]] — Concept → curated knowledge. Gating rules + vault write path.
-- [[06-ingestion/demotion]] — Matured → demoted. Decay rules by plane.
-- [[06-ingestion/vault-sync]] — Filesystem watcher. Human edit → Qdrant re-index.
-- [[06-ingestion/lifecycle-engine]] — The Lifecycle Worker process. Schedule, concurrency, idempotency.
-- [[06-ingestion/reflection]] — Daily reflection digest. Surfaces patterns; writes to `vault/reflections/`.
-- [[06-ingestion/embedding-strategy]] — What we embed, when, with what model, and how we avoid re-embedding churn.
-- [[06-ingestion/vault-frontmatter-schema]] — The YAML schema enforced on human-edited curated files.
+- [[06-ingestion/capture]]: the capture API. What comes in, how it is validated, what gets written.
+- [[06-ingestion/maturation]]: provisional to matured. Hourly sweep, importance scoring, tag normalization.
+- [[06-ingestion/concept-synthesis]]: daily clustering of matured memories into concepts.
+- [[06-ingestion/promotion]]: concept to curated knowledge. Gating rules and the vault write path.
+- [[06-ingestion/demotion]]: matured to demoted. Decay rules by plane.
+- [[06-ingestion/vault-sync]]: vault reconciler and optional filesystem watcher. Human edits reach the index.
+- [[06-ingestion/lifecycle-engine]]: the lifecycle worker process. Schedule, locks, failure handling.
+- [[06-ingestion/reflection]]: daily reflection digest written to `vault/reflections/`.
+- [[06-ingestion/embedding-strategy]]: what is embedded, when, with which model, and how re-embedding churn is avoided.
+- [[06-ingestion/vault-frontmatter-schema]]: the YAML schema enforced on curated files.
+- [[06-ingestion/life009-semantic-supersession]]: how maturation infers supersession.
 
 ## Two write surfaces
 
-1. **API write** — `POST /v1/episodic`, `POST /v1/artifacts`, etc. Used by adapters (Claude Code, LiveKit, OpenClaw). Documented in [[07-interfaces/canonical-api]].
-2. **Vault write** — a human saves a markdown file in Obsidian. Picked up by the Vault Watcher. Documented in [[06-ingestion/vault-sync]].
+1. **API write:** `POST /v1/episodic`, `POST /v1/artifacts`, `POST /v1/curated` and so on. Used by the SDK, the in-repo MCP adapter and client integrations (maintained in sibling repositories). See [[07-interfaces/canonical-api]].
+2. **Vault write:** a person saves a markdown file in the vault. The 6-hourly reconciler (and the watcher, if running) picks it up. See [[06-ingestion/vault-sync]].
 
-Everything else — maturation, synthesis, promotion, demotion, reflection — is a **background process** run by the Lifecycle Worker, not a user-facing write path. See [[06-ingestion/lifecycle-engine]].
+Everything else (maturation, synthesis, promotion, demotion, reflection) is a **background job** in the lifecycle worker, not a user-facing write path. See [[06-ingestion/lifecycle-engine]].
 
 ## Principles
 
-1. **Hot path is thin.** API writes do the minimum: validate, compute embedding, upsert, respond. Enrichment happens later, not in the response path.
-2. **Maturation is not magic.** Every provisional memory earns its way to matured via a documented rule. See [[06-ingestion/maturation]].
-3. **Synthesis is LLM-assisted.** But the LLM never writes directly to the index — it emits a structured proposal that a deterministic Python path validates and stores.
-4. **Promotion is always auditable.** Every promotion produces a LifecycleEvent + a Thought to the operator. See [[04-data-model/lifecycle]] and [[06-ingestion/promotion]].
-5. **Nothing is deleted silently.** `demoted`, `archived`, `superseded` are first-class states. Hard deletes require operator scope.
-6. **Vault writes and index writes are reconcilable.** If they drift (index-only or vault-only state), a reconciler job brings them back. See [[09-operations/asset-matrix]].
+1. **The hot path is thin.** API writes validate, embed, dedup, write and respond. Enrichment happens later.
+2. **Maturation is not magic.** Every provisional memory earns its way to matured by a documented rule. See [[06-ingestion/maturation]].
+3. **Synthesis is LLM-assisted, not LLM-written.** The LLM returns a structured proposal; deterministic Python validates and stores it.
+4. **Promotion is auditable.** Every promotion records a LifecycleEvent and sends an ops-alerts Thought. See [[04-data-model/lifecycle]] and [[06-ingestion/promotion]].
+5. **Nothing is deleted silently.** `demoted`, `archived` and `superseded` are first-class states. Hard deletes require operator scope.
+6. **Vault and index are reconcilable.** If they drift, the `vault_reconcile` job brings them back. See [[09-operations/asset-matrix]].
 
 ## Schedule at a glance
 
-| Job | Frequency | Runs in |
-|---|---|---|
-| Maturation sweep (episodic) | Hourly | Lifecycle Worker |
-| Provisional TTL (7d → archived) | Hourly | Lifecycle Worker |
-| Concept synthesis | Daily (03:00 local) | Lifecycle Worker |
-| Concept maturation (24h after synth) | Daily | Lifecycle Worker |
-| Concept demotion | Daily | Lifecycle Worker |
-| Promotion sweep | Daily | Lifecycle Worker |
-| Reflection digest | Daily (06:00 local) | Lifecycle Worker |
-| Episodic demotion (weekly) | Weekly (Sunday 03:00) | Lifecycle Worker |
-| Vault reconciler | Every 6h | Lifecycle Worker |
+All jobs run in the lifecycle worker. Times are UTC.
 
-All schedules are tunables; defaults optimized for a small-team cadence (humans look at it once a day; system digests over 24h windows).
+| Job | Frequency |
+|---|---|
+| Maturation sweep (episodic) | hourly at :13 |
+| Provisional TTL (7 days, then archived) | hourly at :17 |
+| Concept synthesis | daily 03:00 |
+| Concept maturation (24 h after synthesis) | daily 03:30 |
+| Promotion sweep | daily 04:00 |
+| Concept demotion | daily 05:00 |
+| Reflection digest | daily 06:00 |
+| Episodic demotion | weekly, Sunday 03:45 |
+| Artifact archival (opt-in) | weekly, Sunday 04:15 |
+| Vault reconciler | every 6 h |
+| Lifecycle reconcile (transition outbox) | every 5 s (`LIFECYCLE_RECONCILE_INTERVAL_S`) |
+
+The schedule is fixed in code and tuned for a small-team cadence: people look once a day, and digests cover 24-hour windows.
 
 ## Ownership
 
-- Lifecycle logic lives in `musubi/lifecycle/*`.
-- Each job has its own file: `maturation.py`, `synthesis.py`, `promotion.py`, `demotion.py`, `reflection.py`, `reconcile.py`.
-- The worker process (`musubi-lifecycle`) loads and schedules them via APScheduler + a file-based lock to prevent double-execution.
+- Lifecycle logic lives in `src/musubi/lifecycle/`, one module per job family: `maturation.py` (episodic maturation, provisional TTL, concept maturation), `synthesis.py`, `promotion.py`, `demotion.py`, `reflection.py`. Vault reconcile is in `src/musubi/vault/reconciler.py`.
+- The worker process is the `lifecycle-worker` Compose service, `python -m musubi.lifecycle.runner`: a tick loop that dispatches each job, with a per-job `flock` to prevent double execution.
 
-Tests for each job live in `tests/lifecycle/test_<job>.py`. See [[00-index/test-index]].
+Tests for each job live in `tests/lifecycle/test_<job>.py` and `tests/vault/`. See [[00-index/test-index]].

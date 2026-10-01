@@ -4,39 +4,36 @@ section: 07-interfaces/openapi
 type: index
 status: complete
 tags: [section/interfaces, status/complete, type/index, api]
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[07-interfaces/index]]"
 reviewed: true
 ---
 
 # OpenAPI snapshots
 
-Per [[13-decisions/0013-api-spec-authoring]], pydantic models in `musubi/types/` are the source of truth for the canonical API. FastAPI generates OpenAPI 3.1 from them at runtime and serves it at `GET /v1/openapi.json`.
+**The normative API contract is the committed `openapi.yaml` at the repository root**, not anything in this folder.
 
-This folder holds **frozen snapshots** taken on each API version bump. Consumers that need a stable file (code generators, public docs, vendor contract reviews) pin to a snapshot here.
+Per [[13-decisions/0013-api-spec-authoring]], the FastAPI routes and their pydantic request and response models in `src/musubi/api/` are the source of truth. FastAPI generates the OpenAPI document at runtime and serves it at `GET /v1/openapi.json` (interactive docs at `/v1/docs`). The committed root `openapi.yaml` is the reviewed snapshot of that document. `tests/api/test_api_v0_read.py::test_runtime_openapi_matches_committed_paths` fails when the runtime paths and the committed paths diverge.
 
-## Files
+## Files in this folder
 
-- `musubi.v1.yaml` — current snapshot of `/v1/*`. Regenerated only on version-major events.
-- `musubi.v1.schemas.json` — companion JSON Schema 2020-12 dump. Produced from `model.model_json_schema()` across all public pydantic models. Consumed by the TypeScript SDK.
+- `musubi.v1.yaml`: an early hand-written skeleton from before the API was built. It is **stale**: it does not match the shipped API and is not maintained. ADR 0013 and ADR 0035 still mention it, which is why it has not been deleted. Do not use it for code generation or review.
 
-## How snapshots are refreshed
+There is no JSON Schema dump, no snapshot-dump script and no TypeScript SDK generated from this folder.
 
-1. Boot musubi-core locally with the target build.
-2. Run `python -m musubi.scripts.dump_openapi > 07-interfaces/openapi/musubi.v1.yaml`.
-3. Run `python -m musubi.scripts.dump_json_schema > 07-interfaces/openapi/musubi.v1.schemas.json`.
-4. Commit with message `api(v1): snapshot openapi @ <short-sha>`.
-5. If this introduces a breaking change, the major bumps: create `musubi.v2.yaml`, never overwrite `musubi.v1.yaml`.
+## Refreshing the root snapshot
+
+1. Make the route and model changes in `src/musubi/api/`.
+2. Regenerate the document from the app (for example, boot Core and fetch `/v1/openapi.json`) and update the root `openapi.yaml`.
+3. Run `uv run pytest -q tests/api/test_api_v0_read.py tests/api/test_api_v0_write.py`; the drift tests compare committed paths with runtime paths.
+4. An additive change needs an ADR; a breaking change needs a new major version (`/v2/`).
 
 ## How agents use this
 
-- Implementing the API (`slice-api-v0`): don't edit the yaml by hand. Edit pydantic + routes, rebuild, re-dump.
-- Implementing an adapter: read the yaml or the live endpoint; treat it as frozen.
-- Building a TypeScript SDK: generate from `musubi.v1.schemas.json` via `json-schema-to-typescript`.
+- Implementing the API: edit routes and models, then update the root `openapi.yaml` in the same PR. Never hand-edit it to describe behaviour the code does not have.
+- Writing a client: read the root `openapi.yaml` or the live `/v1/openapi.json`.
 
 ## Related
 
-- [[07-interfaces/canonical-api]] — the human-readable spec.
-- [[07-interfaces/contract-tests]] — the proto-parity test.
-- [[13-decisions/0013-api-spec-authoring]] — the authoring-model ADR.
-- Proto mirror: `proto/musubi/v1/*.proto`.
+- [[07-interfaces/canonical-api]]: the human-readable spec.
+- [[13-decisions/0013-api-spec-authoring]]: the authoring-model ADR.

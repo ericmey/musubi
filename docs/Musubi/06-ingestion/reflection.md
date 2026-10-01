@@ -4,43 +4,53 @@ section: 06-ingestion
 tags: [digest, ingestion, reflection, section/ingestion, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
 implements: "tests/lifecycle/test_reflection.py"
 ---
 # Reflection
 
-A daily background pass that surfaces patterns in the last day's memory and writes a digest to the vault. Inspired by the "reflection" step in Stanford's Generative Agents ([https://arxiv.org/abs/2304.03442](https://arxiv.org/abs/2304.03442)), adapted to our planes and to a human reader.
+A daily background pass that summarises the last day's memory and writes a digest to the vault. It borrows the "reflection" step from Stanford's Generative Agents ([https://arxiv.org/abs/2304.03442](https://arxiv.org/abs/2304.03442)), adapted to Musubi's planes and to a human reader.
 
-We deliberately separate reflection (summary-for-humans) from synthesis (concept generation for retrieval). Different audiences, different tempos.
+Reflection (a summary for humans) is deliberately separate from synthesis (concepts for retrieval). They serve different readers at different tempos.
+
+Code: `src/musubi/lifecycle/reflection.py`, `src/musubi/llm/reflection_client.py`.
 
 ## Purpose
 
-- Give the human a single place to see what was captured in the last 24h.
-- Surface things the system is about to demote, promote, or that now contradict.
-- Produce a shareable artifact that the user can review, react to (via edits), or archive.
-- Produce a new retrieval target — reflection files are indexed and can resurface in future queries.
+- One place to see what was captured in the last 24 hours.
+- Surface what was promoted, demoted or contradicted, and what is at risk of demotion.
+- Produce a file a person can review, edit or archive.
+- Produce a retrieval target: reflection files are indexed in the curated plane.
 
 ## Schedule
 
-- **Daily**, 06:00 local (`REFLECTION_SCHEDULE`).
-- Can be re-run on-demand: `musubi-cli reflection run --date 2026-04-17`.
+- **Daily at 06:00 UTC** (`reflection_digest` job), lock `<lock dir>/reflection.lock`.
+- There is no CLI or API to re-run it on demand.
+
+The window is the 24 hours ending at run time.
+
+## Namespace
+
+The worker runs reflection for **one namespace per deployment**, hard-coded in `src/musubi/lifecycle/runner.py` as `lifecycle-worker/ops/curated`. There is no per-tenant reflection yet. The data sections scroll Qdrant across all namespaces; they are not filtered to a tenant.
 
 ## Output
 
 One markdown file per day at:
 
 ```
-/srv/musubi/vault/reflections/2026-04/2026-04-17.md
+<VAULT_PATH>/vault/reflections/YYYY-MM/YYYY-MM-DD.md
 ```
 
-With frontmatter:
+The relative path from `vault_path_for()` is `vault/reflections/...`, written under the configured `VAULT_PATH`.
+
+Frontmatter (from `render_frontmatter`):
 
 ```yaml
 ---
 object_id: <ksuid>
-namespace: alex/_shared/curated
+namespace: lifecycle-worker/ops/curated
 schema_version: 1
 title: "Reflection — 2026-04-17"
 topics:
@@ -50,168 +60,85 @@ importance: 6
 state: matured
 version: 1
 musubi-managed: true
-created: 2026-04-17T06:00:00Z
-updated: 2026-04-17T06:00:00Z
+created: 2026-04-17T06:00:00+00:00
+updated: 2026-04-17T06:00:00+00:00
 ---
 
 # Reflection — 2026-04-17
 
 ## Capture summary
-...
 ## Surfaced patterns
-...
 ## Promotion candidates
-...
+### Promoted
+### Skipped (gate passed, not promoted)
 ## Demotion candidates
-...
+### at-risk
 ## Contradictions
-...
+### New
+### Resolved
 ## Worth revisiting
-...
 ```
 
-Indexed in `musubi_curated` with `topics: [reflection]` — callers can opt in or out of including reflections in retrieval via `filters.topics_all=[reflection]` or `topics_any_exclude=[reflection]`.
+The same content is indexed as a `musubi_curated` row with `topics: [reflection]` and `tags: [reflection, daily]`. Reflections are **not** excluded from retrieval by default; there is no topic-exclusion filter on the retrieve API.
 
 ## Sections
 
 ### 1. Capture summary
 
-- **New memories captured** (by presence, by plane, by importance bucket).
-- **New artifacts indexed** (count + total bytes).
-- **New thoughts sent** (by channel).
-
-Plain numbers + a few one-line exemplars ("Most important capture: 'CUDA 13 driver 575 installed' from claude-code-session").
+Counts of rows created in the window, from Qdrant scrolls of the episodic, artifact and thought planes.
 
 ### 2. Surfaced patterns
 
-LLM-generated summary. Prompt:
+The only LLM call. The sweep collects the window's episodic rows (id, content, importance, topics) and asks for 3–5 themes, one `##` section each, citing memory ids. Prompt: `src/musubi/llm/prompts/reflection/v1.txt`, temperature 0.2.
 
-```
-Here are {N} matured memories captured in the last 24 hours, tagged by topic:
-{list with title, topics, importance}
+`validate_cited_ids` checks every cited id against the episodic ids actually in the window, and strips or annotates unknown ones, so a hallucinated id never reaches the file as if it were real.
 
-Identify 3-5 themes or patterns. For each:
-- Theme (short title)
-- 2-3 sentences on what's happening and why it's notable.
-- Cite specific memory IDs.
-
-Output structured markdown with one ## section per theme.
-```
-
-Small LLM pass (Qwen2.5-7B, temperature 0.4, ~3s). Validates each cited ID exists.
+**LLM endpoint:** `HttpxReflectionClient` posts to `{OLLAMA_URL}/api/chat` with `LLM_MODEL`. It does not use the `LIFECYCLE_LLM_*` settings (ADR 0043).
 
 ### 3. Promotion candidates
 
-Concepts that passed the promotion gate in the last 24h (not just the ones the promotion job actually promoted — some may have been skipped due to conflicts):
-
-```yaml
-- concept: 2W1e...  title: "CUDA 13 installation pattern"
-  reinforcement: 5
-  importance: 7
-  status: promoted → curated/alex/_shared/infrastructure/gpu/cuda-13-installation.md
-```
-
-With a linked view for each promoted concept:
-
-```
-[[curated/alex/_shared/infrastructure/gpu/cuda-13-installation]]
-```
+From the LifecycleEvent log in the window: concepts that were promoted, and concepts whose gate passed but which the promotion job did not promote.
 
 ### 4. Demotion candidates
 
-Objects demoted in the last 24h + ones teetering (will be demoted within 7 days if no change):
-
-```yaml
-- memory: 2W1eZ...  title: "Old GPU configuration"
-  demoted: 2026-04-17 02:05 UTC
-  reason: decay-rule:untouched-low-importance
-
-- memory: 2W1eW...  (at-risk)
-  will_demote: ~ 2026-04-24
-  reason: 57 days untouched + importance=3
-```
-
-The at-risk list is a gentle nudge — if the human cares about one of these, they can reinforce it by opening it, reading, or promoting it manually.
+Rows demoted in the window (from the event log, with reason), plus an **at-risk** list: matured episodic rows with importance ≤ 4 and no update for at least 30 days (`ReflectionConfig.at_risk_importance_max`, `at_risk_age_days_min`).
 
 ### 5. Contradictions
 
-Active contradictions surfaced or resolved since yesterday's reflection:
-
-```yaml
-new:
-  - pair: (2W1eA..., 2W1eB...)
-    about: "GPU memory — is it 8GB or 10GB?"
-    suggested: "Likely 10GB per recent session notes"
-resolved:
-  - pair: (2W1eC..., 2W1eD...)
-    resolved_by: <human>  keep=C  reason="D described old setup"
-```
+Contradiction state on concepts updated in the window, split into new links ("New") and resolved ones ("Resolved").
 
 ### 6. Worth revisiting
 
-Objects that haven't been accessed in a long time but are high importance + high reinforcement:
+Curated rows with importance ≥ 8 not accessed for at least 30 days (`revisit_min_importance`, `revisit_min_age_days`), with days since last access. The aim is to prompt a person to refresh something important that has been forgotten.
 
-```yaml
-- curated: [[curated/alex/_shared/projects/ship-dates]]
-  last_accessed: 45 days ago
-  importance: 9
-  reinforcement: 12
-  note: "consistently high-value; might want a refresher"
+## Flow
+
+```
+gather capture summary, promotions, demotions + at-risk, contradictions, revisit
+collect window episodic ids -> LLM patterns -> validate cited ids
+render markdown + frontmatter
+VaultWriter: record write-log entry, write file
+CuratedPlane.create(...)            (vault_path-keyed, so a re-run updates one row)
+emit Thought on channel "scheduler": "Daily reflection ready: [[vault/reflections/...]]"
 ```
 
-Intended to prompt the human to refresh a forgotten-but-important memory.
-
-## Implementation
-
-```python
-# musubi/lifecycle/reflection.py
-
-async def run(client, tei, ollama, *, now):
-    date = (now or time.time())
-    window = (date - 86400, date)
-
-    summary = await gather_capture_summary(client, window)
-    patterns = await llm_patterns(ollama, summary)
-    promotions = await gather_promotions(client, window)
-    demotions = await gather_demotions(client, window, lookahead_days=7)
-    contradictions = await gather_contradictions(client, window)
-    revisit = await gather_worth_revisiting(client, now)
-
-    body = render_markdown(summary, patterns, promotions, demotions, contradictions, revisit)
-    path = vault_path(date)
-    await vault.write(path, frontmatter(date), body, musubi_managed=True)
-    await emit_thought(
-        to_presence="all",
-        channel="scheduler",
-        content=f"Daily reflection ready: [[{path}]]",
-        importance=5,
-    )
-```
-
-LLM is called once (for patterns); all other sections are data queries. Keeps wall-clock time ~5s typical.
-
-## Interaction with retrieval
-
-Reflection files are indexed. A query "what was I working on last week?" would surface multiple `reflection` topic matches, each linking back to specific memories.
-
-Reflections are excluded from retrieval by default for ambient queries (filters.topics_all_exclude=["reflection"]) because they duplicate content from source memories. The caller opts in explicitly ("search reflections").
+The file write goes through the vault write-log, so the vault watcher does not re-ingest it.
 
 ## Handling LLM outage
 
-If Ollama is unavailable:
+If the LLM call fails or returns nothing:
 
-- Capture summary: still generated (data, no LLM).
-- Patterns section: replaced with `> LLM was unavailable at reflection time; patterns section skipped.`
-- Other sections: unaffected.
-- File still written, frontmatter still valid.
+- The patterns section becomes `> LLM was unavailable at reflection time; patterns section skipped.`
+- Every other section renders normally.
+- The file is still written and the curated row is still indexed.
 
 ## Idempotency
 
-Running reflection twice for the same date: second run overwrites the file (same path, same date-keyed frontmatter). No duplicate.
+Re-running for the same date overwrites the same file. The curated plane dedups by `vault_path`, so Qdrant keeps a single row.
 
 ## Test Contract
 
-**Module under test:** `musubi/lifecycle/reflection.py`
+**Module under test:** `src/musubi/lifecycle/reflection.py`
 
 Sections:
 
@@ -228,16 +155,18 @@ Output:
 8. `test_file_written_at_expected_path`
 9. `test_frontmatter_has_musubi_managed_true`
 10. `test_file_indexed_in_musubi_curated`
+11. `test_run_emits_thought_to_operator_channel`
 
 Degradation:
 
-11. `test_ollama_outage_skips_patterns_section_only`
+12. `test_ollama_outage_skips_patterns_section_only`
+13. `test_llm_exception_falls_back_to_skip_notice`
 
 Idempotency:
 
-12. `test_rerun_same_date_overwrites_same_file`
+14. `test_rerun_same_date_overwrites_same_file`
 
-Integration:
+Integration (skipped):
 
-13. `integration: seed 100 memories across 24h, run reflection, file exists, sections populated, point indexed`
-14. `integration: LLM-outage scenario — file generated with patterns-skipped notice`
+15. `integration: seed 100 memories across 24h, run reflection, file exists, sections populated, point indexed`
+16. `integration: LLM-outage scenario — file generated with patterns-skipped notice`

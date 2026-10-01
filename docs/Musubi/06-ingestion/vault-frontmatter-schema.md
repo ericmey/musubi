@@ -5,27 +5,27 @@ tags: [frontmatter, ingestion, schema, section/ingestion, status/complete, type/
 type: spec
 status: complete
 implements: src/musubi/vault/frontmatter.py
-updated: 2026-04-19
+updated: 2026-10-01
 up: "[[06-ingestion/index]]"
 reviewed: false
 ---
 # Vault Frontmatter Schema
 
-The pydantic model enforced on every curated markdown file's YAML frontmatter. This is the contract between humans and Musubi. Authoring guidelines live in the vault README; this file is the normative spec.
+The pydantic model enforced on every curated markdown file's YAML frontmatter. It is the contract between people editing the vault and Musubi. This page is the normative spec.
 
 See also [[04-data-model/vault-schema]] for the on-disk layout and authorization story.
 
 ## Model
 
 ```python
-# musubi/vault/frontmatter.py
+# src/musubi/vault/frontmatter.py
 
 class CuratedFrontmatter(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     # Identity
-    object_id: KSUID
-    namespace: str = Field(pattern=r"^[a-z0-9-]+/[a-z0-9-_]+/[a-z]+$")
+    object_id: KSUID | None = None          # empty string is treated as missing
+    namespace: str | None = Field(default=None, pattern=r"^[a-z0-9-]+/[a-z0-9-_]+/[a-z]+$")
     schema_version: int = 1
 
     # Content metadata
@@ -66,104 +66,85 @@ class ArtifactRefFrontmatter(BaseModel):
     quote: str | None = Field(default=None, max_length=1000)
 ```
 
-`extra="allow"` means humans can add their own keys (e.g., `my_custom_tag: foo`), and Musubi preserves them on rewrite. They're not indexed.
+`extra="allow"` lets people add their own keys (for example `my_custom_tag: foo`). They are kept when Musubi rewrites the file, and they are not indexed.
 
 ## Enforcement rules
 
-### 1. Required fields on first write
+### 1. Minimal authoring and ID bootstrap
 
-New files (from humans) need only:
+A new file needs no frontmatter fields at all. When the [[06-ingestion/vault-sync|vault watcher]] sees a markdown file without an `object_id`, it:
 
-- `title`
+- generates an `object_id` (KSUID);
+- infers `namespace` from the path: the first two path segments become `tenant/presence`, giving `<tenant>/<presence>/curated` (`src/musubi/vault/namespacing.py`). A file at the vault root falls back to `system/internal/curated`;
+- sets `created = updated = now`;
+- uses the file name as `title` if none is given;
+- leaves `musubi-managed` false;
+- writes the frontmatter back through the write-log, so the rewrite is not treated as a human edit.
 
-Everything else is optional on initial creation. Watcher will:
+The 6-hourly reconciler does not bootstrap ids; it skips files without an `object_id`. Without the watcher running, add `object_id`, `namespace`, `title`, `created` and `updated` yourself.
 
-- Generate `object_id` and write it back (flagged `written_by=core` in write-log to avoid double-index).
-- Compute `namespace` from the file's vault path.
-- Set `created = updated = now`.
-- Default `state = "matured"`, `version = 1`.
-- Leave `musubi_managed = false`.
-
-This minimal-authoring flow keeps curated creation frictionless.
-
-### 2. Immutable fields (humans shouldn't edit)
+### 2. Fields people should not edit
 
 - `object_id`
-- `namespace` (unless moving between namespace directories — treat that as rename+reindex)
+- `namespace` (moving a file between namespace directories should be treated as a rename plus re-index)
 - `schema_version`
 
-If a human edits these: Watcher logs an error, emits a Thought on `ops-alerts`, does not re-index the file. Operator resolves.
+Editing these is **not detected** today: the watcher validates and indexes whatever it finds. (Detection and an ops-alerts Thought are not implemented.)
 
-### 3. System-managed vs human-managed behavior
+### 3. Musubi-managed vs human-managed
 
-- `musubi-managed: true` → Musubi (promotion path) may write this file, re-index, mutate the body. Humans can still edit; the next Musubi write will overwrite (so `musubi-managed: true` implies "I trust Musubi here; I'll edit only if I know what I'm doing").
-- `musubi-managed: false` → Musubi **will not** edit the body. It may still update the Qdrant index (body_hash, read_by, etc.) but never modifies the file's content.
+- `musubi-managed: true`: the promotion path may rewrite this file. People can still edit it, but the next promotion of the same concept overwrites it.
+- `musubi-managed: false`: promotion never overwrites the file. If its target path holds a human-managed file, it writes a sibling `<slug>-promoted-<id>.md` instead (see [[06-ingestion/promotion#Path conflicts]]). Changes to the file still reach the index.
 
-Flipping true → false is supported: write `musubi-managed: false`, save. Future promotions that would have overwritten this file create a sibling instead.
+Flipping `true` to `false` is the way to take a promoted note over by hand.
 
-Flipping false → true is unusual; we log a warning and proceed.
+### 4. Timestamps
 
-### 4. Timestamp handling
+- Parsed as ISO 8601. A datetime without a timezone is rejected.
+- Serialized in ISO 8601 with an offset when Musubi writes the file.
 
-- Parsed as ISO8601. Timezone-aware required; Watcher rejects bare datetimes (e.g., `2026-04-17T09:00:00` without `Z` or offset).
-- Stored as UTC internally.
-- Serialized with explicit `Z` suffix on write.
+### 5. Tags and topics
 
-### 5. Tag and topic canonicalization
+On validation:
 
-- Tags: lowercased, stripped, hyphenated on write. Duplicates removed. Aliases resolved (per `config/tag-aliases.yaml`).
-- Topics: preserved as-is (hierarchical strings), but lowercased. No dedup (order matters — first is "primary").
+- Tags are lowercased, stripped, spaces become hyphens, and duplicates are removed (order kept).
+- Topics are lowercased; order is kept (the first is the primary topic used by promotion paths).
 
-Canonicalization happens at index time, not edit time — the human's YAML stays as they typed it, and Watcher normalizes when pushing to Qdrant.
+Tag **aliases are not applied** to vault files; the alias map in `src/musubi/lifecycle/maturation.py` (`DEFAULT_TAG_ALIASES`) is used only by episodic maturation.
 
-### 6. Wikilink parsing
+### 6. Wikilinks
 
-Body wikilinks (`[[foo]]`, `[[foo|alias]]`, `[[foo#section]]`) are parsed to populate `linked_to_topics`. Targets are extracted as bare topic strings. Broken targets (point to non-existent files) are allowed — just recorded as broken in a Watcher log.
+Body wikilinks are **not parsed**. `linked_to_topics` is indexed exactly as written in frontmatter.
 
-### 7. Valid_until soft-expire
+### 7. `valid_until` soft-expire
 
-Files with `valid_until` in the past are indexed but excluded from default retrieval (same as `state: archived`). The Qdrant point stays — forensics and bitemporal queries need it.
+A row whose `valid_until` is in the past is still indexed, but the hybrid retrieval default view excludes it (`valid_until` at or before the query time). The row stays for forensics and bitemporal queries.
 
-## YAML formatting rules
+## YAML handling
 
-We use `ruamel.yaml` for round-tripping. This preserves:
+Frontmatter is parsed and written with `ruamel.yaml` (quotes preserved on load, 2-space mappings, no line wrapping). When Musubi rewrites a file it serializes the validated model, so:
 
-- Comments (humans commenting inside frontmatter).
-- Key ordering.
-- Block vs flow style choices.
-- Quoted vs unquoted strings.
-
-Unpreserved (normalized on rewrite):
-
-- Extra whitespace around `:`.
-- Trailing spaces.
-- Non-ASCII punctuation quirks.
+- custom keys survive;
+- comments, original key order and original quoting style are **not** guaranteed to survive (the tests for them are skipped);
+- keys with empty values are dropped.
 
 ## Validation errors
 
-When a file has invalid frontmatter:
+When a file's frontmatter fails validation, the watcher logs it at ERROR level with the path and the pydantic error, and does not index that version of the file:
 
 ```
-vault/curated/alex/_shared/projects/musubi.md — validation failed:
-  importance: value 15 > 10
-  created: must be timezone-aware
-  object_id: must be a valid KSUID (27 chars)
+Frontmatter validation failed for alex/shared/projects/musubi.md: 1 validation error for CuratedFrontmatter
+importance
+  Input should be less than or equal to 10
 ```
 
-Emitted as:
+There is no ops-alerts Thought and no `last-errors.json` for validation failures. (Not implemented.)
 
-- Log entry at ERROR level.
-- Thought on `ops-alerts` (channel) with the file path + error lines.
-- Entry in the Watcher's `last-errors.json` (last 100 errors; readable via API).
+## Suggested template
 
-The file is **not** indexed until the error is resolved.
-
-## Human-facing templates
-
-Recommended Obsidian Templater snippets live in `vault/_meta/templates/`:
+Musubi does not ship or require an Obsidian template. A minimal one that validates without the watcher's bootstrap:
 
 ```yaml
-# vault/_meta/templates/new-curated.md
 ---
 title: "{{title}}"
 topics:
@@ -178,33 +159,31 @@ valid_from: "{{date:YYYY-MM-DD}}T00:00:00Z"
 {{cursor}}
 ```
 
-Documented in `vault/README.md`. Musubi does not require Templater; it's a UX nicety.
-
 ## Examples
 
 ### Minimal human-authored file
 
 ```markdown
 ---
-title: "Deploy LiveKit agent"
+title: "Deploy the voice agent"
 ---
 
-# Deploy LiveKit agent
+# Deploy the voice agent
 
 Steps:
 1. ...
 ```
 
-After Watcher processes: `object_id`, `namespace`, `created`, `updated`, etc. are populated automatically (via the bootstrap write).
+After the watcher processes it, `object_id`, `namespace`, `created` and `updated` are filled in by the bootstrap write.
 
 ### Fully populated curated file
 
 ```markdown
 ---
 object_id: 2W1eP3rZaLlQ4jTuYz0Q9CkZAB1
-namespace: alex/_shared/curated
+namespace: alex/shared/curated
 schema_version: 1
-title: "CUDA 13 setup notes for the musubi host"
+title: "CUDA 13 setup notes for the inference host"
 topics:
   - infrastructure/gpu
   - projects/musubi
@@ -230,7 +209,7 @@ supported_by:
 ```markdown
 ---
 object_id: 2W1fA...
-namespace: alex/_shared/curated
+namespace: alex/shared/concept
 title: "CUDA 13 installation pattern"
 topics:
   - infrastructure/gpu
@@ -240,7 +219,6 @@ state: matured
 musubi-managed: true
 promoted_from: 2W1eC...
 promoted_at: 2026-04-16T04:00:02Z
-merged_from: [2W1eA..., 2W1eB..., 2W1eD..., 2W1eE..., 2W1eF...]
 created: 2026-04-16T04:00:02Z
 updated: 2026-04-16T04:00:02Z
 ---
@@ -250,9 +228,11 @@ updated: 2026-04-16T04:00:02Z
 ...
 ```
 
+The promoted file carries the concept's namespace, because promotion copies `concept.namespace` into the curated frontmatter.
+
 ## Test Contract
 
-**Module under test:** `musubi/vault/frontmatter.py`
+**Module under test:** `src/musubi/vault/frontmatter.py`
 
 Parsing:
 
@@ -264,35 +244,29 @@ Parsing:
 6. `test_importance_out_of_range_errors`
 7. `test_invalid_ksuid_errors`
 
-Round-trip:
-
-8. `test_yaml_comments_preserved`
-9. `test_key_order_preserved`
-10. `test_quoted_string_style_preserved`
-
 Normalization:
 
-11. `test_tags_lowercased_on_write`
-12. `test_tag_aliases_applied_on_write`
-13. `test_datetime_serialized_with_z`
+8. `test_tags_lowercased_on_write`
+9. `test_datetime_serialized_with_z`
 
 Authorization:
 
-14. `test_musubi_managed_true_allows_system_write`
-15. `test_musubi_managed_false_blocks_system_write`
-16. `test_musubi_managed_flag_flip_respected_next_promotion`
-
-Identity:
-
-17. `test_bootstrap_object_id_writes_frontmatter_back`
-18. `test_object_id_edit_by_human_logged_and_skipped`
+10. `test_musubi_managed_true_allows_system_write`
+11. `test_musubi_managed_false_blocks_system_write`
 
 Examples:
 
-19. `test_example_minimal_file_equivalent_after_roundtrip`
-20. `test_example_musubi_promoted_file_equivalent`
+12. `test_example_minimal_file_equivalent_after_roundtrip`
+13. `test_example_musubi_promoted_file_equivalent`
 
-Integration:
+Skipped (round-trip formatting, aliases, identity-edit detection, integration):
 
+14. `test_yaml_comments_preserved`
+15. `test_key_order_preserved`
+16. `test_quoted_string_style_preserved`
+17. `test_tag_aliases_applied_on_write`
+18. `test_musubi_managed_flag_flip_respected_next_promotion`
+19. `test_bootstrap_object_id_writes_frontmatter_back` (covered by `tests/vault/test_sync.py::test_missing_object_id_gets_generated_and_written_back`)
+20. `test_object_id_edit_by_human_logged_and_skipped`
 21. `integration: create minimal file via editor simulation, watcher bootstraps object_id, file reread stable`
-22. `integration: invalid frontmatter file → Thought emitted, no Qdrant change, `last-errors.json` updated`
+22. `integration: invalid frontmatter file → Thought emitted, no Qdrant change`
