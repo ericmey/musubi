@@ -11,7 +11,7 @@ implements: ["tests/lifecycle/__init__.py", "tests/lifecycle/test_lifecycle.py"]
 ---
 # Lifecycle
 
-The state machine for every memory object. Transitions are explicit, auditable, and enforced by a typed transition function.
+The state machine for every memory object. Transitions made through the typed transition function are explicit and auditable. One write path still changes state outside it; see ["No silent mutation" rule](#no-silent-mutation-rule).
 
 ## States
 
@@ -98,7 +98,7 @@ provisional ──► matured ──► archived
 
 ## Transition function
 
-Every state change goes through `src/musubi/lifecycle/transitions.py:163-176`:
+State changes are meant to go through `src/musubi/lifecycle/transitions.py:163-176` (the one current exception is below):
 
 ```python
 def transition(
@@ -194,7 +194,7 @@ Thresholds: the maturation thresholds are fields of `MaturationConfig` (`src/mus
 
 ## "No silent mutation" rule
 
-It is an invariant of Musubi that **every state change produces a LifecycleEvent**. This means:
+The intended invariant is that **every state change produces a LifecycleEvent**. It holds for every path that goes through `transition()`, which means:
 
 - Every Qdrant point update that changes `state` must go through `transition()` and its coordinator, which pairs it with an event row.
 - The API's state-changing endpoints produce events.
@@ -202,6 +202,8 @@ It is an invariant of Musubi that **every state change produces a LifecycleEvent
 - `LifecycleEventSink.record()` commits each event to sqlite synchronously and returns `Ok` only after the commit; there is no batching or background flusher (`src/musubi/lifecycle/events.py:6-9`).
 
 Writing `set_payload` on `state` directly, bypassing `transition()`, violates the rule.
+
+**Current exception, not yet fixed:** when the vault watcher sees a curated file with a new `object_id` at an existing path, it marks the older curated row `superseded` directly through `owned_update` (a narrow change-set of `state`, `superseded_by`, `updated_at` and `updated_epoch`), with no `transition()` call and no event (`src/musubi/planes/curated/plane.py:298-350`). Watcher upserts record no event either, except archive-on-delete ([[04-data-model/vault-schema]]). Until that path is fixed, the event table is not a complete history of curated rows.
 
 ## Test Contract
 

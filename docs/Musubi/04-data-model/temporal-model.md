@@ -55,9 +55,14 @@ The interesting queries:
 
 ### "What did we know at time T?"
 
-Find objects where `created_epoch ≤ T` and no `superseded_by` pointer was written before T. This is a historical snapshot — "rebuild what I thought I knew last Tuesday."
+Find objects where `created_epoch ≤ T` and that had not been superseded at T. This is a historical snapshot — "rebuild what I thought I knew last Tuesday."
 
-Rare but useful for debugging. There is no API for it; it can be assembled from a `created_epoch` range filter plus a walk of supersession chains stopping at T.
+**Planned; only partly possible today.** There is no API for it, and the current data cannot always answer it. A row stores `superseded_by` but **no supersession timestamp**, so the row alone cannot say whether the replacement happened before or after T. The evidence that exists, and its limits:
+
+- **Lifecycle events.** A supersession made through `transition()` has a `LifecycleEvent` with `occurred_epoch`, which dates it exactly.
+- **Curated supersession by the vault watcher records no event** ([[04-data-model/lifecycle#"No silent mutation" rule]]). For those rows the only hint is the old row's `updated_epoch`, set when it was marked superseded, and any later write to that row overwrites it.
+
+A reliable as-of-T query needs a supersession timestamp on the row, or an event on every supersession path.
 
 ### "What is currently true in the world?"
 
@@ -115,7 +120,7 @@ Internal storage is always UTC. Display is the viewer's timezone (configured per
 2. `test_updated_epoch_monotone_non_decreasing`
 3. `test_valid_from_before_valid_until_enforced`
 4. `test_curated_valid_until_excludes_from_default_query`
-5. `test_historical_query_at_time_t_reconstructs_state`
+5. `test_historical_query_at_time_t_reconstructs_state` (planned)
 6. `test_validity_inference_parses_yesterday` (planned)
 7. `test_validity_inference_parses_absolute_date` (planned)
 8. `test_validity_inference_falls_back_to_created_at` (planned)
