@@ -177,7 +177,7 @@ failed healthcheck after this step means production is degraded.
 ```bash
 # From the operator's workstation (or the control host):
 curl -sS http://musubi.example.local:8100/v1/ops/status | jq .
-ssh ericmey@musubi.example.local \
+ssh operator@musubi.example.local \
  'sudo docker inspect musubi-core-1 --format "{{.Image}}"'
 ```
 

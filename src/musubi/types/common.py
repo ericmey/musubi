@@ -70,15 +70,15 @@ def family_of(namespace: str) -> str:
     """Return the identity family (first path component) of a namespace.
 
     Identity families group every namespace belonging to one identity
-    across the substrates it shows up on. Aoi has presences in
-    ``aoi/command-chair``, ``aoi/voice``, ``aoi/shared``, etc.; they all
-    belong to identity family ``"aoi"``. Retrieval, ranking, and
+    across the substrates it shows up on. A tenant may have presences in
+    ``example/assistant``, ``example/voice``, and ``example/shared``; they all
+    belong to identity family ``"example"``. Retrieval, ranking, and
     synthesis treat the family as one continuous stream.
 
-    >>> family_of("aoi/command-chair/episodic")
-    'aoi'
-    >>> family_of("nyla/voice/episodic")
-    'nyla'
+    >>> family_of("example/assistant/episodic")
+    'example'
+    >>> family_of("studio/voice/episodic")
+    'studio'
     """
     if "/" not in namespace:
         raise ValueError(
