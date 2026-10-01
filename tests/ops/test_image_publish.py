@@ -8,15 +8,15 @@ silently publishing nothing.
 Scope:
 
 - Triggers: tag push `v*`, branch push `main`, `workflow_dispatch`.
-- Permissions: `packages: write` (the GHCR push) + `contents: read`.
+- Permissions: `packages: write` (the GHCR push) + `contents: write`
+  (the release asset).
 - One job named `publish-core-image`.
 - Uses `docker/login-action` → GHCR, builds one local scan candidate,
   and publishes that exact image only after the CRITICAL gate.
 - Builds for `linux/amd64`.
-- Does NOT mutate `deploy/ansible/group_vars/all.yml` — digest bumps
+- Does NOT mutate `docker-compose.yml` — digest bumps
   are separate, human-reviewed PRs.
-- `group_vars/all.yml`'s `musubi_core_image` value is in one of the
-  accepted shapes (local-build pre-flip OR GHCR digest post-flip).
+- The public Compose Core image is pinned to a GHCR digest.
 - `deploy/runbooks/upgrade-image.md` is an operator-runnable doc —
   every step carries Command / Expected / Destructive / Rollback.
 """
@@ -32,7 +32,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "publish-core-image.yml"
-GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
+PUBLIC_COMPOSE = ROOT / "docker-compose.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
 FIRST_DEPLOY_RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
 PUSH_DIGEST_EXTRACTOR = "grep -oE 'sha256:[0-9a-f]{64}' | tail -1"
@@ -305,11 +305,11 @@ def test_workflow_tags_include_ghcr_namespace() -> None:
     assert "images: ${{ env.IMAGE }}" in text
 
 
-def test_workflow_does_not_mutate_group_vars() -> None:
+def test_workflow_does_not_mutate_compose() -> None:
     """The publish workflow is strictly build+push — the digest bump
     is a separate PR per the slice spec.
 
-    Comments that mention `group_vars/all.yml` (e.g. the operator-
+    Comments that mention `docker-compose.yml` (e.g. the operator-
     facing summary) are fine; what we guard against is any action
     that writes to the file: `sed -i`, `git commit`, a
     create-pull-request action, etc.
@@ -329,26 +329,25 @@ def test_workflow_does_not_mutate_group_vars() -> None:
         )
 
 
+def test_release_summary_points_at_public_compose() -> None:
+    workflow = WORKFLOW.read_text()
+    assert "docker-compose.yml and quickstart/docker-compose.yml" in workflow
+    assert "deploy/ansible/group_vars/all.yml" not in workflow
+
+
 # ---------------------------------------------------------------------------
-# Ansible integration
+# Public Compose integration
 # ---------------------------------------------------------------------------
 
 
-_IMAGE_RE = re.compile(
-    r"^(musubi-core:dev|ghcr\.io/(ericmey|sourceblender)/musubi-core"
-    r"(:v\d[\w.\-]*|@sha256:[0-9a-f]{64}))$"
-)
+_IMAGE_RE = re.compile(r"^ghcr\.io/sourceblender/musubi-core@sha256:[0-9a-f]{64}$")
 
 
-def test_group_vars_musubi_core_image_parses_as_oci_reference() -> None:
-    gv = _load(GROUP_VARS)
-    image = gv.get("musubi_core_image")
-    assert isinstance(image, str) and image, "musubi_core_image not set"
-    assert _IMAGE_RE.match(image), (
-        f"musubi_core_image={image!r} is not a recognised shape — expected "
-        "either the pre-publish local tag 'musubi-core:dev' or a GHCR "
-        "reference like 'ghcr.io/<owner>/musubi-core@sha256:<64-hex>'"
-    )
+def test_public_compose_core_image_is_pinned_to_digest() -> None:
+    compose = _load(PUBLIC_COMPOSE)
+    image = compose.get("x-core-image", "").strip()
+    assert isinstance(image, str) and image, "public Compose Core image not set"
+    assert _IMAGE_RE.match(image), f"x-core-image={image!r} must be a sourceblender GHCR digest pin"
 
 
 # ---------------------------------------------------------------------------

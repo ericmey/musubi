@@ -2370,7 +2370,8 @@ def test_control_autopin_workflow_readable() -> None:
     text = _read_text(AUTO_PIN_WF)
     assert len(text) > 100
     assert "auto-digest-bump" in text.lower()
-    assert "musubi_core_image" in text
+    assert "docker-compose.yml" in text
+    assert "bump_compose_pin.py" in text
 
 
 def test_control_explicit_v_tag_input_dispatches() -> None:
