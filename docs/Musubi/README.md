@@ -32,7 +32,7 @@ Every document in this vault is either a **specification** (the target system), 
 | If you are… | Start here |
 |---|---|
 | Opening the vault for the first time | [[00-index/reading-tour]] |
-| A coding agent picking up work | [[00-index/agent-guardrails]] → [[12-roadmap/phased-plan]] → your assigned issue |
+| A coding agent picking up work | [[00-index/agent-guardrails]] → your assigned issue |
 | A human reviewer | [[00-index/executive-summary]] |
 | Doing deployment | [[08-deployment/index]] |
 | Implementing a retrieval path | [[05-retrieval/scoring-model]] |

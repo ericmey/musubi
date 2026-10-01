@@ -23,6 +23,24 @@ Please read [AGENTS.md](AGENTS.md), the single contract for human and AI contrib
 
 Full text: [AGENTS.md](AGENTS.md).
 
+## Repositories
+
+This repository holds the core service and its docs. Integrations live in their own repositories, each with its own issues and releases.
+
+| Repository | Contents |
+|---|---|
+| [`sourceblender/musubi`](https://github.com/sourceblender/musubi) (this one) | Core service (`src/musubi/`), the `musubi` and `musubi-context` CLIs, the in-repo Python SDK (`src/musubi/sdk/`), the MCP adapter (`src/musubi/adapters/mcp/`), the LiveKit compatibility shim, deploy files, and the architecture docs (`docs/Musubi/`) and user guide (`docs/guide/`) |
+| [`musubi-sdk`](https://github.com/sourceblender/musubi-sdk) | The published Python client (`pip install musubi-sdk`) |
+| [`musubi-harness`](https://github.com/sourceblender/musubi-harness) | Shared plugin runtime: durable local outbox, verified writes, identity from configuration |
+| [`musubi-livekit`](https://github.com/sourceblender/musubi-livekit) | LiveKit voice-worker integration |
+| [`musubi-claude`](https://github.com/sourceblender/musubi-claude), [`musubi-codex`](https://github.com/sourceblender/musubi-codex), [`musubi-openclaw`](https://github.com/sourceblender/musubi-openclaw), [`musubi-hermes`](https://github.com/sourceblender/musubi-hermes), [`musubi-opencode`](https://github.com/sourceblender/musubi-opencode), [`musubi-grok`](https://github.com/sourceblender/musubi-grok) | Agent-host plugins |
+
+**Import discipline** (a convention reviewers hold; no linter enforces it today):
+
+- `src/musubi/sdk/` imports nothing from the server side. It talks to Core over HTTP only.
+- `src/musubi/adapters/` reach Core through the SDK. They never import `planes/`, `retrieve/`, `lifecycle/` or the storage modules.
+- `src/musubi/api/` is where `planes/`, `retrieve/` and `lifecycle/` are composed into routes.
+
 ## Dev setup
 
 ```bash

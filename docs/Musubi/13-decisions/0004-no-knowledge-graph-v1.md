@@ -63,4 +63,4 @@ Trade-offs:
 
 - [[13-decisions/0005-hybrid-search]]
 - [[06-ingestion/concept-synthesis]]
-- [[12-roadmap/phased-plan]]
+- [[12-roadmap/index]]

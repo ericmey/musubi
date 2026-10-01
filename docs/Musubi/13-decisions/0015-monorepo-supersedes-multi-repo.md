@@ -99,6 +99,6 @@ Considered. Possible future move if we ever need to publish `musubi-sdk` or `mus
 ## References
 
 - [[13-decisions/0011-canonical-api-and-adapters]] — interface decision stands; repo-layout portion is superseded by this ADR.
-- [[12-roadmap/ownership-matrix]] — repo column collapses to a single `musubi` entry.
+- `CONTRIBUTING.md` (Repositories) — the repository table that replaced the old ownership matrix.
 - [[07-interfaces/canonical-api]], [[07-interfaces/contract-tests]] — unchanged by this ADR; interface discipline is identical.
 - `github.com/sourceblender/musubi` `v2` branch — scaffold committed 2026-04-17 reflects this layout.
