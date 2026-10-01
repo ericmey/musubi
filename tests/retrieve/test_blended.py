@@ -180,6 +180,50 @@ async def test_content_dedup_jaccard_plus_cosine_deep_only() -> None:
         assert hits[0].object_id == "1"
 
 
+async def test_content_dedup_batches_dense_embeddings_without_changing_survivors() -> None:
+    """Semantic comparisons share one embedding request and keep the same winners."""
+    contents = ("first", "first near", "second", "second near")
+    vectors = {
+        "first": [1.0, 0.0],
+        "first near": [0.99, 0.01],
+        "second": [0.0, 1.0],
+        "second near": [0.01, 0.99],
+    }
+
+    class CountingEmbedder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(texts)
+            return [vectors[text] for text in texts]
+
+    hits = [
+        ScoredHit(
+            object_id=str(index),
+            plane="curated",
+            state="matured",
+            score=1.0 - index * 0.1,
+            score_components=ScoreComponents(0, 0, 0, 0, 0),
+            payload={"content": content, "tags": ["shared"]},
+        )
+        for index, content in enumerate(contents)
+    ]
+    embedder = CountingEmbedder()
+    with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
+        mock_deep.return_value = Ok(value=DeepResult(hits=hits))
+        query = BlendedRetrievalQuery(
+            namespace="example/agent", query_text="Q", planes=["curated"], mode="deep"
+        )
+        res = await run_blended_retrieve(
+            cast(Any, None), cast(Any, embedder), cast(Any, FakeRerankerClient()), query
+        )
+
+    assert res.is_ok()
+    assert [hit.object_id for hit in res.unwrap().results] == ["0", "2"]
+    assert embedder.calls == [list(contents)]
+
+
 async def test_dedup_keeps_highest_provenance() -> None:
     """Bullet 4"""
     # tested in test_content_dedup_hash_exact
