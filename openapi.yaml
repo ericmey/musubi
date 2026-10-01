@@ -3515,8 +3515,8 @@ components:
             (cross-plane fanout, requires `planes`), or wildcard with `*` replacing
             any single segment (e.g. `example/*/episodic`, `*/assistant/curated`).
             Optional in AUTH-001: omit (or null) to recall across all authorized namespaces;
-            the per-agent exclusion list (`salesai` mandatory + per-agent settings)
-            is applied centrally. See ADR 0031 + AUTH-001.'
+            the exclusion list (operator baseline + per-agent settings) is applied
+            centrally. See ADR 0031 + AUTH-001.'
         query_text:
           type: string
           title: Query Text

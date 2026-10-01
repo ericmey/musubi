@@ -96,8 +96,8 @@ class RetrieveQuery(BaseModel):
             "or wildcard with `*` replacing any single segment "
             "(e.g. `example/*/episodic`, `*/assistant/curated`). "
             "Optional in AUTH-001: omit (or null) to recall across all "
-            "authorized namespaces; the per-agent exclusion list "
-            "(`salesai` mandatory + per-agent settings) is applied centrally. See ADR 0031 + AUTH-001."
+            "authorized namespaces; the exclusion list "
+            "(operator baseline + per-agent settings) is applied centrally. See ADR 0031 + AUTH-001."
         ),
     )
     # query_text required for fast/deep/blended; optional for recent.
@@ -474,8 +474,8 @@ async def retrieve(
     # AUTH-001: when the body omits ``namespace`` (or sends null),
     # recall spans every concrete namespace in the caller's
     # identity_family across the caller's authorized planes. The
-    # per-agent exclusion list (`salesai` mandatory baseline +
-    # per-agent settings) is applied centrally
+    # exclusion list (operator baseline + per-agent settings) is
+    # applied centrally
     # by ``enforce_namespace_policy`` after target resolution. The
     # seam is the single source of truth for the exclusion policy.
     # Authenticate first so unauth callers cannot probe for empty

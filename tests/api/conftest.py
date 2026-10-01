@@ -80,6 +80,8 @@ def api_settings(tmp_path: Path) -> Settings:
             # returns, and the bootstrap would otherwise try to reach
             # the real Qdrant/TEI on every test app construction.
             "musubi_skip_bootstrap": True,
+            # AUTH-001 tests exercise an operator-configured baseline exclusion.
+            "default_excluded_namespaces": frozenset({"private"}),
         }
     )
 
