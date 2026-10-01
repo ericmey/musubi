@@ -108,7 +108,7 @@ The deep retrieval path ([[05-retrieval/deep-path]]) has an optional query-expan
 
 1. Never let the LLM call external tools. Our LLM calls are one-shot generation; no function calling is wired to the LLM surface area in v1.
 2. Never feed the LLM into another LLM without validating between them.
-3. Never include token values, private data, or internal object IDs in LLM prompts.
+3. Never include token values, signing keys or other credentials in LLM prompts. Memory text and object IDs **are** sent when a task needs them: synthesis, for example, sends each memory's `id`, `importance`, `tags` and `content` (`src/musubi/llm/ollama.py:267-279`). Point the lifecycle LLM only at an endpoint you trust with that content.
 4. Never auto-apply LLM suggestions to state — always route through the lifecycle engine.
 
 ## System prompts are owned by Musubi

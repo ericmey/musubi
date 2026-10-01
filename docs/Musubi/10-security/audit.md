@@ -65,10 +65,12 @@ for each one ([[10-security/auth]]).
 
 ### Data-change audit
 
-Every state change of canonical data records a `LifecycleEvent`
-(`src/musubi/types/lifecycle_event.py`) in the `lifecycle_events` table of the
-lifecycle SQLite ledger (`lifecycle/work.sqlite`; see [[06-ingestion/lifecycle-engine]]).
-That table is the data audit log.
+State changes made through the lifecycle engine's `transition()` record a
+`LifecycleEvent` (`src/musubi/types/lifecycle_event.py`) in the `lifecycle_events`
+table of the lifecycle SQLite ledger (`lifecycle/work.sqlite`; see
+[[06-ingestion/lifecycle-engine]]). That table is the data audit log for those
+changes: API deletes, maturation, demotion, promotion, synthesis and operator
+transitions.
 
 Each event captures:
 
@@ -80,8 +82,13 @@ Each event captures:
 - `correlation_id` (the request id; empty for background jobs).
 - `lineage_changes`, e.g. the links a promotion adds.
 
-Because state changes go through the lifecycle engine, this table is the timeline of
-any row.
+**Known gap: not every state change is in this table.** When the vault watcher sees
+a curated file with a new `object_id` at an existing path, it marks the older curated
+row `superseded` directly through `owned_update`, with no `transition()` call and no
+event (`src/musubi/planes/curated/plane.py:298-350`). Watcher upserts that change
+content record no event either; only archive-on-delete does. For curated rows the
+table is therefore an incomplete timeline. The intended invariant, an event for
+every state change, is not yet met on that path.
 
 ## Retention
 

@@ -120,10 +120,18 @@ canonical content and is not something an export needs to carry.
 
 ## Delete ("I want this data gone")
 
-- **Soft delete** of one episodic memory, curated document or concept:
-  `DELETE /v1/{episodic,curated,concepts}/{id}?namespace=<ns>` with `w` scope. The
-  row transitions to `archived` through the lifecycle engine (a `LifecycleEvent` is
-  recorded); the point stays in Qdrant.
+- **Soft delete:** `DELETE /v1/{episodic,curated,concepts}/{id}?namespace=<ns>` with
+  `w` scope. It goes through the lifecycle engine (a `LifecycleEvent` is recorded) and
+  the point stays in Qdrant. What it does depends on the plane and the row's state
+  (`src/musubi/types/lifecycle_event.py:30-62`):
+  - **Episodic:** moves the row to `archived`, which is only allowed from
+    `provisional`. On a `matured` memory the soft delete is refused as an illegal
+    transition; use the hard delete below.
+  - **Curated:** moves the row to `archived` (allowed from `matured`).
+  - **Concept:** there is no `archived` state for concepts, so the delete moves the
+    row to `superseded` (`src/musubi/api/routers/writes_concept.py:154-200`). Only a
+    `matured` concept can be superseded; `synthesized` and `promoted` concepts refuse
+    the delete.
 - **Hard delete** of one episodic memory: `DELETE /v1/episodic/{id}?namespace=<ns>&hard=true`
   with the `operator` scope. The point is removed from Qdrant
   (`src/musubi/api/routers/writes_episodic.py:544-600`).

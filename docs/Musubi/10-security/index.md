@@ -41,7 +41,7 @@ Threat model, auth, redaction, data handling. Scoped to v1: a small team or sing
 ## Principles
 
 1. **Least privilege via scopes.** Every token lists the exact namespaces it can read/write. Mismatches are 403 with a structured error.
-2. **One canonical writer per row.** No silent mutation. Every state change emits a `LifecycleEvent`.
+2. **One canonical writer per row.** State changes made through the lifecycle engine emit a `LifecycleEvent`. One known exception today: curated supersession by the vault watcher records no event ([[10-security/audit#Data-change audit]]).
 3. **Tokens should be short-lived.** The issuer chooses `exp`; Core verifies it when present but does not require it, and there are no refresh tokens. Set an `exp` on every token, shorter for operator tokens.
 4. **Nothing sensitive in logs.** The JSON log formatter scrubs JWT-shaped strings from log messages before emit (`src/musubi/observability/logging_setup.py`). Auth audit events carry namespaces and subjects, not content.
 5. **Data stays in open formats.** Curated knowledge is plain Markdown in the vault, and every plane is readable over the API. A single export command is planned, not implemented; see [[10-security/data-handling]].
