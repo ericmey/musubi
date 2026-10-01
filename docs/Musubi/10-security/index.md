@@ -26,7 +26,7 @@ Threat model, auth, redaction, data handling. Scoped to v1 — a small team + a 
 ### Out of scope (v1)
 
 - **Nation-state adversary on the LAN.** Single-operator, dedicated box; assumed physically trustworthy.
-- **Multi-tenant isolation.** v1 is one tenant logically (a single team). Scopes exist but we don't harden against adversarial co-tenants.
+- **Multi-tenant isolation.** v1 assumes a single trusted team. Tenants are agents and scopes separate them, but we don't harden against adversarial co-tenants.
 - **DDoS resilience at scale.** Rate limits at Kong suffice for small-team scope.
 - **HSM / signing hardware.** JWT signing key is on disk.
 

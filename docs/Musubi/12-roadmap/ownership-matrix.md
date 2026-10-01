@@ -14,11 +14,11 @@ Who owns what. Musubi is (for now) effectively a single-developer project — bu
 
 ## Repos
 
-Musubi is a **single-repo monorepo** per [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]]. The 8-repo layout originally proposed in [[13-decisions/0011-canonical-api-and-adapters]] is retired; its interface discipline survives as import-lint rules. The Obsidian architecture vault lives in the same repo at `docs/Musubi/`.
+Musubi is a **single-repo monorepo** per [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]]. The 8-repo layout originally proposed in [[13-decisions/0011-canonical-api-and-adapters]] is retired; its interface discipline survives as import-lint rules. The Obsidian architecture vault lives in the same repo at `docs/Musubi/`. The published SDK, the LiveKit integration and the client plugins have since moved to their own repos (listed below).
 
 | Repo | Primary owner | Backup | Access | Contents |
 |---|---|---|---|---|
-| `github.com/sourceblender/musubi` | Maintainer | — | public | Everything: Core, SDK, MCP/Obsidian/CLI adapters, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
+| `github.com/sourceblender/musubi` | Maintainer | — | public | Core service, CLI, the in-repo Python SDK and MCP adapter, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. Separately maintained: the published SDK (`musubi-sdk`), the LiveKit integration (`musubi-livekit`), the shared plugin library (`musubi-harness`) and the client plugins (`musubi-claude`, `musubi-codex`, `musubi-openclaw`, `musubi-hermes`, `musubi-opencode`, `musubi-grok`). `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
 
 If a second contributor joins, the "backup" column fills in. For now, one maintainer holds all bus factor.
 
