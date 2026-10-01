@@ -167,9 +167,11 @@ There is no single-chunk route.
 POST   /v1/thoughts/send                     # {namespace, from_presence, to_presence, content, channel?, importance?}
 POST   /v1/thoughts/check                    # {namespace, presence, limit?}: unread for a presence
 POST   /v1/thoughts/read                     # {namespace, ids, reader}: mark read
-POST   /v1/thoughts/history                  # {namespace, presence, query_text, limit?}: semantic search
+POST   /v1/thoughts/history                  # {namespace, presence, query_text, limit?}: presence-scoped history scroll
 GET    /v1/thoughts/stream                   # SSE real-time delivery
 ```
+
+`POST /v1/thoughts/history` is not a search today: it scrolls the presence's thought history (`src/musubi/api/routers/thoughts.py:85-100`). `query_text` is required by the request model but currently ignored; semantic search over thoughts is planned.
 
 `namespace` is **required** on send. It is the 3-segment thought namespace of the sender's presence (for example `alex/voice/thought`), and the token needs `w` on it. See [[04-data-model/thoughts]].
 
@@ -381,9 +383,11 @@ The `musubi context` CLI and the `musubi-context` script call this endpoint. See
 
 ```
 POST   /v1/lifecycle/transition              # operator: {object_id, to_state, actor, reason, superseded_by?}
-GET    /v1/lifecycle/events                  # operator: list events
-GET    /v1/lifecycle/events/{object_id}      # operator: events for one object
+GET    /v1/lifecycle/events                  # operator: route stub, see below
+GET    /v1/lifecycle/events/{object_id}      # operator: route stub, see below
 ```
+
+**The two events routes are stubs; do not use them for auditing.** They read a Qdrant mirror (`musubi_lifecycle_events`) that nothing writes. Without a namespace filter, and for any object, they return `[]`; with a namespace filter they return whatever the empty mirror holds (`src/musubi/api/routers/lifecycle.py:37-73`). The real event log is the `lifecycle_events` table in the lifecycle SQLite ledger ([[10-security/audit]]).
 
 A transition may answer `202` with a durably pending body when the lifecycle coordinator defers it. There is no reconcile endpoint; the lifecycle worker reconciles continuously ([[06-ingestion/lifecycle-engine]]).
 

@@ -92,7 +92,7 @@ Back up the whole directory. See [[09-operations/backup-restore]].
 
 ## LifecycleEvent recording
 
-Every state transition goes through `transition()` in `src/musubi/lifecycle/transitions.py` (see [[04-data-model/lifecycle#transition-function]]). `LifecycleEventSink` (`src/musubi/lifecycle/events.py`) commits each event **synchronously** to SQLite and returns `Ok` only after the commit. There is no in-memory buffer to lose on a crash. A refused write is a typed error and increments `musubi_lifecycle_event_write_failures_total`.
+State transitions made through the coordinator go through `transition()` in `src/musubi/lifecycle/transitions.py` (see [[04-data-model/lifecycle#transition-function]]), and each records an event. **One exception today:** curated supersession by the vault watcher sets `state` to `superseded` through `owned_update`, with no `transition()` and no event (`src/musubi/planes/curated/plane.py:298-350`). For transitions that do record one, `LifecycleEventSink` (`src/musubi/lifecycle/events.py`) commits each event **synchronously** to SQLite and returns `Ok` only after the commit. There is no in-memory buffer to lose on a crash. A refused write is a typed error and increments `musubi_lifecycle_event_write_failures_total`.
 
 A Qdrant mirror collection (`musubi_lifecycle_events`) is declared in the store layer but not populated. (Not implemented.)
 
