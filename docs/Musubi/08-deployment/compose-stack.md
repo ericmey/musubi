@@ -4,327 +4,74 @@ section: 08-deployment
 tags: [containers, deployment, docker-compose, section/deployment, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-18
+updated: 2026-10-01
 up: "[[08-deployment/index]]"
 reviewed: false
-implements: "docs/Musubi/08-deployment/"
+implements: "docker-compose.yml"
 ---
 # Compose Stack
 
-The `docker compose` stack. One file captures every container Musubi runs.
+The root `docker-compose.yml` is the public application stack. It runs Musubi
+Core, its lifecycle worker and Qdrant. The CPU quickstart in
+`quickstart/docker-compose.yml` remains a separate demo with a public test key.
+An optional `deploy/docker/compose.local-gpu.yml` adds local TEI and Ollama
+services; operators choose digest-pinned TEI and Ollama images compatible
+with their GPU.
+Neither path
+installs packages, drivers, users or firewall rules on the host.
 
-**Location on host:** `/etc/musubi/docker-compose.yml` (Ansible-rendered).
+## Required inputs
 
-> Hostnames and IPs use placeholder tokens (`<kong-gateway>`, `<musubi-ip>`, etc.). Substitute your own values.
+Copy `.env.example` to a private `.env` and set a random `JWT_SIGNING_KEY`, a
+`QDRANT_API_KEY`, and reachable dense, sparse, reranker and Ollama URLs. Core
+loads model IDs and the OAuth issuer from the same file. Compose refuses
+missing keys or endpoint URLs before creating containers. Optional TEI Basic
+auth settings reach Core and the worker; the lifecycle LLM key reaches only
+the worker, even when the shared env file contains it.
 
-## Services
+Core publishes only `MUSUBI_CORE_BIND:MUSUBI_CORE_PORT`, defaulting to
+`127.0.0.1:8100`. To reach it over a network, the operator must explicitly
+change the bind, configure TLS/auth at the edge and manage their own firewall.
+Qdrant, the lifecycle worker and optional inference services publish no host
+ports. Qdrant uses HTTP only on the Compose network with its API key; Core's
+`MUSUBI_ALLOW_PLAINTEXT=true` applies to that internal Qdrant link.
 
-| Service | Image | Role |
-|---|---|---|
-| `qdrant` | `qdrant/qdrant:v1.17.1` | Vector DB |
-| `tei-dense` | `ghcr.io/huggingface/text-embeddings-inference:1.5-cuda` | Dense embeddings (BGE-M3) |
-| `tei-sparse` | same image | Sparse embeddings (SPLADE++ V3) |
-| `tei-reranker` | same image | Cross-encoder rerank (BGE-reranker-v2-m3) |
-| `ollama` | `ollama/ollama:0.4.0-cuda` | LLM (Qwen2.5-7B Q4) |
-| `core` | `ghcr.io/sourceblender/musubi-core:<version>` | Musubi Core (FastAPI + lifecycle worker) |
+## Data and startup
 
-No gateway runs on the Musubi host. **Kong on `<kong-gateway>`** terminates TLS and fronts Musubi Core — covered in [[08-deployment/kong]] and [[13-decisions/0014-kong-over-caddy]].
+Named volumes persist Qdrant storage and snapshots, vault files, artifact
+blobs, lifecycle state and logs. The optional GPU stack adds model-cache
+volumes. The published Core image runs as UID 999/GID 985, so a one-shot
+`volume-init` service grants that account the roots of fresh application
+volumes. Core and the worker stay non-root. Core waits for Qdrant health and
+volume initialization; the worker waits for Core health. Core itself probes
+Qdrant and the dense TEI endpoint at startup and refuses readiness if either
+is unreachable. Operators verify the remaining inference paths with a canary.
 
-## Volumes
+The Core, worker and volume-init services use one image pin via the
+`x-core-image` anchor. Its digest must match the Core image in the CPU
+quickstart; the release pin PR updates both files. The source repository
+does not deploy to any host. Operators review and apply pins themselves.
 
-| Volume | Mounted by | Purpose |
-|---|---|---|
-| `qdrant-storage` | qdrant | Vector DB storage |
-| `tei-models` | tei-* | HF model cache (shared across TEI services) |
-| `ollama-models` | ollama | Ollama model weights |
-| bind `/var/lib/musubi/vault` | core | Obsidian vault (read/write) |
-| bind `/var/lib/musubi/artifact-blobs` | core | Content-addressed artifact blobs |
-| bind `/var/lib/musubi/lifecycle` | core + lifecycle-worker | Lifecycle DB `work.sqlite` + write-log + schedule locks |
-| bind `/var/log/musubi` | core | Structured log output |
+## Backups
 
-Bind mounts stay on the host (`/var/lib/musubi/...`) for easy backup + external access.
-
-## Networks
-
-One user-defined network `musubi-net`. All services on it; Core reaches peers via service-name DNS (`qdrant:6333`, `tei-dense:80`, etc.).
-
-Kong (on `<kong-gateway>`, `<kong-ip>`) reaches Core via `http://<musubi-ip>:8100`. Core's only host-exposed port.
-
-## Health checks
-
-Every container has a health check. Compose's `depends_on.condition: service_healthy` enforces the start order:
-
-```
-qdrant + tei-* + ollama  (parallel, independent)
-         │
-         ▼
-       core   (waits for all above)
-```
-
-Examples:
-
-```yaml
-qdrant:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-    interval: 30s
-    timeout: 5s
-    retries: 3
-    start_period: 60s
-
-tei-dense:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-    interval: 30s
-    start_period: 120s    # model load on first boot
-
-ollama:
-  healthcheck:
-    test: ["CMD-SHELL", "ollama list | grep -q qwen2.5 || exit 1"]
-    interval: 60s
-    start_period: 300s    # first pull is ~5 min
-
-core:
-  depends_on:
-    qdrant: {condition: service_healthy}
-    tei-dense: {condition: service_healthy}
-    tei-sparse: {condition: service_healthy}
-    tei-reranker: {condition: service_healthy}
-    ollama: {condition: service_healthy}
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:8100/v1/ops/health"]
-    interval: 30s
-    start_period: 30s
-```
-
-## Env
-
-Core reads its config from `/etc/musubi/.env` (managed by Ansible). Sample:
-
-```env
-# Qdrant
-QDRANT_HOST=qdrant
-QDRANT_PORT=6333
-QDRANT_API_KEY=...
-
-# Inference
-TEI_DENSE_URL=http://tei-dense
-TEI_SPARSE_URL=http://tei-sparse
-TEI_RERANKER_URL=http://tei-reranker
-OLLAMA_URL=http://ollama:11434
-EMBEDDING_MODEL=BAAI/bge-m3
-SPARSE_MODEL=naver/splade-v3
-RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-LLM_MODEL=qwen2.5:7b-instruct-q4_K_M
-
-# Core
-BRAIN_PORT=8100
-VAULT_PATH=/var/lib/musubi/vault
-ARTIFACT_BLOB_PATH=/var/lib/musubi/artifact-blobs
-LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite
-LOG_DIR=/var/log/musubi
-
-# Auth
-JWT_SIGNING_KEY=...
-OAUTH_AUTHORITY=https://auth.internal.example.com
-
-# Feature flags
-MUSUBI_GRPC=false
-MUSUBI_ALLOW_PLAINTEXT=false
-# Opt-in to the artifact-archival lifecycle sweep. When true,
-# unreferenced artifacts older than 180 days transition to
-# state=archived (blob bytes preserved — archival is soft-delete only).
-# Default false keeps the sweep as a no-op.
-MUSUBI_ARTIFACT_ARCHIVAL_ENABLED=false
-```
-
-## Resource limits
-
-Compose enforces per-service limits so no runaway container can starve the host:
-
-```yaml
-core:
-  deploy:
-    resources:
-      limits: {memory: 4G, cpus: "2.0"}
-      reservations: {memory: 1G}
-
-qdrant:
-  deploy:
-    resources:
-      limits: {memory: 8G, cpus: "4.0"}
-
-tei-dense:
-  deploy:
-    resources:
-      limits: {memory: 2G, cpus: "2.0"}
-      reservations:
-        devices:
-          - capabilities: [gpu]
-```
-
-GPU is shared (see [[08-deployment/gpu-inference-topology]]). CPU + RAM limits keep the host stable; Qdrant gets the lion's share of RAM because its page cache is critical.
-
-## Logging
-
-All services configured with journald:
-
-```yaml
-x-logging: &default-logging
-  driver: journald
-  options:
-    tag: "musubi.{{.Name}}"
-
-services:
-  core:
-    logging: *default-logging
-  ...
-```
-
-`journalctl -t musubi.core -f` tails Core logs. Useful even without a log aggregator.
-
-## Restart policy
-
-Everything: `restart: unless-stopped`. Crash → back up. Host reboot → stack comes up. Ansible handles explicit stops (during updates).
-
-## Update procedure
-
-```
-$ ansible-playbook playbooks/update.yml
-```
-
-Pulls new image digests (must be pinned in the compose file) and recreates only changed services. See [[08-deployment/ansible-layout#playbooks/update.yml]].
-
-## Full compose (trimmed)
-
-```yaml
-version: "3.9"
-
-networks:
-  musubi-net:
-
-volumes:
-  qdrant-storage:
-  tei-models:
-  ollama-models:
-
-x-gpu: &gpu
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - capabilities: [gpu]
-
-x-logging: &default-logging
-  driver: journald
-  options:
-    tag: "musubi.{{.Name}}"
-
-services:
-  qdrant:
-    image: qdrant/qdrant:v1.17.1@sha256:...
-    volumes:
-      - qdrant-storage:/qdrant/storage
-      - /etc/musubi/qdrant-config.yaml:/qdrant/config/production.yaml
-    networks: [musubi-net]
-    ports:
-      - "127.0.0.1:6333:6333"
-      - "127.0.0.1:6334:6334"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 30s
-    restart: unless-stopped
-    logging: *default-logging
-
-  tei-dense:
-    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:...
-    command: --model-id BAAI/bge-m3 --max-batch-tokens 32768
-    volumes:
-      - tei-models:/data
-    networks: [musubi-net]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      start_period: 120s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  tei-sparse:
-    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:...
-    command: --model-id naver/splade-v3 --pooling splade --max-batch-tokens 16384
-    volumes:
-      - tei-models:/data
-    networks: [musubi-net]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      start_period: 120s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  tei-reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:...
-    command: --model-id BAAI/bge-reranker-v2-m3 --pooling rerank
-    volumes:
-      - tei-models:/data
-    networks: [musubi-net]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      start_period: 120s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  ollama:
-    image: ollama/ollama:0.4.0-cuda@sha256:...
-    volumes:
-      - ollama-models:/root/.ollama
-    networks: [musubi-net]
-    environment:
-      - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_NUM_PARALLEL=1
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep -q qwen2.5 || exit 1"]
-      start_period: 300s
-    <<: *gpu
-    restart: unless-stopped
-    logging: *default-logging
-
-  core:
-    image: ghcr.io/sourceblender/musubi-core:<version>@sha256:<digest>
-    env_file: /etc/musubi/.env
-    volumes:
-      - /var/lib/musubi/vault:/var/lib/musubi/vault
-      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
-      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
-      - /var/log/musubi:/var/log/musubi
-    networks: [musubi-net]
-    ports:
-      - "127.0.0.1:8100:8100"
-    depends_on:
-      qdrant:        {condition: service_healthy}
-      tei-dense:     {condition: service_healthy}
-      tei-sparse:    {condition: service_healthy}
-      tei-reranker:  {condition: service_healthy}
-      ollama:        {condition: service_healthy}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8100/v1/ops/health"]
-      start_period: 30s
-    restart: unless-stopped
-    logging: *default-logging
-```
-
-Digest pins elided for brevity; Ansible fills them from `inventory/group_vars/all.yml`.
+All named volumes must be backed up and restored as one consistent set.
+The previous `/var/lib/musubi` backup script is for the private Ansible
+layout and is not this stack's backup procedure. Back up cold: stop the
+stack (`docker compose stop`), archive all six volumes at the same point
+in time, then start it again (`docker compose up -d --wait`). Restore all
+six from one backup set, never a mix. The GPU override's `tei-models` and
+`ollama-models` volumes are model caches and need no backup. The operator
+supplies the storage and retention system.
 
 ## Test Contract
 
-**Module under test:** `/etc/musubi/docker-compose.yml`
+**Module under test:** root `docker-compose.yml`, optional GPU override and
+`.env.example`.
 
-1. `test_compose_config_valid` — `docker compose config` exits 0.
-2. `test_every_service_has_healthcheck`
-3. `test_every_image_pinned_by_digest`
-4. `test_core_depends_on_all_dependencies_healthy`
-5. `test_only_core_publishes_a_host_port` — only `core` publishes a port (`<musubi-ip>:8100`); every other service is bridge-only. Kong lives on `<kong-gateway>`, not here.
-6. `test_gpu_services_list_gpu_reservation`
-7. `test_bind_mounts_exist_on_host`
-8. `test_compose_up_to_healthy_under_5min_on_warm_cache` (integration)
+1. `test_public_compose_has_real_matching_core_pins`
+2. `test_public_compose_remote_mode_is_host_independent`
+3. `test_public_compose_local_gpu_mode_has_no_inference_port`
+4. `test_public_compose_gpu_mode_refuses_unpinned_image`
+5. `test_public_compose_example_requires_operator_secrets_and_endpoints`
+6. `test_public_compose_refuses_missing_key_or_endpoint`
+7. `test_public_compose_allows_explicit_lan_bind`

@@ -5,57 +5,49 @@
 - `GET /v1/ops/health`: is Core up.
 - `GET /v1/ops/status`: per-dependency status (Qdrant, the TEI services,
   Ollama), for dashboards and smoke checks.
-- `GET /v1/ops/metrics`: Prometheus metrics. The stack's local Prometheus
-  scrapes it; point `remote_write` at your own long-term store if you have
+- `GET /v1/ops/metrics`: Prometheus metrics. Scrape it with your own
+  Prometheus; point `remote_write` at your own long-term store if you have
   one.
 
 ## Upgrades
 
-The full procedure is the [image upgrade runbook](../../deploy/runbooks/upgrade-image.md).
-Its shape:
-
 1. **A release publishes a signed image,** and an automatic PR proposes the new
-   digest for `deploy/ansible/group_vars/all.yml`. That PR never merges itself.
+   digest on the shared `x-core-image` line in `docker-compose.yml` (and the
+   quickstart's).
+   That PR never merges itself.
 2. **Verify the digest** with `cosign verify`, as in
    [Install](install.md#pin-and-verify-the-image), and read the release notes
    in [CHANGELOG.md](../../CHANGELOG.md).
-3. **Run the credential preflight** the PR describes. It starts the candidate
-   image against your live tokens and must pass before you merge.
-4. **Dry-run, then deploy.** `scripts/musubi-deploy core,lifecycle-worker`
-   runs the playbook with `--check --diff` by default; only the image and
-   version lines should change. Add `--apply` to deploy.
-5. **Check your agents** before calling the upgrade done: a real capture and
-   recall from each integration you run, not only a health check.
-6. **Roll back** by reverting the pin commit and deploying again.
+3. **Upgrade:** pull the reviewed pin, then `docker compose pull` and
+   `docker compose up -d --wait` (with the same `-f` files you started with).
+4. **Run a canary** before calling the upgrade done: with an authorized agent
+   token, capture one memory and retrieve it. Do this for each integration you
+   run; a health check alone is not enough.
+5. **Roll back if the canary fails:** return `docker-compose.yml` to the
+   previous pin and run `docker compose up -d --wait` again.
 
 ## Backups
 
-[`deploy/backup/musubi-backup.sh`](../../deploy/backup/musubi-backup.sh) is a
-host-local job, run by a systemd timer every six hours. It snapshots each
-Qdrant collection and copies the lifecycle database and the artifact blobs
-into `/var/lib/musubi/backups/<timestamp>/`, keeping 14 days.
+Musubi keeps its state in the stack's named Docker volumes:
+`qdrant-storage`, `qdrant-snapshots`, `vault`, `artifact-blobs`, `lifecycle`
+and `logs`. (The GPU override adds `tei-models` and `ollama-models`; those
+are model caches that download again, so they need no backup.) Back up the
+six **cold**, as one set:
 
-It is written for the Ansible-deployed layout. It needs:
+1. **Stop the stack:** `docker compose stop`.
+2. **Archive every volume** with your usual backup tool, at the same point in
+   time.
+3. **Start the stack again:** `docker compose up -d --wait`.
 
-- a Compose project named `musubi` (set `COMPOSE_PROJECT` otherwise);
-- exactly one running `lifecycle-worker` container;
-- `QDRANT_API_KEY` in that container's environment, because the script calls
-  Qdrant from inside it.
+To restore, stop the stack, restore **all** of the volumes from the same backup
+set (never a mix of sets), start it, then check `/v1/ops/health` and run a
+canary capture and retrieve. There is no packaged backup helper yet.
 
-[Its README](../../deploy/backup/README.md) describes one deployment, where
-1Password Connect injects that key at startup. Any method that sets the
-variable in the container works; the script never reads secrets from host
-files.
+The `vault` volume holds the curated plane as Markdown. Besides the volume
+backup, it is worth keeping it in git and pushing to a private remote on a
+schedule, so curated knowledge has its own history. Keep backups off the host.
 
-**That job does not cover the vault.** The curated plane is Markdown in the
-vault directory; keep it in git and push it to a private remote on a
-schedule (the backup README describes this). Also copy the backup directory
-off the host. A restore needs all three: Qdrant snapshots, the lifecycle
-database and the vault.
-
-Test a restore before you need one. **The repo's `deploy/backup/restore.yml` playbook does not work today**; see the warning at the top of the page below:
-[backup and restore](../Musubi/09-operations/backup-restore.md) and the
-[manual recovery runbook](../../deploy/runbooks/manual-recovery.md).
+Test a restore, following the steps above, before you need one.
 
 ## Alerts
 

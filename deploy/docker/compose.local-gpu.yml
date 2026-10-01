@@ -1,0 +1,84 @@
+# Optional inference stack. Use with the root Compose file and a TEI image
+# selected for your GPU. No inference service publishes a host port.
+services:
+  core:
+    depends_on:
+      tei-dense: {condition: service_healthy}
+      tei-sparse: {condition: service_healthy}
+      tei-reranker: {condition: service_healthy}
+      ollama: {condition: service_healthy}
+
+  tei-dense:
+    image: ${MUSUBI_TEI_IMAGE:?Set MUSUBI_TEI_IMAGE for your GPU}@sha256:${MUSUBI_TEI_DIGEST:?Set MUSUBI_TEI_DIGEST}
+    command: --model-id ${EMBEDDING_MODEL:-BAAI/bge-m3} --max-batch-tokens 32768 --max-client-batch-size 16
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+  tei-sparse:
+    image: ${MUSUBI_TEI_IMAGE:?Set MUSUBI_TEI_IMAGE for your GPU}@sha256:${MUSUBI_TEI_DIGEST:?Set MUSUBI_TEI_DIGEST}
+    command: --model-id ${SPARSE_MODEL:-naver/splade-v3} --pooling splade --max-batch-tokens 16384
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+  tei-reranker:
+    image: ${MUSUBI_TEI_IMAGE:?Set MUSUBI_TEI_IMAGE for your GPU}@sha256:${MUSUBI_TEI_DIGEST:?Set MUSUBI_TEI_DIGEST}
+    command: --model-id ${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+  ollama:
+    image: ${MUSUBI_OLLAMA_IMAGE:?Set MUSUBI_OLLAMA_IMAGE}@sha256:${MUSUBI_OLLAMA_DIGEST:?Set MUSUBI_OLLAMA_DIGEST}
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  tei-models:
+  ollama-models:
