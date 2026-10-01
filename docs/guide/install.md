@@ -86,7 +86,8 @@ before you run `docker compose config` or `up`: the secrets (see
   - `MUSUBI_OLLAMA_IMAGE` and `MUSUBI_OLLAMA_DIGEST`: the same for Ollama.
 
   Read a digest with
-  `docker buildx imagetools inspect <repo:tag> --format '{{json .Manifest.Digest}}'`.
+  `docker buildx imagetools inspect <repo:tag> --format '{{json .Manifest.Digest}}'`
+  and drop the quotes and the `sha256:` prefix.
   The override refuses to start without all four, so it never runs an
   unpinned image.
 
