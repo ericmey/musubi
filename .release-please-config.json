@@ -9,8 +9,8 @@
     { "type": "fix", "section": "Bug Fixes", "hidden": false },
     { "type": "perf", "section": "Performance", "hidden": false },
     { "type": "refactor", "section": "Refactors", "hidden": false },
-    { "type": "docs", "section": "Documentation", "hidden": false },
-    { "type": "ci", "section": "CI / Ops", "hidden": false },
+    { "type": "docs", "section": "Documentation", "hidden": true },
+    { "type": "ci", "section": "CI / Ops", "hidden": true },
     { "type": "chore", "section": "Chores", "hidden": true },
     { "type": "test", "section": "Tests", "hidden": true }
   ],
