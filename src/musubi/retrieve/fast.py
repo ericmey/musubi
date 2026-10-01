@@ -17,10 +17,13 @@ from musubi.retrieve.hybrid import (
     HybridSearchResult,
     QueryEmbeddingCache,
     RetrievalError,
+    _encode_query,
+    _QueryEmbedding,
     hybrid_search,
 )
 from musubi.retrieve.scoring import SCORE_WEIGHTS, Hit, ScoreComponents, ScoreWeights, score
 from musubi.retrieve.warnings import RetrievalWarning, plane_error, plane_timeout
+from musubi.store.specs import collection_has_sparse
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 _DEFAULT_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
@@ -161,6 +164,16 @@ async def run_fast_retrieve(
             return Ok(value=cached)
 
     cache = embedding_cache or QueryEmbeddingCache(model_version=_DEFAULT_CACHE_MODEL_VERSION)
+    encoding = await _encode_query(
+        embedder,
+        query=query,
+        cache=cache,
+        dense_enabled=True,
+        sparse_enabled=any(collection_has_sparse(name) for name in resolved_collections.value),
+        sparse_timeout_s=sparse_timeout_s,
+    )
+    if isinstance(encoding, Err):
+        return Err(error=_map_error(encoding.error))
     prefetch = prefetch_limit if prefetch_limit is not None else max(20, limit * 2)
     plane_results = await asyncio.gather(
         *(
@@ -173,6 +186,7 @@ async def run_fast_retrieve(
                 limit=prefetch,
                 state_filter=state_filter,
                 cache=cache,
+                encoding=encoding.value,
                 plane_timeout_s=plane_timeout_s,
                 sparse_timeout_s=sparse_timeout_s,
             )
@@ -236,6 +250,7 @@ async def _query_one(
     limit: int,
     state_filter: Sequence[LifecycleState],
     cache: QueryEmbeddingCache,
+    encoding: _QueryEmbedding,
     plane_timeout_s: float,
     sparse_timeout_s: float | None,
 ) -> tuple[str, Result[HybridSearchResult, RetrievalError]]:
@@ -250,6 +265,7 @@ async def _query_one(
                 limit=limit,
                 state_filter=state_filter,
                 cache=cache,
+                encoding=encoding,
                 timeout_s=plane_timeout_s,
                 sparse_timeout_s=sparse_timeout_s,
             ),

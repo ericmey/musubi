@@ -150,6 +150,7 @@ async def hybrid_search(
     cache: QueryEmbeddingCache | None = None,
     timeout_s: float | None = None,
     sparse_timeout_s: float | None = None,
+    encoding: _QueryEmbedding | None = None,
 ) -> Result[HybridSearchResult, RetrievalError]:
     """Run one hybrid query against one Qdrant collection."""
 
@@ -170,22 +171,24 @@ async def hybrid_search(
             )
         )
 
-    encoding = await _encode_query(
-        embedder,
-        query=query,
-        cache=cache,
-        dense_enabled=use_dense,
-        sparse_enabled=use_sparse,
-        sparse_timeout_s=sparse_timeout_s,
-    )
-    if isinstance(encoding, Err):
-        return encoding
+    if encoding is None:
+        encoded = await _encode_query(
+            embedder,
+            query=query,
+            cache=cache,
+            dense_enabled=use_dense,
+            sparse_enabled=use_sparse,
+            sparse_timeout_s=sparse_timeout_s,
+        )
+        if isinstance(encoded, Err):
+            return encoded
+        encoding = encoded.value
 
     # RET-007 (M15): a sparse-embedding timeout degrades this leg to dense-only. Surface it as a
     # structured warning on the success value instead of dropping the channel silently.
     plane = collection.removeprefix("musubi_")
     warnings: tuple[RetrievalWarning, ...] = (
-        (sparse_embedding_failed(plane),) if encoding.value.sparse_degraded else ()
+        (sparse_embedding_failed(plane),) if encoding.sparse_degraded and use_sparse else ()
     )
 
     # DATA-001 P2: for an anchor-aware collection, the prefilter is IMMUTABLE-only (namespace + must_not
@@ -205,7 +208,7 @@ async def hybrid_search(
         anchor_aware=anchor_aware,
     )
     prefetch = _build_prefetch(
-        encoding.value,
+        encoding,
         limit=resolved_prefetch_limit,
         dense_enabled=use_dense,
         sparse_enabled=use_sparse,
