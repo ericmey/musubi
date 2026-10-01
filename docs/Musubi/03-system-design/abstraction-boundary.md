@@ -4,7 +4,7 @@ section: 03-system-design
 tags: [architecture, boundary, section/system-design, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[03-system-design/index]]"
 reviewed: false
 implements: "docs/Musubi/03-system-design/"
@@ -19,7 +19,7 @@ implements: "docs/Musubi/03-system-design/"
 1. The canonical data model (schemas for all planes).
 2. All Qdrant writes and reads. No client talks to Qdrant directly.
 3. The vault filesystem layout and frontmatter schema. No client writes vault files directly.
-4. The canonical API (HTTP + gRPC), versioned.
+4. The canonical HTTP API, versioned.
 5. Authorization decisions (tenant/presence scoping).
 6. Lifecycle state transitions.
 7. Retrieval scoring.
@@ -49,14 +49,14 @@ The guiding principle is **Musubi is the single source of truth for the shape, s
 
 Only these shapes cross into Musubi Core:
 
-- **Canonical API requests** — typed by the OpenAPI / proto contract.
-- **Authentication tokens** — bearer tokens with tenant/presence scope claims.
-- **Object store writes** (artifacts) — through the API's `POST /v1/artifacts` endpoint with multipart or pre-signed URL; clients do not write directly to disk.
+- **Canonical API requests** — typed by the OpenAPI contract (`openapi.yaml` at the repo root).
+- **Authentication tokens** — JWT bearer tokens with `presence` and scope claims.
+- **Object store writes** (artifacts) — through the API's `POST /v1/artifacts` endpoint as a multipart upload; clients do not write directly to disk.
 
 Nothing else. In particular:
 
-- Adapters do **not** query Qdrant directly even if they have network access. (Qdrant's port is bound to the Docker network, not exposed to the host.)
-- Adapters do **not** write to the vault directly, even though the vault is a filesystem. Musubi Core is the sole writer (for `musubi-managed: true` files). Humans edit via Obsidian, which writes files directly — but those are `musubi-managed: false` or human-authored files, and the Vault Watcher picks them up.
+- Adapters do **not** query Qdrant directly even if they have network access. (In the shipped Compose stack Qdrant publishes no host port; only Core does.)
+- Adapters do **not** write to the vault directly, even though the vault is a filesystem. Musubi Core is the sole writer (for `musubi-managed: true` files). Humans edit via Obsidian, which writes files directly — but those are `musubi-managed: false` or human-authored files, and the lifecycle worker's `vault_reconcile` job picks them up.
 
 ## Versioning
 
@@ -70,9 +70,9 @@ The boundary is the API. The API is versioned:
 
 Three options, in order of preference:
 
-1. **Propose an additive API change.** Most clients' needs map to a new endpoint or a new optional parameter. Open an ADR, get it approved, one `api-v*` slice implements it.
+1. **Propose an additive API change.** Most clients' needs map to a new endpoint or a new optional parameter. Open an ADR, get it approved, and an issue and PR implement it.
 2. **Do it client-side over the existing API.** If it's composable from existing endpoints (e.g., "fetch episodic + curated, rerank with my own reranker"), keep it in the client. This is fine — it's how specialization should work.
-3. **Plugin.** Post-v1 only. If a category of clients needs a hook (custom chunker, custom extractor), we may add a plugin interface to Lifecycle Worker. Not in scope for v1.
+3. **Plugin.** Post-v1 only. If a category of clients needs a hook (custom chunker, custom extractor), we may add a plugin interface to the lifecycle worker. Not in scope for v1.
 
 What is **never** allowed:
 
@@ -91,4 +91,4 @@ These are the smoke tests for the abstraction boundary.
 
 ## Test Contract
 
-This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the component specs in sections 04–10, each of which carries its own `## Test Contract` section.

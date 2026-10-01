@@ -4,7 +4,7 @@ section: 03-system-design
 tags: [architecture, data-flow, section/system-design, sequence, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[03-system-design/index]]"
 reviewed: false
 implements: "docs/Musubi/03-system-design/"
@@ -13,267 +13,219 @@ implements: "docs/Musubi/03-system-design/"
 
 Sequence diagrams for the primary operations. All diagrams are ASCII so they round-trip through Obsidian.
 
-## 1. Episodic store (hot path)
+> The stack is defined in the root `docker-compose.yml`, with an optional GPU overlay in `deploy/docker/compose.local-gpu.yml`. "TEI" below means the dense, sparse and reranker services, which are three separate endpoints (`TEI_DENSE_URL`, `TEI_SPARSE_URL`, `TEI_RERANKER_URL`). See [[08-deployment/compose-stack]].
+
+## 1. Episodic capture (hot path)
 
 ```
-Adapter             Core                TEI              Qdrant
-  │                   │                   │                 │
-  │  POST /v1/ep/mem  │                   │                 │
-  ├──────────────────►│                   │                 │
-  │                   │  auth + validate  │                 │
-  │                   ├──────────────────►│                 │
-  │                   │   /embed dense    │                 │
-  │                   │◄──────────────────┤                 │
-  │                   │   /embed_sparse   │                 │
-  │                   ├──────────────────►│                 │
-  │                   │◄──────────────────┤                 │
-  │                   │   (both vectors)  │                 │
-  │                   │                   │                 │
-  │                   │  query nearest (dense) for dedup    │
-  │                   ├──────────────────────────────────-─►│
-  │                   │◄────────────────────────────────────┤
-  │                   │                                     │
-  │                   │  if sim ≥ 0.92: batch_update_points │
-  │                   │  else:          upsert point        │
-  │                   ├────────────────────────────────────►│
-  │                   │◄────────────────────────────────────┤
-  │ 200 {id, state:provisional, dedup_hit:bool}             │
-  │◄──────────────────┤                                     │
+Adapter             Core              TEI dense / sparse      Qdrant
+  │                   │                     │                   │
+  │ POST /v1/episodic │                     │                   │
+  ├──────────────────►│                     │                   │
+  │                   │ auth + validate     │                   │
+  │                   │ embed dense         │                   │
+  │                   ├────────────────────►│                   │
+  │                   │ embed sparse        │                   │
+  │                   ├────────────────────►│                   │
+  │                   │◄────────────────────┤                   │
+  │                   │                                         │
+  │                   │ nearest neighbour in the same namespace │
+  │                   ├────────────────────────────────────────►│
+  │                   │◄────────────────────────────────────────┤
+  │                   │                                         │
+  │                   │ similarity ≥ 0.92 and compatible:       │
+  │                   │   merge into the existing row           │
+  │                   │   (reinforcement_count + 1)             │
+  │                   │ else: upsert a new provisional point    │
+  │                   ├────────────────────────────────────────►│
+  │                   │◄────────────────────────────────────────┤
+  │ 2xx {object_id, state, ...}                                 │
+  │◄──────────────────┤                                         │
 ```
 
-Budget: < 100ms on the reference host, typical 30–60ms. Dominated by sparse embedding (SPLADE++ is the slowest of the three inference calls).
+The 0.92 dedup threshold is `_DEFAULT_DEDUP_THRESHOLD` in `src/musubi/planes/episodic/plane.py`. Latency figures for the measured reference host are in [[09-operations/capacity]].
 
-## 2. Episodic recall (deep path, blended query)
-
-```
-Adapter             Core                 TEI                Qdrant            Reranker(TEI)
-  │                   │                   │                    │                   │
-  │  POST /v1/query   │                   │                    │                   │
-  ├──────────────────►│                   │                    │                   │
-  │ {query, planes,   │                   │                    │                   │
-  │  namespace, n=20} │                   │                    │                   │
-  │                   │  auth + validate  │                    │                   │
-  │                   │                   │                    │                   │
-  │                   │  /embed dense     │                    │                   │
-  │                   ├──────────────────►│                    │                   │
-  │                   │  /embed_sparse    │                    │                   │
-  │                   ├──────────────────►│                    │                   │
-  │                   │◄──────────────────┤                    │                   │
-  │                   │                                        │                   │
-  │                   │  Qdrant Query API (hybrid, server RRF  │                   │
-  │                   │   fusion) per plane in parallel:       │                   │
-  │                   │   - episodic (n=40, filter=ns)         │                   │
-  │                   │   - curated  (n=20, filter=ns)         │                   │
-  │                   ├───────────────────────────────────────►│                   │
-  │                   │◄───────────────────────────────────────┤                   │
-  │                   │                                        │                   │
-  │                   │  scoring: weighted(relevance, recency, │                   │
-  │                   │   importance, maturity, reinforcement, │                   │
-  │                   │   provenance) - penalties              │                   │
-  │                   │                                        │                   │
-  │                   │  cross-encoder rerank top 60 → top 20  │                   │
-  │                   ├──────────────────────────────────────────────────────────►│
-  │                   │◄──────────────────────────────────────────────────────────┤
-  │                   │                                                           │
-  │                   │  increment access_count (batch_update) │                  │
-  │                   ├───────────────────────────────────────►│                  │
-  │                   │                                                           │
-  │ 200 {results:[{id, content, score, plane, breakdown, ...}]}                   │
-  │◄──────────────────┤                                                           │
-```
-
-Budget: < 250ms p95. Dominated by reranker call (~80ms for 60 candidates on RTX 3080).
-
-## 3. Fast path (LiveKit turn-start prefetch)
+## 2. Deep and blended retrieval
 
 ```
-LiveKit Adapter              Core (fast-path endpoint)            Qdrant + local cache
-      │                                 │                                │
-      │  on_user_turn_completed hook fires                              │
-      │  (last 2–3 user turns available)                                 │
-      │                                 │                                │
-      │  POST /v1/fast/episodic         │                                │
-      │  {namespace, turns, n=5}        │                                │
-      ├────────────────────────────────►│                                │
-      │                                 │                                │
-      │                                 │  check fast-path cache         │
-      │                                 │  (in-process LRU, 30s TTL)     │
-      │                                 ├───────────────────────────────►│ (miss or stale)
-      │                                 │                                │
-      │                                 │  /embed dense (truncated input)│
-      │                                 │   + Qdrant dense-only query    │
-      │                                 │   (NO sparse, NO rerank)       │
-      │                                 │   on `musubi_episodic` only    │
-      │                                 │   with filter=ns + state=matured│
-      │                                 │                                │
-      │                                 │  update cache                  │
-      │                                 │                                │
-      │ 200 {hits: [5 brief episodic memories]}                          │
-      │◄────────────────────────────────┤                                │
+Adapter             Core                       TEI            Qdrant        TEI reranker
+  │                   │                         │                │               │
+  │ POST /v1/retrieve │                         │                │               │
+  │ {mode: deep |     │                         │                │               │
+  │  blended,         │                         │                │               │
+  │  query_text,      │                         │                │               │
+  │  namespace,       │                         │                │               │
+  │  planes, limit}   │                         │                │               │
+  ├──────────────────►│                         │                │               │
+  │                   │ auth + scope check      │                │               │
+  │                   │ embed query dense+sparse│                │               │
+  │                   ├────────────────────────►│                │               │
+  │                   │◄────────────────────────┤                │               │
+  │                   │                                          │               │
+  │                   │ per plane, concurrently: hybrid query    │               │
+  │                   │ (server-side RRF), limit × 2 candidates  │               │
+  │                   ├─────────────────────────────────────────►│               │
+  │                   │◄─────────────────────────────────────────┤               │
+  │                   │                                                          │
+  │                   │ rerank candidates (skipped for ≤ 5)                      │
+  │                   ├─────────────────────────────────────────────────────────►│
+  │                   │◄─────────────────────────────────────────────────────────┤
+  │                   │                                                          │
+  │                   │ score: weighted(relevance, recency, importance,          │
+  │                   │   provenance, reinforcement)                             │
+  │                   │ blended: merge planes into one ranked list               │
+  │                   │ hydrate lineage; increment access_count                  │
+  │                   │                                                          │
+  │ 200 {results: [...], warnings: [...]}                                        │
+  │◄──────────────────┤                                                          │
 ```
 
-Budget: **< 50ms p95 absolute ceiling**. Typical ~15–30ms on cache miss, < 5ms on hit. No sparse, no rerank, no cross-plane, no importance/recency scoring beyond default.
+`mode` is one of `fast`, `deep`, `blended` or `recent` (`src/musubi/api/routers/retrieve.py`). A reranker failure or timeout (default budget 1.5 s) falls back to the hybrid order and adds a `reranker_failed` warning. `POST /v1/retrieve/stream` streams the same results.
 
-Cache is keyed by a hash of the last 2 user turns; invalidated by any write to the namespace. See [[05-retrieval/fast-path]].
+## 3. Fast path (voice context on a prefetch-cache miss)
+
+```
+LiveKit integration         Core (POST /v1/retrieve, mode=fast)         Qdrant
+      │                                 │                                 │
+      │ prefetch cache miss             │                                 │
+      ├────────────────────────────────►│                                 │
+      │                                 │ in-process response cache       │
+      │                                 │ (exact query, 30 s TTL)         │
+      │                                 │                                 │
+      │                                 │ on miss: embed query, hybrid    │
+      │                                 │ query per plane, states matured │
+      │                                 │ and promoted only, NO rerank    │
+      │                                 ├────────────────────────────────►│
+      │                                 │◄────────────────────────────────┤
+      │                                 │ score, cache the response       │
+      │ 200 {results, warnings}         │                                 │
+      │◄────────────────────────────────┤                                 │
+```
+
+Budgets (`src/musubi/settings.py`): 250 ms for query encoding, 250 ms per plane, 400 ms for the whole call. A plane that misses its budget is dropped with a `plane_timeout_<plane>` warning. See [[05-retrieval/fast-path]].
 
 ## 4. Artifact ingest
 
 ```
-Adapter         Core                       Object Store     TEI              Qdrant
-  │               │                            │              │                │
-  │ POST          │                            │              │                │
-  │ /v1/artifacts │                            │              │                │
-  │ (multipart or │                            │              │                │
-  │  pre-signed   │                            │              │                │
-  │  URL ref)     │                            │              │                │
-  ├──────────────►│                            │              │                │
-  │               │ compute sha256             │              │                │
-  │               │ write blob if new          │              │                │
-  │               ├───────────────────────────►│              │                │
-  │               │◄───────────────────────────┤              │                │
-  │               │                            │              │                │
-  │               │ chunk (structure-aware:    │              │                │
-  │               │  headings for md,          │              │                │
-  │               │  speaker turns for VTT,    │              │                │
-  │               │  N tokens otherwise)       │              │                │
-  │               │                            │              │                │
-  │               │ /embed dense + sparse for  │              │                │
-  │               │  each chunk (batched)      │              │                │
-  │               ├───────────────────────────────────────────►              │
-  │               │◄──────────────────────────────────────────┤                │
-  │               │                            │              │                │
-  │               │ upsert chunks              │              │                │
-  │               ├────────────────────────────────────────────────────────►│
-  │               │◄────────────────────────────────────────────────────────┤
-  │               │                            │              │                │
-  │ 200 {artifact_id, chunk_count, state:indexed}           │                │
-  │◄──────────────┤                            │              │                │
+Adapter         Core                         Blob dir        Lifecycle worker      TEI      Qdrant
+  │               │                             │                  │                 │         │
+  │ POST          │                             │                  │                 │         │
+  │ /v1/artifacts │                             │                  │                 │         │
+  │ (multipart)   │                             │                  │                 │         │
+  ├──────────────►│                             │                  │                 │         │
+  │               │ stream to staging, sha256,  │                  │                 │         │
+  │               │ enforce ARTIFACT_MAX_BYTES  │                  │                 │         │
+  │               │ create metadata row ──────────────────────────────────────────────────────►│
+  │               │ move blob into place ──────►│                  │                 │         │
+  │               │ enqueue durable index intent                   │                 │         │
+  │ 2xx {object_id, state, sha256, size_bytes}  │                  │                 │         │
+  │◄──────────────┤                             │                  │                 │         │
+  │               │                             │ claim intent     │                 │         │
+  │               │                             │◄─────────────────┤                 │         │
+  │               │                             │ chunk + embed ───────────────────►│         │
+  │               │                             │ stage chunks, publish generation ─────────►│
 ```
 
-Budget: minutes for large artifacts. Done async — response returns immediately with `state: indexing`, status queried via `GET /v1/artifacts/{id}`.
+Upload returns as soon as the blob and metadata are stored; chunking and embedding run in the lifecycle worker through the lifecycle coordinator (`src/musubi/planes/artifact/indexer.py`). Poll `GET /v1/artifacts/{object_id}` for the indexing state (`indexing`, `indexed`, `failed`, `stored_unindexed`).
 
 ## 5. Curated vault file edit (human)
 
 ```
-Human in Obsidian          Filesystem                Vault Watcher                 Core             Qdrant
-      │                         │                           │                        │                │
-      │ saves a .md file in     │                           │                        │                │
-      │ vault/curated/alex/...  │                           │                        │                │
-      ├────────────────────────►│                           │                        │                │
-      │                         │ inotify modify event      │                        │                │
-      │                         ├──────────────────────────►│                        │                │
-      │                         │                           │ debounce 2s            │                │
-      │                         │                           │ read file + frontmatter│                │
-      │                         │                           │ validate schema        │                │
-      │                         │                           │                        │                │
-      │                         │                           │ call Core internal:    │                │
-      │                         │                           │  curated_reindex_file( │                │
-      │                         │                           │    path, content,      │                │
-      │                         │                           │    frontmatter)        │                │
-      │                         │                           ├───────────────────────►│                │
-      │                         │                           │                        │ embed, upsert  │
-      │                         │                           │                        ├───────────────►│
-      │                         │                           │                        │◄───────────────┤
-      │                         │                           │◄───────────────────────┤                │
-      │                         │                           │                                         │
-      │                         │                           │ log event                               │
+Human in Obsidian      Vault (filesystem)        Lifecycle worker (vault_reconcile, every 6 h)       Qdrant
+      │                       │                              │                                       │
+      │ saves a .md file      │                              │                                       │
+      ├──────────────────────►│                              │                                       │
+      │                       │  scan the vault              │                                       │
+      │                       │◄─────────────────────────────┤                                       │
+      │                       │                              │ skip hidden and `_`-prefixed dirs     │
+      │                       │                              │ parse + validate frontmatter          │
+      │                       │                              │ skip files with no object_id          │
+      │                       │                              │ unchanged body hash → skip            │
+      │                       │                              │ changed → embed + upsert ────────────►│
+      │                       │                              │ row whose file is gone → archive ────►│
 ```
 
-If `musubi-managed: true` and the file was just written by Core (write-log hit): skip.
+There is no real-time watcher in the shipped stack; `src/musubi/vault/watcher.py` exists as a module but no service runs it. Invalid frontmatter is logged and counted as `errored`, and the index entry stays unchanged.
 
-If frontmatter is invalid: log error, emit a thought to the `alex/scheduler` channel so the human sees the notification on next session-sync, leave index unchanged.
-
-## 6. Concept synthesis (scheduled, Lifecycle Worker)
+## 6. Concept synthesis (lifecycle worker, daily 03:00 UTC)
 
 ```
-  APScheduler fires synthesis_run every 6h
+  synthesis job fires
          │
          ▼
-  Lifecycle Worker
-         │
-         │ iterate presences
-         ▼
-  for presence in registry.list():
-         │
-         │ scroll matured episodic memories (new since last run)
-         ▼
-  Qdrant scroll (filter: namespace/episodic, state=matured, updated_epoch > last_run)
-         │
-         │ cluster by vector (HDBSCAN or simple threshold) + topic
-         ▼
-  clusters
-         │
-         │ for each cluster of ≥ 3 memories:
-         ▼
-  call Ollama (qwen2.5:7b-instruct-q4_K_M): "extract salient facts"
+  discover tenants (identity families) present in musubi_episodic
          │
          ▼
-  for each extracted fact:
-    │
-    │  semantic search existing concepts (same ns, concept plane)
-    ▼
-  Qdrant query (concept plane, similarity ≥ 0.85)
-    │
-    ├── match found → reinforce (reinforcement_count++; batch_update)
-    └── no match → create concept (state=synthesized) with merged_from=[episodic_ids]
+  for each tenant:
+         │ select matured episodic memories since the last cursor
+         ▼
+  cluster by dense-vector cosine (threshold 0.70), keep clusters of ≥ 3
          │
          ▼
-  log synthesis_run completion record with counters
+  for each cluster: LLM (LLM_MODEL) drafts a concept
+         │
+         │ search existing concepts in <tenant>/shared/concept
+         ▼
+  ├── similarity ≥ 0.85 → reinforce the existing concept
+  └── otherwise         → create a concept (state=synthesized, merged_from=[episodic ids])
+         │
+         ▼
+  contradiction check between concepts with similarity in [0.75, 0.85)
 ```
 
-Budget: minutes per run. Runs in background; no user-facing latency impact.
+Thresholds are the defaults in `src/musubi/lifecycle/synthesis.py`. The `concept_maturation` job (daily 03:30) then moves synthesized concepts without active contradictions to `matured`.
 
-## 7. Promotion (scheduled, Lifecycle Worker)
-
-```
-  APScheduler fires promotion_run daily
-         │
-         ▼
-  scroll concepts where state=synthesized
-         │
-         │ for each, evaluate promotion gate:
-         │   reinforcement_count ≥ 3
-         │   importance ≥ 6
-         │   age ≥ 48h
-         │   no active contradiction
-         ▼
-  if gate passes:
-         │
-         │ call Ollama: "write a curated summary"
-         ▼
-  generate markdown + frontmatter
-         │
-         ▼
-  call Core internal: promote_concept_to_vault(concept_id, rendered_md)
-         │
-         │ writes vault/curated/<ns>/<slug>.md with musubi-managed: true
-         │ writes write-log entry so vault-watcher skips the echo
-         │ sets concept.state = promoted, promoted_to = <vault-path>
-         │ reindexes the new curated file into Qdrant
-         ▼
-  emit scheduler thought to presence `alex/scheduler`:
-    "Promoted concept 'CUDA 13 setup' to curated/alex/projects/cuda.md"
-```
-
-## 8. Voice agent blended recall (via LiveKit adapter)
+## 7. Promotion (lifecycle worker, daily 04:00 UTC)
 
 ```
-  LiveKit agent turn begins
+  promotion job fires
          │
-         │ in parallel:
-         │  - fast-path episodic (< 50ms)
-         │  - deep-path blended query (launched, streams back)
          ▼
-  agent starts talking using fast-path hits
+  query concepts where state=matured and the gate passes:
+         │   reinforcement_count ≥ 3, importance ≥ 6, age ≥ 48 h,
+         │   no contradictions, promotion_attempts < 3, not yet promoted
+         ▼
+  LLM renders curated markdown
          │
-         │ if deep-path arrives mid-turn: agent's toolset has the new context
-         │ if deep-path arrives late: agent completes turn on fast-path
          ▼
-  turn ends; adapter POSTs the exchange as episodic memory
+  compute path: curated/<tenant>/<presence>/<topic>/<slug>.md
+         │   existing musubi-managed file from this concept → rewrite in place
+         │   any other existing file → write a sibling, emit an ops-alerts thought
+         ▼
+  VaultWriter.write_curated (write log first, then atomic write)
+         │
+         ▼
+  index the curated row in Qdrant; concept.state = promoted, promoted_to set
 ```
 
-See [[07-interfaces/livekit-adapter]] for the adapter-side logic and [[05-retrieval/fast-path]] for the budget analysis.
+See [[06-ingestion/promotion]].
+
+## 8. Voice agent blended recall (LiveKit integration)
+
+```
+  user is speaking: each transcript segment
+         │  Slow Thinker cancels any in-flight prefetch and starts a new
+         │  mode="deep" retrieve on the transcript so far; results go to a cache
+         ▼
+  user turn completes
+         │  one final mode="deep" prefetch on the full utterance
+         ▼
+  agent needs context (Fast Talker get_context)
+         │  1. read the prefetch cache (similarity match on the query)
+         │  2. hit  -> use the cached deep results and their warnings
+         │     miss -> mode="fast" retrieve (400 ms budget); on error, []
+         ▼
+  agent speaks
+         │  maybe_capture_fact(utterance): heuristic episodic capture,
+         │  when the integration calls it (capture_facts, on by default)
+         ▼
+  session ends (capture_transcripts, on by default)
+         │  upload the transcript as an artifact (falls back to an
+         │  episodic capture), then send a session-summary thought
+```
+
+Fast and deep do not start in parallel: deep runs ahead as a prefetch while the user speaks, and fast is used only on a cache miss. This logic lives in `sourceblender/musubi-livekit` (`adapter.py`, `slow_thinker.py`, `fast_talker.py`). See [[07-interfaces/livekit-adapter]] and [[05-retrieval/fast-path]].
 
 ## Test Contract
 
-This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the component specs in sections 04–10, each of which carries its own `## Test Contract` section.

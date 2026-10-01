@@ -23,4 +23,4 @@ updated: <% tp.date.now("YYYY-MM-DD") %>
 
 ## Links
 
-- [[00-index/stubs]]
+- [[00-index/index]]

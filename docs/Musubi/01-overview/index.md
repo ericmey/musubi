@@ -4,7 +4,7 @@ section: 01-overview
 tags: [overview, section/overview, status/complete, type/overview]
 type: overview
 status: complete
-updated: 2026-04-17
+updated: 2026-10-01
 up: "[[00-index/index]]"
 reviewed: false
 ---
@@ -22,7 +22,7 @@ This section frames Musubi: what it is, who it serves, the problem it solves, an
 
 ## Summary
 
-Musubi (結び — "knot," "tie together") is a **shared memory and knowledge plane for a small-team AI agent fleet**. It runs as a standalone server on a dedicated, GPU-equipped Ubuntu host. Every AI interface a human uses — Claude Code via MCP, a LiveKit voice agent, the OpenClaw desktop app, a shell script calling REST — shares memory through Musubi.
+Musubi (結び — "knot," "tie together") is a **shared memory and knowledge plane for a small team of AI agents** (small team / single-operator: 1–5 humans, one host, not hardened for anonymous internet use). It runs as a Docker Compose stack on an operator-prepared Linux host. Inference runs either on a local GPU through the optional Compose overlay or on remote endpoints the operator supplies. Every AI interface — a coding agent via MCP, a LiveKit voice agent, OpenClaw, a shell script calling the HTTP API — shares memory through Musubi.
 
 The system is built around three planes with different truth models:
 
@@ -49,18 +49,17 @@ The curated plane is where a human operator actually sits and thinks: editing no
 Consequences:
 
 - Every curated memory is a human-readable markdown file with YAML frontmatter.
-- The human can edit in Obsidian while Musubi is running; changes propagate via file watcher.
-- Backup of curated knowledge is git. Disaster recovery of the curated index is `rebuild from vault`.
-- Musubi can still *write* curated knowledge (promotions from synthesis), but only into files marked `musubi-managed: true`.
+- The human can edit in Obsidian while Musubi is running; the lifecycle worker's `vault_reconcile` job picks up changes every 6 hours.
+- Backup of curated knowledge is a backup of the vault directory. Disaster recovery of the curated index is a rebuild from the vault.
+- Musubi can still *write* curated knowledge (promotions from synthesis), but it never overwrites a file that lacks `musubi-managed: true`; it writes a sibling file instead.
 
 See [[13-decisions/0003-obsidian-as-sor]] for the full rationale and alternatives.
 
-## What changed from the POC
+## Inference defaults
 
-The current POC (see `index`) is a two-collection Qdrant + MCP server. It conflates the three planes into one `musubi_memories` collection and has no curated / artifact distinction. This redesign:
+All models are self-hosted and configurable in `.env`:
 
-- Splits collections by plane and introduces named vectors.
-- Moves from MCP-as-server to canonical-API-as-server + MCP-as-adapter.
-- Introduces a Lifecycle Engine as a separate worker process.
-- Makes all inference local (BGE-M3, SPLADE++, local reranker, local LLM for importance/synthesis).
-- Adds explicit versioning, lineage, and no-silent-mutation discipline.
+- **Dense embeddings:** `BAAI/bge-m3` (1024-d), served by Text Embeddings Inference (TEI).
+- **Sparse embeddings:** `naver/splade-v3`, served by TEI.
+- **Reranker:** `BAAI/bge-reranker-v2-m3`, served by TEI.
+- **LLM** (importance scoring, synthesis, promotion, reflection): an Ollama model (`LLM_MODEL`, `qwen3:4b` in `.env.example`), or any OpenAI-compatible endpoint for the lifecycle worker ([[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint|ADR 0043]]).
