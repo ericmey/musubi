@@ -7,7 +7,7 @@ date: 2026-08-14
 updated: 2026-08-14
 deciders: [Eric]
 tags: [architecture, lifecycle, llm, deployment, type/adr, status/accepted]
-supersedes: ""
+supersedes: "[[13-decisions/0019-qwen-on-musubi-gpu-phase-1]]; [[13-decisions/0012-local-inference]] (lifecycle LLM placement only)"
 superseded-by: ""
 ---
 
@@ -52,7 +52,8 @@ The house serves larger models behind LiteLLM (OpenAI-compatible):
 The lifecycle worker's LLM client speaks a second wire protocol —
 `/v1/chat/completions` with `response_format: json_schema (strict)` — selected
 by settings (`LIFECYCLE_LLM_API=openai`, plus base URL / model / key
-overrides). The deployment targets **`house/backup` (35B, 131K ctx)** for all
+overrides). The deployment targets the gateway's large-context failover lane
+(`<lifecycle-llm-model>`; at decision time a 35B, 131K-ctx model) for all
 four lifecycle tasks. Defaults preserve the existing Ollama path unchanged.
 
 Alongside, maturation's batched enrichment isolates failures **per batch**
@@ -88,10 +89,11 @@ capture-source tags (the mega-cluster precondition from #684).
 - Model capability for the memory pipeline becomes a deployment decision
   (env), not a code path. The gradient can be re-measured against any lane
   by flipping four env values.
-- One new secret in the worker environment (the LiteLLM key), materialized
+- One new secret in the worker environment (the gateway API key,
+  `LIFECYCLE_LLM_API_KEY`), materialized
   from a committed 1Password reference by `op run`; it is never rendered into
   the persistent non-secret `.env.production` file.
-- If the LiteLLM backend only best-efforts `json_schema` (backend-dependent),
+- If the OpenAI-compatible backend only best-efforts `json_schema` (backend-dependent),
   the existing validate-or-None contract absorbs it: failed calls skip and
   retry next sweep, and the failure lands on the #684 counters.
 - The co-located Ollama becomes retirable once the openai lane is proven,

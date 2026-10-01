@@ -1,22 +1,24 @@
 ---
-title: "ADR 0033: Centralize Observability on Shiori"
+title: "ADR 0033: Centralize Observability on a Dedicated Host"
 section: 13-decisions
-tags: [adr, architecture, observability, ops, section/decisions, status/proposed, type/adr]
+tags: [adr, architecture, observability, ops, section/decisions, status/accepted, type/adr]
 type: adr
-status: proposed
+status: accepted
 date: 2026-05-03
 deciders: [Eric]
-updated: 2026-05-03
+updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
 supersedes: []
 superseded-by: []
 ---
-# ADR 0033: Centralize Observability on Shiori
+# ADR 0033: Centralize Observability on a Dedicated Host
 
-**Status:** proposed
+**Status:** accepted (proposed 2026-05-03; status updated 2026-10-01 from implementation evidence)
 **Date:** 2026-05-03
 **Deciders:** Eric
+
+> **Note (2026-10-01):** implemented. `deploy/grafana/`, `deploy/loki/` and `deploy/tempo/` are gone; node-exporter and an optional, off-by-default `remote_write` were added to the deploy templates. `deploy/prometheus/alertmanager.yml` still exists as a config file, but no Alertmanager service is deployed by any compose file. The title was neutralized on 2026-10-01; the filename is kept so links resolve. The decision text below is as proposed.
 
 ## Context
 
@@ -43,11 +45,11 @@ Concretely:
 
 - **Keep on musubi:** the existing `prometheus` container. It scrapes musubi service internals (musubi-core `/v1/ops/metrics`, the three TEI `/metrics` endpoints, itself) where it has the docker-network advantage. Local scrape stays cheap and reliable.
 - **Add on musubi:** `node-exporter` (a documented gap in the existing `prometheus.yml` header) for host CPU/memory/disk/network metrics. Pinned image `prom/node-exporter:v1.11.1`.
-- **Add on musubi:** a `remote_write` block in `prometheus.yml` pointing at shiori's Mimir (`http://shiori.mey.house:9009/api/v1/push`). Everything prometheus scrapes locally is mirrored to central in real time.
+- **Add on musubi:** a `remote_write` block in `prometheus.yml` pointing at the central Mimir (`http://<observability-host>:9009/api/v1/push`). Everything prometheus scrapes locally is mirrored to central in real time.
 - **Remove from this repo:** the never-deployed `deploy/grafana/`, `deploy/loki/`, `deploy/tempo/` directories. They documented a future that's no longer the future.
 - **Defer central-side artifacts** (musubi-specific dashboards on shiori, alert rules in Mimir/Grafana, log shipping from musubi to Loki, distributed traces) to follow-up slices/PRs scoped to the shiori-side codebase (which lives in the operator's vault, not here).
 
-The visualization, alerting, and trace surfaces are now provided by shiori's central stack. Musubi contributes its metrics; consumes nothing locally beyond the prometheus it already runs.
+The visualization, alerting, and trace surfaces are now provided by the central observability host's stack. Musubi contributes its metrics; consumes nothing locally beyond the prometheus it already runs.
 
 ## Alternatives considered
 

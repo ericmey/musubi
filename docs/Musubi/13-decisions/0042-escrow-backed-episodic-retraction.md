@@ -320,7 +320,7 @@ them as malformed evidence.
 
 - Ordinary artifact upload/indexing is unchanged.
 - Existing inline tombstones remain readable and valid with no migration.
-- The household remains single-worker until #558 supplies distributed idempotency
+- The deployment remains single-worker (`WEB_CONCURRENCY=1`) until #558 supplies distributed idempotency
   ownership; this ADR does not claim a completed receipt solves that broader gap.
 
 ## Alternatives considered

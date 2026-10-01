@@ -98,7 +98,7 @@ def test_sec008_adr_names_owner_blast_radius_and_review_triggers() -> None:
         "## Negative proof",
         "## Blast radius and residual risk",
         "## Owner and review triggers",
-        "Owner: Yua / Musubi operations.",
+        "Owner: Musubi operations (Admin).",
         "Review by 2026-10-15",
         "not safe for public Internet exposure",
     ):

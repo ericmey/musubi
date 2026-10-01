@@ -90,4 +90,4 @@ Rejected. Musubi Core should not embed TLS or gateway concerns; the canonical AP
 - [[08-deployment/compose-stack]] — Musubi Core publishes `<musubi-ip>:8100`; no host-bound Caddy service.
 - [[08-deployment/ansible-layout]] — `roles/caddy/` removed; Kong route config lives in the Kong-admin repo, not Musubi's.
 - [[07-interfaces/canonical-api]] — base URL examples now use `https://<musubi-host>/v1/*`.
-- Operator environment: Kong runs on a dedicated VM on the homelab VLAN as the VLAN-wide API gateway. Concrete hostname / IP in `.agent-context.local.md`.
+- Operator environment (as of 2026-04-17): Kong ran on a dedicated VM on the operator's VLAN as the VLAN-wide API gateway. Concrete hostname / IP in `.agent-context.local.md`.

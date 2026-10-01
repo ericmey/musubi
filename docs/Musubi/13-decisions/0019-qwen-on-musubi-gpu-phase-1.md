@@ -2,9 +2,11 @@
 title: "ADR-0019: Qwen 3 4B on musubi.example.local GPU (Phase 1)"
 section: 13-decisions
 type: adr
-status: accepted
-tags: [section/decisions, status/accepted, type/adr, llm, gpu, deployment]
-updated: 2026-04-19
+status: superseded
+tags: [section/decisions, status/superseded, type/adr, llm, gpu, deployment]
+updated: 2026-10-01
+supersedes: "[[13-decisions/0012-local-inference]] (LLM model choice only)"
+superseded-by: "[[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint]]"
 ---
 
 # ADR-0019: Qwen 3 4B on musubi.example.local GPU (Phase 1)
@@ -12,6 +14,8 @@ updated: 2026-04-19
 ## Status
 
 Accepted (phase-gated).
+
+> **Superseded (2026-08-14)** by [[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint]], which moved the lifecycle LLM tasks off the co-located Qwen 3 4B to an OpenAI-compatible endpoint. The record below is unchanged.
 
 ## Context
 

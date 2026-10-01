@@ -91,6 +91,6 @@ testable.
 - Future ranking changes are product behavior changes and should be
   tested against the acceptance scenarios before deployment.
 - Deployment close requires blast-radius proof against live consumers,
-  not only unit tests: command-chair agents, phone agents, OpenClaw on
-  Nyla, and Vice must all pass their existing consumer smokes before and
-  after rollout. If any fail, roll back the versioned image pin.
+  not only unit tests: every known live consumer (agent CLIs, mobile
+  agents, the OpenClaw plugin host, other integrations) must pass its
+  existing consumer smokes before and after rollout. If any fail, roll back the versioned image pin.

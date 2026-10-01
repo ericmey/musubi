@@ -7,7 +7,7 @@ date: 2026-09-19
 updated: 2026-09-20
 deciders: [Eric]
 tags: [architecture, inference, security, deployment, type/adr, status/accepted]
-supersedes: ""
+supersedes: "[[13-decisions/0012-local-inference]] (TEI service ownership only)"
 superseded-by: ""
 ---
 

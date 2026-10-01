@@ -1,20 +1,22 @@
 ---
 title: "ADR 0032: Canonical Agent-Tools Surface"
 section: 13-decisions
-tags: [adapters, adr, agent-tools, architecture, section/decisions, status/proposed, type/adr]
+tags: [adapters, adr, agent-tools, architecture, section/decisions, status/accepted, type/adr]
 type: adr
-status: proposed
+status: accepted
 date: 2026-04-29
 deciders: [Eric]
-updated: 2026-04-29
+updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
 ---
 # ADR 0032: Canonical Agent-Tools Surface
 
-**Status:** proposed
+**Status:** accepted (proposed 2026-04-29; status updated 2026-10-01 from implementation evidence)
 **Date:** 2026-04-29
 **Deciders:** Eric
+
+> **Note (2026-10-01):** all five tools are implemented in `src/musubi/adapters/mcp/tools.py` and covered by `tests/adapters/test_mcp_canonical_tools.py`; the decision text below is as proposed.
 
 ## Context
 
@@ -59,7 +61,7 @@ The contract is written once in the spec; every adapter passes a shared contract
 
 ### Naming choice — `musubi_search`, not `musubi_recall`
 
-"Recall" implies the agent (or character) is the subject doing the remembering. The character Aoi recalls; the system she runs on searches a database. `musubi_search` names the actual mechanism. The voice-active path already uses this naming; openclaw-musubi's `musubi_recall` is the legacy that diverged first.
+"Recall" implies the agent (or character) is the subject doing the remembering. The character recalls; the system it runs on searches a database. `musubi_search` names the actual mechanism. The voice-active path already uses this naming; openclaw-musubi's `musubi_recall` is the legacy that diverged first.
 
 ### Naming choice — `musubi_*`, not `memory_*`
 
@@ -98,9 +100,9 @@ Accept that voice has `musubi_search`, plugin has `musubi_recall`, MCP has `memo
 
 **Rejected.** Three problems:
 
-- Every system prompt has to teach Aoi which tool name applies on each modality. Prompts then drift modality-by-modality.
+- Every system prompt has to teach the agent which tool name applies on each modality. Prompts then drift modality-by-modality.
 - "Functionally equivalent" is not actually true today: parameter shapes differ, default scopes differ, response formats differ. Calling them equivalent papers over real bugs.
-- Cross-modal continuity (the user's actual goal) requires the model to recognize that "what I told voice-Aoi" and "what plugin-Aoi captured" live in the same memory. A common tool surface makes that obvious; divergent surfaces hide it.
+- Cross-modal continuity (the user's actual goal) requires the model to recognize that "what I told voice-Alex" and "what plugin-Alex captured" live in the same memory. A common tool surface makes that obvious; divergent surfaces hide it.
 
 ### Alternative 3: Adopt MCP as the canonical wire for every adapter
 
@@ -118,7 +120,7 @@ Keep finer-grained tools (per-plane `curated_get`, `concept_search`, `thought_hi
 
 ### Good
 
-- **Cross-modal continuity becomes default.** "Aoi, what was I just doing?" works on every modality.
+- **Cross-modal continuity becomes default.** "Alex, what was I just doing?" works on every modality.
 - **One mental model for the user, one mental model for the LLM.** Same tool names everywhere; same behavior. System prompts simplify.
 - **Drift becomes a contract-test failure**, not a guess-when-it-breaks. Adding a tool to one adapter without updating the others fails CI.
 - **Closes the explicit gaps** users have hit: cross-modal `musubi_recent`, drill-into-source `musubi_get`.

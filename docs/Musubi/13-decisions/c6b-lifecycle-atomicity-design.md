@@ -2,12 +2,12 @@
 title: "C6b: lifecycle Qdrant↔SQLite atomicity — design v2 (durable-intent outbox + coordinator)"
 section: 13-decisions
 type: adr
-status: proposed
+status: accepted
 owner: aoi
 discoverer: eric
 phase: "Lifecycle-audit 2026-07-13 — C6b atomicity"
-tags: [type/adr, status/proposed, lifecycle, audit, atomicity, outbox]
-updated: 2026-07-13
+tags: [type/adr, status/accepted, lifecycle, audit, atomicity, outbox]
+updated: 2026-10-01
 supersedes: []
 ---
 
@@ -17,6 +17,8 @@ supersedes: []
 (2026-07-13). Slice: `slice-c6b-lifecycle-qdrant-sqlite-atomicity` (Issue #437). Direction
 (durable-intent outbox) ACCEPTED; this v2 is the contract that makes the outbox truthful across callers,
 retries, bypass paths, and long-term operation. Zero source until the red contract is encoded + reviewed.
+
+> **Status note (2026-10-01):** implemented. `src/musubi/lifecycle/coordinator.py` holds `LifecycleTransitionCoordinator`, the `transition()` seam in `src/musubi/lifecycle/transitions.py` requires it, and the Phase-1 wiring landed in #455. [[13-decisions/h5-canonical-plane-transition-design]] depends on it. The "Zero source" line above is the state on 2026-07-13.
 
 ## The gap (verified against `src/musubi/lifecycle/transitions.py` + the plane layer)
 

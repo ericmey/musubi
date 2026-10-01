@@ -44,7 +44,7 @@ An earlier draft proposed a **runtime criterion** (external-runtime components m
 **If the implementation is not Python,** source lives in a separate sibling repository named:
 
 ```
-github.com/ericmey/<system>-musubi
+github.com/<org>/<system>-musubi
 ```
 
 where `<system>` names the host system the component targets.
@@ -55,12 +55,12 @@ where `<system>` names the host system the component targets.
 |---|---|---|---|
 | Musubi server | Python | `src/musubi/` → future `packages/musubi-server/` | Operator deploys on `musubi.example.local` |
 | Musubi Python SDK | Python | `src/musubi/sdk/` → future `packages/musubi-client/` | `pip install musubi-client` |
-| MCP server (remote HTTP + SSE) | Python | `src/musubi/adapters/mcp/` → future `packages/musubi-mcp/` | Deploys with Musubi; Kong-fronts it |
+| MCP server (remote HTTP + SSE) | Python | `src/musubi/adapters/mcp/` → future `packages/musubi-mcp/` | Deploys with Musubi; fronted by the operator's gateway (see 0024) |
 | MCP local stdio plugin *(if ever built)* | Python | `packages/musubi-mcp-stdio/` *(future subpackage)* | `pip install musubi-mcp-stdio` on agent host |
 | LiveKit adapter | Python | `src/musubi/adapters/livekit/` → future `packages/musubi-livekit/` | `pip install musubi-livekit` into LiveKit worker |
-| OpenClaw browser extension | TypeScript | **`github.com/ericmey/openclaw-musubi`** | Chrome Web Store / Firefox Add-ons / sideload |
-| Obsidian plugin *(future, if built)* | TypeScript | **`github.com/ericmey/obsidian-musubi`** | Obsidian Community Plugins |
-| VS Code extension *(future, if built)* | TypeScript | **`github.com/ericmey/vscode-musubi`** | VS Code Marketplace |
+| OpenClaw browser extension | TypeScript | **`github.com/<org>/openclaw-musubi`** | Chrome Web Store / Firefox Add-ons / sideload |
+| Obsidian plugin *(future, if built)* | TypeScript | **`github.com/<org>/obsidian-musubi`** | Obsidian Community Plugins |
+| VS Code extension *(future, if built)* | TypeScript | **`github.com/<org>/vscode-musubi`** | VS Code Marketplace |
 
 ### Naming rationale for external repos
 
@@ -135,7 +135,7 @@ Git tags scope per-subpackage: `musubi-v1.2.0`, `musubi-livekit-v0.1.0`, `musubi
 - **Clean DX for external TS consumers.** OpenClaw dev clones `openclaw-musubi`, uses pnpm, publishes to the browser store. No Python toolchain touches them.
 - **Atomic cross-cutting changes for Python.** Changing a plane type + SDK + LiveKit adapter lands in one Musubi PR. The monorepo wins where it wins; external repos handle what must be external.
 - **Interface proliferation stays sanctioned.** Every external consumer, regardless of repo location, goes through the canonical API. No direct Qdrant access. ADR-0011's interface-discipline decision is preserved.
-- **Ecosystem is visible at the namespace level.** `github.com/ericmey/*-musubi` enumerates the non-Python surfaces at a glance.
+- **Ecosystem is visible at the namespace level.** `github.com/<org>/*-musubi` enumerates the non-Python surfaces at a glance.
 
 ### Negative
 

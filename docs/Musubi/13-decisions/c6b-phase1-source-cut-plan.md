@@ -2,12 +2,12 @@
 title: "C6b Phase-1 source cut plan + authoritative Pending contract (P0 appendix, REV3)"
 section: 13-decisions
 type: adr
-status: proposed
+status: accepted
 owner: aoi
 discoverer: eric
 phase: "Lifecycle-audit 2026-07-13 — C6b Phase-1 source planning (P0 appendix)"
-tags: [type/adr, status/proposed, lifecycle, atomicity, outbox, planning]
-updated: 2026-07-13
+tags: [type/adr, status/accepted, lifecycle, atomicity, outbox, planning]
+updated: 2026-10-01
 supersedes: []
 ---
 
@@ -18,6 +18,8 @@ REV2 twelve rulings + the P0b/P0c checkpoint rulings (2026-07-13). **Planning + 
 only — NOT source authorization.** Source, migration, merge, release, deploy, host contact remain
 forbidden until Yua explicitly authorizes S1. Accepted red-contract head at authoring: `ce2e527`
 (P0a+P0d landed on `23c61a3`).
+
+> **Status note (2026-10-01):** executed. The coordinator wiring (S7) landed in #455; `cleanup_terminal` (S6) and the `musubi_lifecycle_coordinator_ready` signal are in `src/musubi/lifecycle/`. Statements below such as "S7 itself is not yet merged" are the state on 2026-07-13.
 
 ## A. Authoritative Pending contract (ruling P0b/6 — source must not reinvent this)
 

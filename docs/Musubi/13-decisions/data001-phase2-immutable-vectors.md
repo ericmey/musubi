@@ -8,7 +8,7 @@ discoverer: yua
 phase: "Integrity remediation 2026-07-15 — DATA-001 Phase 2"
 tags: [type/adr, status/accepted, data-001, concurrency, vectors, outbox, coordinator]
 updated: 2026-07-15
-supersedes: []
+supersedes: ["[[13-decisions/0035-additive-api-contract-ret003-wire]] (corrupt-source → 500 rule, ranked reads only)"]
 ---
 
 # DATA-001 Phase 2: immutable vectors + fenced committed pointer (#530)

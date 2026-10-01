@@ -1,18 +1,21 @@
 ---
 title: "ADR 0012: Local Inference on Dedicated GPU, Not Hosted APIs"
 section: 13-decisions
-tags: [adr, inference, local-first, privacy, section/decisions, status/accepted, type/adr]
+tags: [adr, inference, local-first, privacy, section/decisions, status/partially-superseded, type/adr]
 type: adr
-status: accepted
-updated: 2026-04-17
+status: partially-superseded
+updated: 2026-10-01
 up: "[[13-decisions/index]]"
 reviewed: false
+superseded-by: "[[13-decisions/0019-qwen-on-musubi-gpu-phase-1]] (LLM model choice); [[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint]] (lifecycle LLM placement); [[13-decisions/0045-authenticated-shared-inference-services]] (TEI service ownership)"
 ---
 # ADR 0012: Local Inference on Dedicated GPU, Not Hosted APIs
 
-**Status:** accepted
+**Status:** partially superseded — see note.
 **Date:** 2026-03-20
 **Deciders:** Eric
+
+> **Note (2026-10-01):** the Qwen2.5-7B choice was replaced by [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]]; the lifecycle LLM moved to an operator-configured OpenAI-compatible endpoint (which may run on another host) in [[13-decisions/0043-lifecycle-llm-openai-compatible-endpoint]]; TEI became independently managed shared services in [[13-decisions/0045-authenticated-shared-inference-services]]. The "no content leaves the host" default no longer holds for lifecycle LLM calls when that endpoint is remote. The record below is unchanged.
 
 ## Context
 

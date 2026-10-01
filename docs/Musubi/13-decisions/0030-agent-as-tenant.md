@@ -32,11 +32,11 @@ While wiring the openclaw-livekit v0.6.0 cutover and preparing the household-sta
 
 Examples:
 
-- `nyla/voice/episodic` — Nyla speaking through the LiveKit voice stack.
-- `nyla/discord/episodic` — Nyla speaking through Discord text.
-- `nyla/openclaw/episodic` — Nyla answering a browser-plugin invocation.
-- `aoi/voice/episodic`, `aoi/discord/episodic`.
-- 2-seg retrieve: `nyla/voice` → fan across Nyla's voice-plane rows across every plane she's written; `nyla` alone is not a legal namespace (the model requires at least tenant + presence).
+- `alex/voice/episodic` — Alex speaking through the LiveKit voice stack.
+- `alex/discord/episodic` — Alex speaking through Discord text.
+- `alex/openclaw/episodic` — Alex answering a browser-plugin invocation.
+- `sam/voice/episodic`, `sam/discord/episodic`.
+- 2-seg retrieve: `alex/voice` → fan across Alex's voice-plane rows across every plane it has written; `alex` alone is not a legal namespace (the model requires at least tenant + presence).
 
 Channels in scope for v1.0: `voice`, `discord`, `openclaw`. More as integrations land.
 
@@ -44,8 +44,10 @@ Channels in scope for v1.0: `voice`, `discord`, `openclaw`. More as integrations
 
 Tokens follow the tenant-first shape. Each agent gets its own token:
 
-- **Own-write-own-read**: `<agent>/*:rw` (e.g. `nyla/*:rw`).
-- **Household-read** (agents that survey other agents, e.g. Nyla, Aoi): `*/episodic:r`, `*/curated:r`, `*/concept:r`, `*/thought:r`. The `*` tenant glob is acceptable because the Musubi instance currently hosts a single human's agent cohort.
+> **Note (2026-10-01):** scope globs now match segment-for-segment against the namespace (`src/musubi/auth/scopes.py`, `_namespace_matches`), so the 2-segment globs below are historical shorthand. Current equivalents: `alex/*/*:rw` for own-write-own-read, `*/*/episodic:r` for cross-agent read.
+
+- **Own-write-own-read**: `<agent>/*:rw` (e.g. `alex/*:rw`).
+- **Cross-agent read** (agents that survey other agents, e.g. Alex, Sam): `*/episodic:r`, `*/curated:r`, `*/concept:r`, `*/thought:r`. The `*` tenant glob is acceptable for a single-operator deployment.
 - **Cross-tenant write**: forbidden. An agent cannot write into another agent's namespace.
 - **Operator tokens**: scope `*:rw` (broad, short-lived, minted on demand for ops / migrations).
 
@@ -53,8 +55,8 @@ Tokens follow the tenant-first shape. Each agent gets its own token:
 
 If a second instance lands, we disambiguate by agent-name prefix rather than by adding a tenant wrapper. Possible conventions:
 
-- Per-instance prefix: `eric-nyla`, `lisa-nyla`.
-- Per-instance suffix: `nyla-eric`, `nyla-lisa`.
+- Per-instance prefix: `admin-alex`, `other-alex`.
+- Per-instance suffix: `alex-admin`, `alex-other`.
 - Multi-tenancy via deploy: separate Musubi instances per human; tenant collision impossible.
 
 Revisit only when a second human actually shows up. Until then, agent-as-tenant is flat and clean.
@@ -71,20 +73,22 @@ The openclaw browser plugin bridges for whichever agent is active. Its token's `
 
 ### Positive
 
-- Queries read naturally: "what does Nyla know?" is `namespace=nyla/…`, not `namespace=eric/nyla/…`.
+- Queries read naturally: "what does Alex know?" is `namespace=alex/…`, not `namespace=<human>/alex/…`.
 - Per-agent isolation is first-class in the namespace, not a convention layered on top.
-- Cross-channel aggregation within an agent (voice + discord + openclaw) works via 2-seg retrieve (`nyla/`).
-- Household surveying uses clean plane-level scope globs (`*/episodic:r`) instead of enumerating 12 agent tenants.
+- Cross-channel aggregation within an agent (voice + discord + openclaw) works via 2-seg retrieve (`alex/`).
+- Cross-agent surveying uses clean plane-level scope globs (`*/episodic:r`) instead of enumerating every agent tenant.
 
 ### Trade-offs
 
 - **Scope glob breadth.** `*:r` is wider than `eric/*:r`. Acceptable in a single-instance deploy; revisit if a second instance lands.
 - **Migration cost.** Pre-cutover smoke data under `eric/<agent>/*` must be wiped (it's synthetic — no loss). Legacy POC data migrates with a namespace-mapping step in `deploy/migration/poc-to-v1.py`.
-- **Vault path convention.** The on-disk vault structure in [[03-system-design/namespaces]] previously partitioned curated files under `vault/curated/<tenant>/`. Under agent-as-tenant this becomes `vault/curated/<agent>/` (Nyla's curated knowledge lives under `vault/curated/nyla/`). Documented in the v1.0 spec refresh.
+- **Vault path convention.** The on-disk vault structure in [[03-system-design/namespaces]] previously partitioned curated files under `vault/curated/<tenant>/`. Under agent-as-tenant this becomes `vault/curated/<agent>/` (Alex's curated knowledge lives under `vault/curated/alex/`). Documented in the v1.0 spec refresh.
 
 ## Migration
 
 Executed as part of the v1.0 cutover:
+
+> **Note (2026-10-01):** `deploy/migration/poc-to-v1.py` has since been removed from the repository; the references to it in this ADR are historical.
 
 1. Wipe canonical Qdrant (synthetic + smoke rows).
 2. Re-mint every bearer token under the new convention.
