@@ -15,7 +15,9 @@ The root `docker-compose.yml` is the public application stack. It runs Musubi
 Core, its lifecycle worker and Qdrant. The CPU quickstart in
 `quickstart/docker-compose.yml` remains a separate demo with a public test key.
 An optional `deploy/docker/compose.local-gpu.yml` adds local TEI and Ollama
-services; operators choose an image compatible with their GPU. Neither path
+services; operators choose digest-pinned TEI and Ollama images compatible
+with their GPU.
+Neither path
 installs packages, drivers, users or firewall rules on the host.
 
 ## Required inputs
@@ -65,6 +67,7 @@ retention system.
 1. `test_public_compose_has_real_matching_core_pins`
 2. `test_public_compose_remote_mode_is_host_independent`
 3. `test_public_compose_local_gpu_mode_has_no_inference_port`
-4. `test_public_compose_example_requires_operator_secrets_and_endpoints`
-5. `test_public_compose_refuses_missing_key_or_endpoint`
-6. `test_public_compose_allows_explicit_lan_bind`
+4. `test_public_compose_gpu_mode_refuses_unpinned_image`
+5. `test_public_compose_example_requires_operator_secrets_and_endpoints`
+6. `test_public_compose_refuses_missing_key_or_endpoint`
+7. `test_public_compose_allows_explicit_lan_bind`

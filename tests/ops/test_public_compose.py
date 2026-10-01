@@ -57,6 +57,9 @@ def operator_env(tmp_path: Path) -> Path:
                 "RERANKER_MODEL=example/reranker",
                 "LLM_MODEL=example/llm",
                 "MUSUBI_TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:86-1.9.4",
+                "MUSUBI_TEI_DIGEST=" + "a" * 64,
+                "MUSUBI_OLLAMA_IMAGE=ollama/ollama:0.11.2",
+                "MUSUBI_OLLAMA_DIGEST=" + "b" * 64,
             ]
         )
         + "\n"
@@ -79,6 +82,10 @@ def test_public_compose_has_real_matching_core_pins() -> None:
     assert re.fullmatch(
         r"ghcr\.io/sourceblender/musubi-core@sha256:[0-9a-f]{64}",
         pins.pop(),
+    )
+    assert re.fullmatch(
+        r"qdrant/qdrant:v1\.17\.1@sha256:[0-9a-f]{64}",
+        services["qdrant"]["image"],
     )
 
 
@@ -113,8 +120,40 @@ def test_public_compose_local_gpu_mode_has_no_inference_port(operator_env: Path)
     for name in ("tei-dense", "tei-sparse", "tei-reranker", "ollama"):
         assert "ports" not in services[name]
         assert services[name]["healthcheck"]["test"]
+        assert re.search(r"@sha256:[0-9a-f]{64}$", services[name]["image"])
         devices = services[name]["deploy"]["resources"]["reservations"]["devices"]
         assert any("gpu" in device["capabilities"] for device in devices)
+
+
+def test_public_compose_gpu_mode_refuses_unpinned_image(operator_env: Path) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker Compose is unavailable")
+    operator_env.write_text(
+        operator_env.read_text().replace("MUSUBI_OLLAMA_DIGEST=" + "b" * 64, "")
+    )
+    command_env = {**os.environ, "MUSUBI_ENV_FILE": str(operator_env)}
+    command_env.pop("MUSUBI_OLLAMA_DIGEST", None)
+    result = subprocess.run(
+        [
+            docker,
+            "compose",
+            "--env-file",
+            str(operator_env),
+            "-f",
+            str(BASE),
+            "-f",
+            str(GPU),
+            "config",
+            "--quiet",
+        ],
+        cwd=ROOT,
+        env=command_env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "MUSUBI_OLLAMA_DIGEST" in result.stderr
 
 
 def test_public_compose_example_requires_operator_secrets_and_endpoints() -> None:
