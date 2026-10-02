@@ -17,7 +17,7 @@
 
 Musubi (結び — *"to tie, to join, to bind"*) is a memory server built for the moment when a single AI assistant is not enough: you're running several, each with its own role — one drafts notes, one answers questions, one cleans up the vault at 3am — and they need a shared substrate so that what one learns, the others can use.
 
-It is a standalone Python service. Every downstream interface (MCP, LiveKit, a CLI, a browser extension) is an adapter that depends on Musubi's SDK. The core owns the memory model and the API; adapters own the surface.
+It is a standalone Python service with an HTTP API. Agent integrations (Claude Code, Codex, OpenClaw, LiveKit and others) are separate plugins that talk to that API; the core owns the memory model, the plugins own the surface.
 
 ## The three planes
 
@@ -41,7 +41,7 @@ It is a standalone Python service. Every downstream interface (MCP, LiveKit, a C
 
 - **Curated** — concepts that clear a promotion gate (reinforcement count + importance + age) are rendered as markdown and written to an [Obsidian](https://obsidian.md) vault. A human reviewer sees them, edits them, moves them around. Edits flow back into Musubi through the vault sync.
 
-A **lifecycle engine** runs five sweeps on cron: maturation (hourly), synthesis (03:00), promotion (04:00), demotion (05:00, sweep unreinforced rows out), reflection (06:00, writes a daily digest back to the vault). Each sweep is file-locked, idempotent, and emits structured events to a SQLite journal.
+A **lifecycle engine** runs the sweeps on a schedule: episodic maturation and provisional expiry (hourly), synthesis (03:00), concept maturation (03:30), promotion (04:00), concept demotion (05:00), reflection (06:00, writes a daily digest to the vault), episodic demotion (weekly, Sunday 03:45) and a vault reconcile every six hours. Each sweep is file-locked, idempotent, and records its events in a SQLite journal.
 
 ## Why not a single RAG index?
 
@@ -56,9 +56,10 @@ Design choices are captured as ADRs in [`docs/Musubi/13-decisions/`](docs/Musubi
 - **Python 3.12**, `pydantic v2`, strict `mypy`, `ruff` format + lint.
 - **Qdrant** for named-vector hybrid search (dense + sparse + rerank).
 - **TEI (text-embeddings-inference)** for BGE-M3 dense + SPLADE sparse + BGE-reranker — all GPU-hostable, CPU-fallback OK.
-- **Ollama** for LLM calls (maturation scoring, synthesis, promotion rendering, reflection). Defaults to Qwen 2.5 7B; any Ollama-tagged model works.
-- **FastAPI + HTTPX** HTTP surface; **gRPC** generated from `proto/` (partial). Both exposed on the same port.
-- **Docker Compose** for local / single-box deploy. the same Compose stack runs a single production host you have prepared. Every published image is [cosign](https://github.com/sigstore/cosign)-signed by digest, Trivy-scanned, and ships with a CycloneDX SBOM attestation.
+- **Ollama** for LLM calls (maturation scoring, synthesis, promotion rendering, reflection). You choose the model with `LLM_MODEL`; the examples use `qwen3.5:9b`, and any Ollama tag works. The lifecycle sweeps can use an OpenAI-compatible endpoint instead.
+- **FastAPI** HTTP/JSON API. That is the only wire protocol.
+- **JWT bearer tokens** (HS256 or RS256) with per-namespace scopes.
+- **Docker Compose** for a laptop or a single production host. Every published image is [cosign](https://github.com/sigstore/cosign)-signed by digest, Trivy-scanned, and ships with a CycloneDX SBOM attestation.
 
 ## Try it
 
@@ -95,49 +96,46 @@ and signature checks, tokens, every agent plugin, upgrades and backups.
 ```
 src/musubi/                 importable package
   types/                    shared pydantic types — the schema is the contract
-  store/                    Qdrant layout, collection names, vector specs
-  embedding/                TEI client + Embedder protocol + FakeEmbedder
+  api/                      FastAPI app and the /v1 routes
+  auth/                     JWT validation, scopes, credential preflight
   planes/                   episodic / concept / curated / artifact / thoughts
+  ingestion/                capture service (dedup, idempotency, retry); not yet used by the HTTP routes
   retrieve/                 scoring, hybrid search, fast/deep paths
-  lifecycle/                maturation / synthesis / promotion / demotion / reflection / runner
-  llm/                      Ollama client + frozen prompt files (per-name versioned)
-  api/                      FastAPI app, OpenAPI, /v1/* routes
-  sdk/                      Python client
-  adapters/                 MCP, LiveKit, OpenClaw (SDK + types only)
-  vault/                    Obsidian watcher + writer + write-log
-  observability/            structured logging + Prometheus metrics
+  lifecycle/                maturation / synthesis / promotion / demotion / reflection / scheduler
+  llm/                      Ollama and OpenAI-compatible clients, versioned prompt files
+  embedding/                TEI client, Embedder protocol, FakeEmbedder
+  store/ storage/           Qdrant layout, collection specs, client factories
+  vault/                    Obsidian watcher, writer, reconciler, write-log
+  sdk/                      Python client (sync and async)
+  adapters/                 in-repo MCP server and LiveKit adapter code
+  cli/                      the `musubi` operator CLI
+  ops/                      retention and cleanup jobs
+  evals/                    retrieval-quality evals and the live quality gate
+  observability/            structured logging, metrics, tracing
 
-tests/                      mirrors src/musubi/ path-for-path
+tests/                      mirrors src/musubi/
+quickstart/                 CPU-only Compose stack and the demo
 docs/guide/                 user guide: install, connect agents, use, operate
-docs/Musubi/                the architecture vault (Obsidian) — source of truth for design
-deploy/                     docker overrides, smoke checks, backup, runbooks
+docs/Musubi/                architecture docs and ADRs (Obsidian-style vault)
+deploy/                     Compose overrides, Prometheus and Alertmanager config, smoke checks, test env
 ```
 
 ## Status
 
-**v1.0 — released.** The API shape is sealed, agent-as-tenant namespace model is in ([ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md)), both downstream integrations (openclaw-livekit, openclaw-musubi plugin) are on the canonical API, and the release chain from conventional commit through pinned-digest PR is fully hands-off.
+**v1, in production use.** The current release is on the [releases page](https://github.com/sourceblender/musubi/releases/latest) and in [`CHANGELOG.md`](CHANGELOG.md).
 
-In v1.0:
+What ships today:
 
-- ✅ Three-plane memory (episodic / curated / concept) + artifacts + thoughts, per-plane collections, KSUID-addressed rows
-- ✅ All five lifecycle sweeps (maturation, synthesis, promotion, demotion, reflection) running on cron, SQLite-journaled, with a hard three-strikes rejection cap on promotion
-- ✅ Hybrid retrieval — dense BGE-M3 + sparse SPLADE + BGE-reranker + 2-segment cross-plane fanout in one call
-- ✅ Full HTTP surface (gRPC partial; lives behind the runtime flag `MUSUBI_GRPC`, default off)
-- ✅ Plane-aligned endpoint paths: `/v1/episodic`, `/v1/curated`, `/v1/concepts`, `/v1/artifacts`
-- ✅ Agent-as-tenant namespace model: `<agent>/<channel>/<plane>` ([ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
-- ✅ `Last-Event-ID` replay on `/v1/thoughts/stream` — reconnect without losing thoughts
-- ✅ MCP + LiveKit + OpenClaw adapters (external repos), static-bearer auth model with per-agent token support
-- ✅ Supply-chain: cosign + SBOM + Trivy on every published image
-- ✅ Release chain: conventional commit → reviewed release PR → tag → signed, scanned image with SBOM → digest pin PR. Pin PRs never merge themselves; an operator verifies the digest, runs the credential preflight and upgrades.
-- ✅ Operator tooling: `musubi promote force|reject` CLI, vault large-file skip-with-warning, rate-limited vault watcher
+- Three-plane memory (episodic / concept / curated) plus artifacts and thoughts, with per-plane collections and KSUID-addressed rows
+- The lifecycle sweeps above, journaled in SQLite, with a three-strikes rejection cap on promotion
+- Hybrid retrieval: dense BGE-M3, sparse SPLADE and a BGE reranker, across planes in one call
+- Plane-aligned HTTP endpoints (`/v1/episodic`, `/v1/curated`, `/v1/concepts`, `/v1/artifacts`, `/v1/thoughts`) and a Python SDK
+- Agent-as-tenant namespaces, `<agent>/<channel>/<plane>` ([ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
+- `Last-Event-ID` replay on `/v1/thoughts/stream`, so a reconnecting agent does not lose thoughts
+- Signed, scanned images with an SBOM, released through reviewed release PRs; digest pins are applied by an operator, never automatically
+- Operator CLI: `musubi promote force|reject`
 
-Post-v1.0:
-- ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will need its own ADR
-- ⏳ Auto-deploy pipeline (image publish is automated; host rollout is operator-driven)
-- ⏳ gRPC transport ADR ([#98](https://github.com/sourceblender/musubi/issues/98)) — priority-low, not a 1.0 blocker
-- ⏳ Vault-wide sweep to update illustrative `eric/...` examples to agent-as-tenant (normative specs already flipped; docs carry a banner pointing at [ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
-
-Roadmap detail lives in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).
+Open work is tracked in [GitHub issues](https://github.com/sourceblender/musubi/issues). Longer-term direction is in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).
 
 ## Contributing
 

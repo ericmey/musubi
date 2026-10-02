@@ -1,9 +1,9 @@
 """Ingestion service layer.
 
-The HTTP capture endpoint (``POST /v1/episodic``, owned by
-``slice-api-v0-write``) is a thin shell that delegates to the
-:class:`musubi.ingestion.capture.CaptureService` shipped here. The
-service owns:
+:class:`musubi.ingestion.capture.CaptureService` is a capture layer
+over the episodic plane. It is not wired into the HTTP API: the
+``POST /v1/episodic`` route builds the memory and calls
+``EpisodicPlane.create`` directly. The service owns:
 
 - Per-plane dedup configuration (``DEFAULT_DEDUP_THRESHOLDS``).
 - Per-(token, namespace) idempotency cache (``IngestionIdempotencyCache``)

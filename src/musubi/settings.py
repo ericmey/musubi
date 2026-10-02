@@ -50,7 +50,8 @@ class Settings(BaseSettings):
         # Freeze the model so consumers can treat it as a value type; mutation
         # anywhere other than load time is a bug.
         frozen=True,
-        # Reject misspelled env vars instead of silently ignoring them.
+        # Unknown env vars are ignored, so a retired setting left in an old
+        # .env (for example MUSUBI_GRPC) does not stop the server starting.
         extra="ignore",
     )
 
@@ -302,8 +303,6 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Feature flags
     # ------------------------------------------------------------------
-    musubi_grpc: bool = Field(default=False, description="Expose the gRPC API alongside REST.")
-
     lifecycle_metrics_port: int = Field(
         default=8101,
         ge=1,

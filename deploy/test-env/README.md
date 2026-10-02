@@ -17,7 +17,7 @@ The compose stack the integration suite (`tests/integration/`) exercises against
 | `tei-reranker` | same image | Cross-encoder rerank (BGE-reranker-base) |
 | `ollama` | `ollama/ollama:0.4.0` | LLM (qwen2.5:0.5b, pulled by the `ollama-pull` side-car) |
 
-Models are intentionally small so the stack runs on a stock GitHub Actions runner without a GPU. The production compose ([deploy/docker/](../docker/)) uses larger BGE-M3 + qwen2.5:7b on GPU.
+Models are intentionally small so the stack runs on a stock GitHub Actions runner without a GPU. The production example ([deploy/docker/](../docker/)) uses BGE-M3 and `qwen3.5:9b` on a GPU.
 
 ## Local run
 

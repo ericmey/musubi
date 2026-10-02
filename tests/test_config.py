@@ -64,7 +64,6 @@ _ENV_KEYS: tuple[str, ...] = (
     "JWT_SIGNING_KEY",
     "OAUTH_AUTHORITY",
     # Feature flags
-    "MUSUBI_GRPC",
     "MUSUBI_ALLOW_PLAINTEXT",
 )
 
@@ -291,12 +290,10 @@ def test_type_coerced_from_string(minimal_env: Path, _reset_cache: None) -> None
 def test_bool_coerced_from_string(
     monkeypatch: pytest.MonkeyPatch, minimal_env: Path, _reset_cache: None
 ) -> None:
-    monkeypatch.setenv("MUSUBI_GRPC", "true")
-    monkeypatch.setenv("MUSUBI_ALLOW_PLAINTEXT", "false")
+    monkeypatch.setenv("MUSUBI_ALLOW_PLAINTEXT", "true")
     get_settings.cache_clear()
     settings = get_settings()
-    assert settings.musubi_grpc is True
-    assert settings.musubi_allow_plaintext is False
+    assert settings.musubi_allow_plaintext is True
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +371,6 @@ def test_default_values_present_where_spec_allows(minimal_env: Path, _reset_cach
     # BRAIN_PORT defaults to 8100 per compose-stack.
     assert settings.brain_port == 8100
     # Feature flags default to false per compose-stack.
-    assert settings.musubi_grpc is False
     assert settings.musubi_allow_plaintext is False
     assert settings.idempotency_receipt_sqlite_path is None
     assert FastTiming.from_settings(settings) == FastTiming()
