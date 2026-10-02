@@ -4,7 +4,7 @@ section: 05-retrieval
 tags: [ranking, retrieval, scoring, section/retrieval, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-10-01
+updated: 2026-10-02
 up: "[[05-retrieval/index]]"
 reviewed: false
 implements: "tests/retrieve/test_scoring.py"
@@ -171,7 +171,7 @@ When two hits score identically, `rank_hits` tiebreaks lexicographically on `(ob
 
 ## API exposure
 
-Every ranked result surfaces its components. Internally the field is `reinforce` (`ScoreComponents`); the API boundary renames it to `reinforcement`:
+Every ranked result surfaces its components. The `ScoreComponents` attribute is `reinforce`; every dict form of the components, `ScoreComponents.as_dict()` and the API response alike, uses the key `reinforcement`. Code that builds a components dict by hand must use `reinforcement`: the cross-plane rescoring step reads that key, and any other spelling is silently scored as 0.
 
 ```json
 {
