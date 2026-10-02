@@ -90,7 +90,7 @@ not silently become a Qdrant identifier.
 
 ## Credentials
 
-Keep real values in Ansible Vault, not git. The expected variable names are documented in `deploy/ansible/vault.example.yml`.
+Keep real values in your secret manager, not git.
 
 ## RPO and RTO
 
