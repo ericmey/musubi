@@ -4,7 +4,7 @@ section: 09-operations
 tags: [alerts, on-call, operations, section/operations, status/complete, type/runbook]
 type: runbook
 status: complete
-updated: 2026-10-01
+updated: 2026-10-02
 up: "[[09-operations/index]]"
 reviewed: false
 ---
@@ -26,9 +26,9 @@ Two channels are enough:
 1. **Push** (ntfy, Pushover, a pager): urgent, wake-the-operator.
 2. **Email:** next-day.
 
-`deploy/prometheus/alertmanager.yml` is a shape example only. Its `default` receiver
-posts to `/v1/ops/alert-sink`, which Core does not serve, and its ntfy receiver names a
-public topic. Replace both before using it. A minimal routing block:
+`deploy/prometheus/alertmanager.yml` is an example to copy into the Alertmanager you
+run. Replace its ntfy URL and email settings first; it has no receiver that posts to
+Core, because Core has no alert-receiving endpoint. The routing block it contains:
 
 ```yaml
 route:
@@ -48,12 +48,13 @@ route:
 receivers:
   - name: ntfy
     webhook_configs:
-      - url: "https://ntfy.sh/<your-topic>"
+      - url: "https://ntfy.example.com/replace-with-an-unguessable-topic"
   - name: email
     email_configs:
       - to: admin@example.com
         from: alertmanager@example.com
         smarthost: smtp.example.com:587
+        require_tls: true
 ```
 
 Use an unguessable ntfy topic, or your own ntfy server: anyone who knows a public topic
