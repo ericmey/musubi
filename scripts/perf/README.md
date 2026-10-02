@@ -137,5 +137,3 @@ Every Makefile target writes to `~/perf-runs/<LABEL>/`:
 ## Related
 
 - Plan: see Gate 0 PR description for the full test plan.
-- Follow-up: [#190](https://github.com/sourceblender/musubi/issues/190) —
-  restore.yml repair (independent, not blocking).

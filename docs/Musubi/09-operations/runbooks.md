@@ -281,8 +281,7 @@ Cycle through one operations drill each quarter so recovery paths stay fresh:
 1. Q1 — `Qdrant down`: stop Qdrant on a scratch stack, follow the runbook above, and
    verify `/v1/ops/status`.
 2. Q2 — `Restore from snapshot`: restore the latest cold backup set into a scratch stack
-   ([[09-operations/backup-restore]]) and run the canary. Do not use `restore.yml` or
-   `drill.yml`: `restore.yml` does not work today.
+   ([[09-operations/backup-restore]]) and run the canary.
 3. Q3 — `Backup failure 24h`: break the backup target on purpose and verify the alert and
    the manual backup path.
 4. Q4 — `First deploy`: rehearse the install from `docs/guide/install.md` on a disposable
