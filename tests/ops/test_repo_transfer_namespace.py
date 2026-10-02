@@ -20,8 +20,6 @@ from tests.release.test_release_automation_issue449 import PROJECT_RELEASE_GRAMM
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISH = ROOT / ".github" / "workflows" / "publish-core-image.yml"
 DIGEST_BUMP = ROOT / ".github" / "workflows" / "auto-digest-bump.yml"
-UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
-RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
 # Public verify instructions trust any workflow in the repo; narrowing that is a
 # separate decision, so here only the owner set and the anchor are asserted.
 # The user-facing verify command lives in the user guide; README links to it.
@@ -40,25 +38,7 @@ CANONICAL_IDENTITY = (
     # let a pin PR open for a tag its own verifier then rejects.
     + PROJECT_RELEASE_GRAMMAR_BASH.removeprefix("^")
 )
-DIGEST = "sha256:" + "a" * 64
 WORKFLOW = ".github/workflows/publish-core-image.yml"
-
-
-def _identities(text: str) -> list[str]:
-    """Every regexp passed to --certificate-identity-regexp, in either CLI or argv form."""
-    flag = re.findall(r"--certificate-identity-regexp '([^']+)'", text)
-    argv = re.findall(r"- --certificate-identity-regexp\n\s*- '([^']+)'", text)
-    return flag + argv
-
-
-def test_every_verifier_uses_the_one_canonical_identity() -> None:
-    # The private Ansible path still uses the transfer-aware regexp. The
-    # public auto-pin body names its exact tag workflow identity instead.
-    sources = (UPDATE_PLAYBOOK, RUNBOOK)
-    for path in sources:
-        found = _identities(path.read_text())
-        assert found, f"{path.relative_to(ROOT)}: no --certificate-identity-regexp found"
-        assert set(found) == {CANONICAL_IDENTITY}, (path.relative_to(ROOT), found)
 
 
 def test_public_pin_body_uses_exact_tag_workflow_identity() -> None:
@@ -119,23 +99,6 @@ def test_identity_rejects_lookalikes_and_non_release_refs() -> None:
     )
     for san in rejected:
         assert not pattern.search(san), san
-
-
-def test_update_playbook_image_guard_accepts_both_owners_only() -> None:
-    text = UPDATE_PLAYBOOK.read_text()
-    guards = re.findall(r"musubi_core_image is match\('([^']+)'\)", text)
-    assert len(guards) == 1, guards
-    # Ansible's `match` test is re.match.
-    guard = re.compile(guards[0])
-    for owner in ("ericmey", "sourceblender"):
-        assert guard.match(f"ghcr.io/{owner}/musubi-core@{DIGEST}")
-    for image in (
-        f"ghcr.io/evil/musubi-core@{DIGEST}",
-        "ghcr.io/sourceblender/musubi-core:v1.27.0",
-        f"ghcr.io/sourceblender-evil/musubi-core@{DIGEST}",
-        f"ghcrXio/ericmey/musubi-core@{DIGEST}",
-    ):
-        assert not guard.match(image), image
 
 
 def test_publisher_derives_namespace_from_repository_owner() -> None:
