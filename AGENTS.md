@@ -25,7 +25,7 @@ docs/Musubi/                         architecture docs (an Obsidian vault): spec
   NN-<area>/                         specs per area, each with a Test Contract
   13-decisions/                      ADRs
   _tools/check.py                    docs health check (CI runs it)
-deploy/                              Ansible, Docker, runbooks, smoke checks
+deploy/                              Docker overlay, smoke checks, operator examples
 .github/                             PR + issue templates, CI workflows
 .agent-context.local.md              operator-only (gitignored): hosts, credentials pointers
 ```

@@ -38,10 +38,6 @@ Install with `docs/guide/install.md`: prepare the host, fill in `.env`, then
 `curl -fsS http://127.0.0.1:8100/v1/ops/health` returns `{"status":"ok",…}`,
 `/v1/ops/status` reports every component healthy, and the canary passes.
 
-`deploy/runbooks/first-deploy.md` is an older operator runbook for a different,
-host-provisioned layout with its own gateway. It is not the public install path; keep it as
-context only.
-
 ## Core down
 
 **Alert:** `core_down`
