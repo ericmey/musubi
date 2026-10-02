@@ -43,7 +43,13 @@ SCORE_WEIGHTS = ScoreWeights()
 
 @dataclass(frozen=True, slots=True)
 class ScoreComponents:
-    """Named components that explain a retrieval score."""
+    """Named components that explain a retrieval score.
+
+    The attribute is ``reinforce``; every dict form, including ``as_dict()``
+    and the API's ``score_components``, spells it ``reinforcement``. One dict
+    spelling matters because ``calibrate_global_relevance`` reads dicts by
+    the ``reinforcement`` key and would score any other spelling as 0.
+    """
 
     relevance: float
     recency: float
@@ -57,7 +63,7 @@ class ScoreComponents:
             "recency": self.recency,
             "importance": self.importance,
             "provenance": self.provenance,
-            "reinforce": self.reinforce,
+            "reinforcement": self.reinforce,
         }
 
 
