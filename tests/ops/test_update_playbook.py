@@ -261,19 +261,16 @@ def test_core_update_verifies_candidate_signature_before_exposing_secrets() -> N
     assert "musubi_core_image is match(" in UPDATE_PLAYBOOK.read_text()
 
 
-def test_auto_digest_pin_requires_human_preflight_before_merge() -> None:
+def test_auto_digest_pin_requires_signature_and_compose_check_before_merge() -> None:
     text = AUTO_DIGEST_WORKFLOW.read_text()
     before_merge = text.index("## Before merge")
     cosign = text.index("cosign verify", before_merge)
-    candidate_run = text.index("musubi.auth.credential_preflight", before_merge)
-
     assert "gh pr merge" not in text
-    assert cosign < candidate_run
-    assert "--user" in text[candidate_run - 1000 : candidate_run]
-    assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text[before_merge:candidate_run]
-    assert "MUSUBI_PREFLIGHT_MANIFEST" in text[before_merge:candidate_run]
-    assert "--env-file" not in text[before_merge:candidate_run]
-    assert "--authority-env" in text[candidate_run : candidate_run + 300]
+    compose_check = text.index("docker compose --env-file .env config --quiet", before_merge)
+    assert cosign < compose_check
+    assert "--certificate-identity" in text[cosign:compose_check]
+    assert "MUSUBI_PREFLIGHT_MANIFEST" not in text
+    assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" not in text
 
 
 def test_core_update_preflight_cannot_be_satisfied_by_caller_attestation_vars() -> None:
@@ -293,7 +290,9 @@ def test_apply_wrapper_requires_explicit_preflight_authority_env() -> None:
 
 
 def test_every_documented_core_update_entrypoint_names_preflight_inputs() -> None:
-    for path in (RUNBOOK, ANSIBLE_README, AUTO_DIGEST_WORKFLOW):
+    # The retained private Ansible path requires live credential preflight.
+    # The public Compose pin PR has its own signature and canary procedure.
+    for path in (RUNBOOK, ANSIBLE_README):
         text = path.read_text()
         assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text, (
             f"{path} documents Core updates without the required preflight authority env"

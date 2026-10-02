@@ -52,11 +52,22 @@ def _identities(text: str) -> list[str]:
 
 
 def test_every_verifier_uses_the_one_canonical_identity() -> None:
-    sources = (UPDATE_PLAYBOOK, DIGEST_BUMP, RUNBOOK)
+    # The private Ansible path still uses the transfer-aware regexp. The
+    # public auto-pin body names its exact tag workflow identity instead.
+    sources = (UPDATE_PLAYBOOK, RUNBOOK)
     for path in sources:
         found = _identities(path.read_text())
         assert found, f"{path.relative_to(ROOT)}: no --certificate-identity-regexp found"
         assert set(found) == {CANONICAL_IDENTITY}, (path.relative_to(ROOT), found)
+
+
+def test_public_pin_body_uses_exact_tag_workflow_identity() -> None:
+    text = DIGEST_BUMP.read_text()
+    assert (
+        '--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/'
+        '.github/workflows/publish-core-image.yml@refs/tags/${TAG}"'
+    ) in text
+    assert "--certificate-identity-regexp" not in text
 
 
 def test_readme_reaches_the_public_verify_instructions() -> None:

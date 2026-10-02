@@ -3,11 +3,13 @@
 name: musubi
 
 x-core-image: &core-image ghcr.io/sourceblender/musubi-core@sha256:887a4b8af778da49c7795fbfe1332465521de37b436caa9f94462b9d43e10af9
+x-core-version: &core-version v1.27.12
 x-core-env: &core-env
   QDRANT_HOST: qdrant
   QDRANT_PORT: "6333"
   QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
   JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+  MUSUBI_SERVICE_VERSION: *core-version
   TEI_DENSE_URL: ${TEI_DENSE_URL:?Set TEI_DENSE_URL in .env}
   TEI_SPARSE_URL: ${TEI_SPARSE_URL:?Set TEI_SPARSE_URL in .env}
   TEI_RERANKER_URL: ${TEI_RERANKER_URL:?Set TEI_RERANKER_URL in .env}
