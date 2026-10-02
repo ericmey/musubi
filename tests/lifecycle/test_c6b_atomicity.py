@@ -9272,8 +9272,7 @@ _READINESS_PATHS = ("/readyz", "/healthz", "/readiness")
 
 
 def _worker_healthcheck_test(compose_text: str) -> object:
-    """The lifecycle-worker healthcheck ``test:`` from the REAL ansible compose template. Jinja
-    expressions are neutralized so PyYAML can load; the worker healthcheck itself is jinja-free."""
+    """The lifecycle-worker healthcheck ``test:`` from the public Compose stack."""
     doc = yaml.safe_load(re.sub(r"{{.*?}}", "JINJA", compose_text))
     return doc["services"]["lifecycle-worker"]["healthcheck"]["test"]
 
@@ -9297,7 +9296,7 @@ _P0C_T2_REASON = (
 
 
 def test_p0c_worker_healthcheck_consumes_readiness_signal() -> None:
-    template = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
+    template = (_P0C_REPO_ROOT / "docker-compose.yml").read_text()
     test_cmd = _worker_healthcheck_test(template)
     if not _healthcheck_consumes_readiness(test_cmd):
         raise DefectStillPresent(
@@ -9335,9 +9334,7 @@ def test_p0c_readiness_probe_rule_discriminates() -> None:
     assert not _healthcheck_consumes_readiness(metrics_only)
     assert _healthcheck_consumes_readiness(gauge_probe)
     assert _healthcheck_consumes_readiness(readyz_probe)
-    real = _worker_healthcheck_test(
-        (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
-    )
+    real = _worker_healthcheck_test((_P0C_REPO_ROOT / "docker-compose.yml").read_text())
     assert _healthcheck_consumes_readiness(real)
 
 
@@ -9694,12 +9691,6 @@ def _first_lifecycle_sqlite(text: str) -> str | None:
 def _lifecycle_storage_surfaces() -> dict[str, str | None]:
     r = _P0C_REPO_ROOT
     return {
-        "ansible-compose": _compose_lifecycle_host_path(
-            (r / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
-        ),
-        "ansible-env-production": _env_lifecycle_path(
-            (r / "deploy/ansible/templates/env.production.j2").read_text()
-        ),
         "ansible-restore": _first_lifecycle_sqlite((r / "deploy/backup/restore.yml").read_text()),
         "root-compose": _compose_lifecycle_host_path((r / "docker-compose.yml").read_text()),
         "env-example": _env_lifecycle_path((r / ".env.example").read_text()),
@@ -10164,56 +10155,6 @@ def _yaml_tasks(playbook_text: str) -> list[dict[str, Any]]:
 def _bash_scalar(text: str, name: str) -> str | None:
     m = re.search(rf'{name}="([^"]+)"', text)
     return m.group(1) if m else None
-
-
-def test_p0c_anchor_ansible_compose_dir_mount_and_worker() -> None:
-    """ANCHOR CONTROL: the production ansible compose template already binds the DIRECTORY
-    /var/lib/musubi/lifecycle for BOTH core (:16) and worker (:52) and declares a lifecycle-worker service.
-    A regress of either mount to the bare FILE, or dropping the worker, fails this loudly."""
-    text = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
-    mounts = _all_lifecycle_host_mounts(text)
-    assert len(mounts) >= 2, f"expected core+worker lifecycle mounts, got {mounts!r}"
-    assert all(_resolves_canonical_mount(m) for m in mounts), (
-        f"ansible compose lifecycle mounts regressed off the exact DIR mount: {mounts!r}"
-    )
-    assert _has_lifecycle_worker_service(text), (
-        "ansible compose template dropped the lifecycle-worker service"
-    )
-
-
-def test_p0c_anchor_ansible_env_production_dir() -> None:
-    """ANCHOR CONTROL: env.production.j2:13 already sets LIFECYCLE_SQLITE_PATH to the canonical DIR DB."""
-    path = _env_lifecycle_path(
-        (_P0C_REPO_ROOT / "deploy/ansible/templates/env.production.j2").read_text()
-    )
-    assert _resolves_canonical_dir_db(path), (
-        f"env.production.j2 LIFECYCLE_SQLITE_PATH regressed off the exact DIR DB: {path!r}"
-    )
-    assert path == _CANONICAL_DIR_DB
-
-
-def test_p0c_anchor_bootstrap_creates_lifecycle_dir_with_musubi_0750() -> None:
-    """ANCHOR CONTROL: bootstrap.yml:130 'Create Musubi data directories' owns musubi_data_dirs — which
-    includes /var/lib/musubi/lifecycle — as musubi:musubi mode 0750. The canonical unit is a DIRECTORY, so
-    this perms task IS the lock: a regress that drops the DIR from musubi_data_dirs, or loosens owner/mode,
-    fails loudly."""
-    group_vars = yaml.safe_load((_P0C_REPO_ROOT / "deploy/ansible/group_vars/all.yml").read_text())
-    assert group_vars["musubi_service_user"] == "musubi"
-    assert group_vars["musubi_service_group"] == "musubi"
-    data_dirs = group_vars["musubi_data_dirs"]
-    assert "/var/lib/musubi/lifecycle" in data_dirs, (
-        f"lifecycle DIR dropped from musubi_data_dirs: {data_dirs!r}"
-    )
-
-    tasks = _yaml_tasks((_P0C_REPO_ROOT / "deploy/ansible/bootstrap.yml").read_text())
-    mkdir = next((t for t in tasks if t.get("name") == "Create Musubi data directories"), None)
-    assert mkdir is not None, "bootstrap.yml lost the 'Create Musubi data directories' task"
-    spec = mkdir["ansible.builtin.file"]
-    assert spec["state"] == "directory"
-    assert spec["owner"] == "{{ musubi_service_user }}"
-    assert spec["group"] == "{{ musubi_service_group }}"
-    assert str(spec["mode"]) == "0750"
-    assert mkdir["loop"] == "{{ musubi_data_dirs }}"
 
 
 def test_p0c_anchor_live_scheduler_backup_dir() -> None:

@@ -3,9 +3,9 @@
 #   docker compose -f quickstart/docker-compose.yml up -d --wait
 #   docker compose -f quickstart/docker-compose.yml run --rm demo
 #
-# This file is for trying Musubi. It is NOT the production stack:
-# production is ../docker-compose.yml rendered by Ansible (deploy/ansible),
-# with GPU TEI, BGE-M3 and TLS. Nothing here is read by that path.
+# This file is for trying Musubi. The root ../docker-compose.yml is the
+# operator-managed stack, with remote inference endpoints or an optional
+# local-GPU override. Nothing here is read by that path.
 #
 # Models are smaller than production so a cold start fits a laptop:
 # bge-large-en-v1.5 dense (1024-dim, matching the collection schema),
@@ -32,7 +32,7 @@ x-tei: &tei
 
 x-core: &core
   # v1.27.12, cosign-signed by publish-core-image.yml; same digest as
-  # deploy/ansible/group_vars/all.yml.
+  # the root docker-compose.yml pin.
   image: ghcr.io/sourceblender/musubi-core@sha256:887a4b8af778da49c7795fbfe1332465521de37b436caa9f94462b9d43e10af9
   platform: linux/amd64
   env_file: [.env.quickstart]

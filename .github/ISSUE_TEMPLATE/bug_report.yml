@@ -25,7 +25,7 @@ body:
       label: How to reproduce
       description: Minimal steps. A code snippet or command is ideal.
       placeholder: |
-        1. Start a fresh stack via `ansible-playbook deploy/ansible/deploy.yml`.
+        1. Start a fresh stack via `docker compose up -d --wait`.
         2. POST an episodic capture that omits `topics`.
         3. Wait for the next maturation tick (hourly at :13 UTC).
         4. Check `docker logs musubi-lifecycle-worker-1` — see the ValidationError.
@@ -62,18 +62,18 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, Python version, Qdrant / TEI / Ollama versions if relevant, GPU / CPU-only, Docker / Compose / Ansible deploy.
+      description: OS, Python version, Qdrant / TEI / Ollama versions if relevant, GPU / CPU-only, and Docker Compose details.
       placeholder: |
         - OS: Ubuntu 24.04
         - Python: 3.12.7
-        - Deploy: Docker Compose via deploy/ansible/deploy.yml
-        - GPU: RTX 3080 (CUDA 12.4) / or CPU-only
+        - Deploy: Docker Compose version <version>
+        - Inference: remote endpoints / local GPU model and driver
 
   - type: textarea
     id: logs
     attributes:
       label: Logs
-      description: Relevant log lines — from `docker logs`, the ansible playbook, or wherever. Redact any secrets first.
+      description: Relevant log lines from `docker logs` or the failing command. Redact any secrets first.
       render: shell
 
   - type: checkboxes
