@@ -99,7 +99,7 @@ src/musubi/                 importable package
   api/                      FastAPI app and the /v1 routes
   auth/                     JWT validation, scopes, credential preflight
   planes/                   episodic / concept / curated / artifact / thoughts
-  ingestion/                capture service behind POST /v1/episodic
+  ingestion/                capture service (dedup, idempotency, retry); not yet used by the HTTP routes
   retrieve/                 scoring, hybrid search, fast/deep paths
   lifecycle/                maturation / synthesis / promotion / demotion / reflection / scheduler
   llm/                      Ollama and OpenAI-compatible clients, versioned prompt files
