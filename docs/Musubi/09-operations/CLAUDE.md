@@ -23,9 +23,9 @@ every page under `09-operations/`. Supplements [[CLAUDE]].
   check; step 3 is a branch. Format in [[_templates/runbook]].
 - **Every recommended alert has a runbook.** An alert with no linked runbook is a bug in
   the alert.
-- **Test restores.** `RESTORE_DRILL_CADENCE_DAYS` in `src/musubi/ops/backup.py` is 90:
-  restore a backup set into a scratch environment at least that often and smoke-test it.
-  A backup not tested is a backup not trusted.
+- **Test restores.** Restore a backup set into a scratch environment on an
+  operator-defined schedule and smoke-test it. A backup not tested is a backup
+  not trusted.
 - **Request ID on every API log line.** Core sets `request_id` from `X-Request-Id` (or
   mints one) for every request.
 - **Document only what the code does.** A metric, log key, CLI command or schedule named
@@ -36,8 +36,7 @@ every page under `09-operations/`. Supplements [[CLAUDE]].
 
 - Ship a metric without saying, on [[09-operations/observability]], what it is for.
 - Silently change the log line shape. Operators' log queries depend on the keys.
-- Present `deploy/backup/restore.yml` or `drill.yml` as a working recovery path. They do
-  not work today; see [[09-operations/backup-restore]].
+- Present an untested recovery command as a working recovery path.
 
 ## Observability stack
 

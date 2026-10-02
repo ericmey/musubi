@@ -49,17 +49,10 @@ else.
 
 ### Backups
 
-`deploy/backup/musubi-backup.sh` is a reference host-local backup driver, run by a
-systemd timer (`deploy/backup/systemd/`) every six hours. Each run writes a
-timestamped directory with Qdrant collection snapshots plus `SHA256SUMS`, a SQLite
-`.backup` copy of `work.sqlite`, an rsync mirror of the artifact blobs, and a
-`manifest.json`. Old runs are pruned after 14 days, and only after a green run.
-See `deploy/backup/README.md`.
-
-The script does not back up the vault, and it keeps everything on the same host.
-Off-site copies (for example restic to object storage, with the repository
-password held in your secret manager) are the operator's choice and are not
-configured by Musubi.
+For the public Compose stack, stop the stack and back up all six named volumes
+together. Restore them from the same set. See [[09-operations/backup-restore]] for
+the procedure and verification steps. Copy backup sets off the host and choose
+retention for your own deployment; Musubi does not schedule or prune them.
 
 ## Data in transit
 

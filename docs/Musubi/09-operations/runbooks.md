@@ -189,8 +189,7 @@ Not a page. A failing lifecycle job tick posts an `ops-alerts` Thought.
 ## Restore from snapshot
 
 See [[09-operations/backup-restore]]: it is the authoritative procedure (cold restore of
-the whole set, or one Qdrant collection from a snapshot). Do not use
-`deploy/backup/restore.yml`; it does not work.
+the whole set, or one Qdrant collection from a snapshot).
 
 ## Planned compose update
 

@@ -130,13 +130,3 @@ Rule: **one writer per canonical row.**
 
 If two writers could touch a row, one gets authority (operator precedence) or the row is
 versioned and conflicts are detected; never a silent overwrite.
-
-## Test contract
-
-**Module under test:** no specific code; this page is a contract for the rest.
-
-1. `test_every_asset_has_canonical_owner_documented` (`tests/ops/test_backup.py`) — every
-   matrix row names data, a canonical store and a backup.
-2. `test_restore_drills_run_quarterly` (same file) — `RESTORE_DRILL_CADENCE_DAYS <= 92`.
-3. `test_named_current_state_docs_reject_the_retired_lifecycle_file`
-   (`tests/ops/test_lifecycle_storage_doc_drift.py`).
