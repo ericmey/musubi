@@ -9821,13 +9821,6 @@ def _all_lifecycle_host_mounts(text: str) -> list[str]:
     return re.findall(r"-\s*(/var/lib/musubi/lifecycle[\w./-]*)\s*:/var/lib/musubi/lifecycle", text)
 
 
-def _runbook_restore_dest(text: str) -> str | None:
-    """The destination the manual-recovery runbook restores the DIR snapshot ``$SNAP/sqlite/work.sqlite``
-    INTO (`sudo cp -a "$SNAP/sqlite/work.sqlite" <dest>`)."""
-    m = re.search(r'cp -a\s+"\$SNAP/sqlite/work\.sqlite"\s+(\S+)', text)
-    return m.group(1) if m else None
-
-
 _LIFECYCLE_BACKUP_TASK_NAME = "Back up sqlite lifecycle ledger"
 
 
@@ -9948,18 +9941,6 @@ def test_p0c_drift_backup_yml() -> None:
         )
 
 
-def test_p0c_drift_manual_recovery_runbook() -> None:
-    dest = _runbook_restore_dest(
-        (_P0C_REPO_ROOT / "deploy/runbooks/manual-recovery.md").read_text()
-    )
-    if not _resolves_canonical_dir_db(dest):
-        raise DefectStillPresent(
-            f"deploy/runbooks/manual-recovery.md restores the DIR snapshot $SNAP/sqlite/work.sqlite INTO "
-            f"{dest!r}, not the canonical DIR DB {_CANONICAL_DIR_DB!r} (it targets the retired FILE "
-            f"{_RETIRED_FILE_DB!r})."
-        )
-
-
 def test_p0c_drift_backup_readme() -> None:
     text = (_P0C_REPO_ROOT / "deploy/backup/README.md").read_text()
     if not _readme_resolves_dir(text):
@@ -10045,21 +10026,6 @@ def test_p0c_drift_parsers_discriminate() -> None:
             "- hosts: all\n  tasks:\n    - name: b\n      ansible.builtin.command:\n"
             f'        cmd: sqlite3 {wrong_child_db} ".backup /mnt/x.sqlite"\n'
         )
-    )
-
-    # runbook restore destination — DB-bearing, EXACT DB.
-    assert _resolves_canonical_dir_db(
-        _runbook_restore_dest(
-            'cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle/work.sqlite'
-        )
-    )
-    assert not _resolves_canonical_dir_db(
-        _runbook_restore_dest(
-            'cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle-work.sqlite'
-        )
-    )
-    assert not _resolves_canonical_dir_db(  # wrong child restore target — REJECTED
-        _runbook_restore_dest(f'cp -a "$SNAP/sqlite/work.sqlite" {wrong_child_db}')
     )
 
     # backup README — the OPERATIONAL storage statement is inspected, not the filename anywhere.

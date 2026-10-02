@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import http.server
 import json
-import re
 import shutil
 import socketserver
 import subprocess
@@ -18,25 +17,12 @@ from urllib.parse import urlparse
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
 RUNBOOKS_SPEC = ROOT / "docs" / "Musubi" / "09-operations" / "runbooks.md"
 SYSTEMD = ROOT / "deploy" / "systemd"
 SMOKE = ROOT / "deploy" / "smoke"
 KONG = ROOT / "deploy" / "kong" / "musubi-prod.yml"
 OPENAPI = ROOT / "openapi.yaml"
 
-RUNBOOK_SECTIONS = (
-    "Pre-flight",
-    "Snapshot target",
-    "Run ansible playbook",
-    "Bring up compose stack",
-    "Install systemd units",
-    "Configure Kong",
-    "TLS certificate",
-    "Smoke verify",
-    "Rollback procedure",
-    "Go-live checklist",
-)
 ALERT_RUNBOOK_SECTIONS = (
     "Qdrant down",
     "Core 5xx high",
@@ -68,11 +54,6 @@ def _unit(name: str) -> dict[str, dict[str, str]]:
         key, value = line.split("=", 1)
         parsed[current][key] = value
     return parsed
-
-
-def _runbook_step_blocks() -> list[str]:
-    text = _read(RUNBOOK)
-    return re.split(r"(?m)^## \d+\. ", text)[1:]
 
 
 class _MockMusubi(http.server.BaseHTTPRequestHandler):
@@ -258,28 +239,6 @@ def test_write_smoke_refuses_missing_operator_namespace() -> None:
             )
             assert result.returncode != 0
             assert missing_var in result.stderr
-
-
-def test_runbook_has_all_10_sections() -> None:
-    text = _read(RUNBOOK)
-    for index, heading in enumerate(RUNBOOK_SECTIONS, start=1):
-        assert f"## {index}. {heading}" in text
-
-
-def test_runbook_every_command_has_expected_output_block() -> None:
-    for block in _runbook_step_blocks():
-        assert "**Command:**" in block
-        assert "**Expected output:**" in block
-        assert "**Failure modes:**" in block
-
-
-def test_runbook_mentions_rollback_path_for_every_destructive_step() -> None:
-    destructive_blocks = [
-        block for block in _runbook_step_blocks() if "**Destructive:** yes" in block
-    ]
-    assert destructive_blocks
-    for block in destructive_blocks:
-        assert "**Rollback:**" in block
 
 
 def test_systemd_unit_api_has_restart_on_failure() -> None:
@@ -523,16 +482,13 @@ def test_every_alert_has_a_runbook_section() -> None:
 
 def test_runbooks_reference_real_files_and_commands() -> None:
     text = _read(RUNBOOKS_SPEC)
-    assert "deploy/runbooks/first-deploy.md" in text
-    assert RUNBOOK.exists()
-    assert "docker compose" in text
-    assert "ansible-playbook" in _read(RUNBOOK)
-    assert "deploy/smoke/verify.sh" in _read(RUNBOOK)
+    install = _read(ROOT / "docs" / "guide" / "install.md")
+    assert "docs/guide/install.md" in text
+    assert "docker compose up -d --wait" in install
+    assert "deploy/smoke/verify.sh" in text
 
 
 def test_each_runbook_lists_success_criteria() -> None:
-    first_deploy = _read(RUNBOOK)
-    assert first_deploy.count("**Expected output:**") == len(RUNBOOK_SECTIONS)
     runbooks = _read(RUNBOOKS_SPEC)
     for heading in ALERT_RUNBOOK_SECTIONS:
         section = runbooks.split(f"## {heading}", 1)[1].split("\n## ", 1)[0]
