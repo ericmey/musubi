@@ -1,8 +1,9 @@
-"""``CaptureService`` — the hot write path that the HTTP capture
-endpoint delegates to.
+"""``CaptureService`` — a capture layer over the episodic plane.
 
-Per [[06-ingestion/capture]], the service owns four responsibilities
-the HTTP shell doesn't touch:
+It is not wired into the HTTP API: ``POST /v1/episodic`` calls
+``EpisodicPlane.create`` directly, and only this module's tests use the
+service (see [[06-ingestion/capture]]). The service owns four
+responsibilities:
 
 1. **Per-plane dedup configuration.** ``DEFAULT_DEDUP_THRESHOLDS``
    maps plane names to similarity thresholds (or ``None`` to disable
@@ -13,15 +14,15 @@ the HTTP shell doesn't touch:
    backed with a 24h TTL per the spec.
 3. **Bounded retry around plane writes.** A transient Qdrant blip
    gets one retry; permanent failures surface as
-   ``Err(CaptureError(503, BACKEND_UNAVAILABLE))``. The HTTP shell
-   maps this to the spec's 503 + ``Retry-After``.
+   ``Err(CaptureError(503, BACKEND_UNAVAILABLE))``, which a caller
+   can map to a 503 with ``Retry-After``.
 4. **Lifecycle event emission on every successful capture.** The
    audit ledger records who captured what and when, with reason
    ``capture-created`` (fresh insert) or ``capture-merged`` (dedup
    hit).
 
-The service is callable from any context — HTTP shell, async worker,
-batch loader. Tests exercise it directly without the FastAPI layer.
+The service is callable from any context (an async worker, a batch
+loader, or a future HTTP route). Tests exercise it directly.
 
 Architecture note on Method-ownership:
 
