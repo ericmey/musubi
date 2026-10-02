@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.29.0](https://github.com/sourceblender/musubi/compare/v1.28.0...v1.29.0) (2026-10-02)
+
+
+### Features
+
+* **release:** pin signed Core image in public Compose ([#904](https://github.com/sourceblender/musubi/issues/904)) ([84ca1a8](https://github.com/sourceblender/musubi/commit/84ca1a89c578591aa9896d8510da13b1eacd099a))
+
+
+### Bug Fixes
+
+* **deploy:** alertmanager example sends nothing to a dead route or a public topic ([#925](https://github.com/sourceblender/musubi/issues/925)) ([25e3b08](https://github.com/sourceblender/musubi/commit/25e3b0843857ed6badffb02b683fe4253648694f))
+* **retrieve:** one dict spelling for the reinforcement score component ([#926](https://github.com/sourceblender/musubi/issues/926)) ([f7d57e4](https://github.com/sourceblender/musubi/commit/f7d57e4f5b0b46caaf172fbb23e71181d457d6d7))
+
 ## [1.28.0](https://github.com/sourceblender/musubi/compare/v1.27.13...v1.28.0) (2026-10-01)
 
 
