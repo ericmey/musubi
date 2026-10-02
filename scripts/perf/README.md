@@ -30,7 +30,7 @@ scripts/perf/
 4. **Python 3.12 + httpx** for the seed script
    (`pip install httpx`).
 5. **A named pre-run snapshot** (for safety — see
-   [deploy/runbooks/manual-recovery.md](../../deploy/runbooks/manual-recovery.md)).
+   [backup and restore](../../docs/Musubi/09-operations/backup-restore.md)).
 
 ## Env vars every scenario reads
 
@@ -129,7 +129,7 @@ Every Makefile target writes to `~/perf-runs/<LABEL>/`:
   write load-test rows there if the prefix is changed. Mint a narrowly
   scoped token for the test prefix.
 - **Have a rollback point.** Take a labeled snapshot before each
-  gate per [manual-recovery.md](../../deploy/runbooks/manual-recovery.md).
+  gate per [backup and restore](../../docs/Musubi/09-operations/backup-restore.md).
 - **Watch GPU VRAM.** The RTX 3080 has 10 GiB shared between
   TEI-dense, TEI-sparse, BGE-reranker, and Ollama. Perf gate says
   keep ≥ 1 GiB free; the telemetry summary flags it explicitly.
@@ -137,5 +137,3 @@ Every Makefile target writes to `~/perf-runs/<LABEL>/`:
 ## Related
 
 - Plan: see Gate 0 PR description for the full test plan.
-- Follow-up: [#190](https://github.com/sourceblender/musubi/issues/190) —
-  restore.yml repair (independent, not blocking).

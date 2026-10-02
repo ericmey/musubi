@@ -24,7 +24,6 @@ import asyncio
 import json
 import logging
 from importlib import import_module
-from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -788,33 +787,6 @@ def test_check_component_health_marks_4xx_unhealthy() -> None:
         name="weird", url="http://weird.local/health", transport=transport
     )
     assert component.healthy is False
-
-
-# ---------------------------------------------------------------------------
-# Deploy/* artifacts — config files exist + load
-# ---------------------------------------------------------------------------
-
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEPLOY = _REPO_ROOT / "deploy"
-
-
-def test_prometheus_config_loads() -> None:
-    """The rendered Prometheus template parses and has the expected scrape targets:
-    musubi-core, qdrant, the three TEI services, prometheus self,
-    and node-exporter.
-    """
-    import yaml
-    from jinja2 import Environment, StrictUndefined
-
-    raw = (_DEPLOY / "ansible" / "templates" / "prometheus.yml.j2").read_text()
-    vars = yaml.safe_load((_DEPLOY / "ansible" / "group_vars" / "all.yml").read_text())
-    cfg = yaml.safe_load(Environment(undefined=StrictUndefined).from_string(raw).render(**vars))
-    assert "scrape_configs" in cfg
-    job_names = {j["job_name"] for j in cfg["scrape_configs"]}
-    assert "musubi-core" in job_names
-    assert "tei-dense" in job_names
-    assert "qdrant" in job_names, "qdrant scrape must be present (added 2026-05-14)"
 
 
 # Loki / Tempo / Grafana load-tests removed per

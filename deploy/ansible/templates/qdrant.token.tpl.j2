@@ -1,2 +1,0 @@
-{% set refs = musubi_op_refs | default({}) -%}
-{{ '{{ ' ~ (refs.qdrant_api_key | default('', true) or undef(hint='musubi_op_refs.qdrant_api_key is required')) ~ ' }}' }}

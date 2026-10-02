@@ -55,7 +55,7 @@ the Kong step as a first-deploy gate when it is not.
   repo as a **staged** declarative config. It is NOT applied during first
   deploy. It is the ready-to-apply artifact for the future externalisation
   step.
-- [first-deploy runbook](../../../deploy/runbooks/first-deploy.md) steps 6 and 7 are
+- first-deploy runbook (since retired from this repo) steps 6 and 7 are
   marked OPTIONAL with an applicability check: if the operator context shows
   Musubi is Kong-fronted, run them; otherwise skip to step 8. Both branches
   are explicitly covered.
@@ -140,7 +140,7 @@ the first-deploy runbook (now mandatory for that deploy).
 
 ## Cross-slice updates landing in the same PR
 
-- [first-deploy runbook](../../../deploy/runbooks/first-deploy.md) steps 6 and 7
+- first-deploy runbook (since retired from this repo) steps 6 and 7
   marked optional with applicability guards (updated in this change).
 - `.agent-context.local.md` § *Homelab topology* already captures the reality
   this ADR codifies (added 2026-04-20 during reconnaissance).
@@ -158,7 +158,7 @@ the first-deploy runbook (now mandatory for that deploy).
 - `slice-auth` — in-process auth, the policy that makes this
   deferral safe.
 - `slice-ops-hardening-suite` — in-app rate limiting.
-- [first-deploy runbook](../../../deploy/runbooks/first-deploy.md) — the procedure
+- first-deploy runbook (since retired from this repo) — the procedure
   updated to reflect this decision.
 - `.agent-context.local.md` → *Homelab topology* (gitignored) — operator
   context capturing `<homelab-domain>` vs `<external-domain>` split.

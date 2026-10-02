@@ -13,16 +13,6 @@ reviewed: false
 How to back up the Compose stack, and how to restore it. The short version is in
 `docs/guide/operate.md`; this page adds the detail.
 
-> **Warning: `deploy/backup/restore.yml` does not work, and `deploy/backup/drill.yml`
-> (which imports it) fails with it.** It stops `core` and `lifecycle-worker`
-> (`restore.yml:100-106`), then runs `docker compose exec -T lifecycle-worker` against the
-> stopped container to recover Qdrant (`restore.yml:152-153`), so no snapshot is restored.
-> It also stops services before checking that the backup is complete, chooses "latest" by
-> directory name without reading the manifest's status, and never checks `SHA256SUMS`.
-> Do not rely on these playbooks for recovery. The other files under `deploy/backup/`
-> target a different host layout (`/var/lib/musubi` bind mounts), not the named volumes of
-> the public stack.
-
 ## What to back up
 
 All state lives in six named volumes. Back them up **together, cold, as one set**:
@@ -183,18 +173,10 @@ A failed check means: keep the last known-good set and investigate; never overwr
 
 ## Restore drills
 
-Test a restore at least every 90 days (`RESTORE_DRILL_CADENCE_DAYS` in
-`src/musubi/ops/backup.py`): restore the latest set into a scratch stack on another
-machine or Compose project, check health and status, and run the canary. Record how long
-it took. `drill.yml` cannot do this today (see the warning above).
+Test a restore regularly: restore one complete set into a scratch stack on another
+machine or Compose project, check health and status, and run the canary. Record how
+long it took. Set a drill schedule appropriate to your recovery needs.
 
-## Test contract
-
-1. `test_restore_drills_run_quarterly` (`tests/ops/test_backup.py`) — the drill cadence
-   constant is at most 92 days.
-2. `test_sqlite_backup_completes_under_5s_at_v1_scale` (same file) — the online-backup
-   helper in `src/musubi/ops/backup.py`.
-3. `test_corruption_check_fails_on_tampered_snapshot` (same file) — SHA-256 verification
-   rejects a changed file.
-
-Nothing tests the cold-backup procedure on this page end to end.
+The public cold-backup procedure has been tested on a throwaway volume. Test it
+against your complete deployment and backup destination before relying on it for
+recovery.

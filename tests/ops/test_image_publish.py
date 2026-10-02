@@ -17,8 +17,7 @@ Scope:
 - Does NOT mutate `docker-compose.yml` — digest bumps
   are separate, human-reviewed PRs.
 - The public Compose Core image is pinned to a GHCR digest.
-- `deploy/runbooks/upgrade-image.md` is an operator-runnable doc —
-  every step carries Command / Expected / Destructive / Rollback.
+- The public operator guide verifies the image and documents rollback.
 """
 
 from __future__ import annotations
@@ -33,8 +32,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "publish-core-image.yml"
 PUBLIC_COMPOSE = ROOT / "docker-compose.yml"
-RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade-image.md"
-FIRST_DEPLOY_RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
+OPERATE_GUIDE = ROOT / "docs" / "guide" / "operate.md"
 PUSH_DIGEST_EXTRACTOR = "grep -oE 'sha256:[0-9a-f]{64}' | tail -1"
 
 
@@ -351,61 +349,13 @@ def test_public_compose_core_image_is_pinned_to_digest() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Runbook
+# Public operator guide
 # ---------------------------------------------------------------------------
 
 
-def test_upgrade_image_runbook_exists_and_has_six_sections() -> None:
-    assert RUNBOOK.exists(), f"missing {RUNBOOK}"
-    text = RUNBOOK.read_text()
-    headings = [line for line in text.splitlines() if line.startswith("## ")]
-    assert len(headings) >= 6, (
-        f"upgrade-image runbook should have at least 6 numbered steps; got {len(headings)}"
-    )
-
-
-def test_upgrade_image_runbook_mentions_workflow_dispatch_as_recovery() -> None:
-    """Test Contract bullet 11 — the runbook must document
-    `workflow_dispatch` as the recovery path when a publish run is
-    missing for the target commit (rare, but the only escape hatch
-    when the release-triggered build didn't fire, e.g. a branch-HEAD
-    build or a tag pushed before the workflow existed)."""
-    text = RUNBOOK.read_text()
-    assert "workflow_dispatch" in text, (
-        "upgrade-image runbook should mention workflow_dispatch as the "
-        "recovery path for a missing publish run"
-    )
-    # Tighten — the recovery guidance must be under step 1 (confirming
-    # the image is published), not buried elsewhere.
-    step_1_end = text.find("## 2")
-    assert step_1_end > 0, "could not locate step 2 boundary"
-    step_1_body = text[:step_1_end]
-    assert "workflow_dispatch" in step_1_body, (
-        "workflow_dispatch recovery guidance must live in step 1 where "
-        "the operator first discovers the missing run"
-    )
-
-
-def test_upgrade_image_runbook_every_step_has_rollback() -> None:
-    text = RUNBOOK.read_text()
-    # Split on "## " numbered sections.
-    step_sections = re.split(r"^## \d", text, flags=re.MULTILINE)[1:]
-    assert step_sections, "no numbered steps found in runbook"
-    for i, sec in enumerate(step_sections, 1):
-        assert "Rollback:" in sec or "Rollback" in sec, (
-            f"step {i} of upgrade-image runbook has no Rollback: clause"
-        )
-
-
-def test_first_deploy_runbook_no_longer_promises_local_build_only() -> None:
-    """First deploy no longer has to build locally — the workflow publishes
-    the image, so the runbook's Kong / image-transfer section should at
-    least point at the upgrade-image runbook as the supported path."""
-    if not FIRST_DEPLOY_RUNBOOK.exists():
-        # First-deploy runbook is owned by another slice; skip cleanly.
-        return
-    text = FIRST_DEPLOY_RUNBOOK.read_text()
-    # We don't gate the whole runbook here (that's cross-slice); just
-    # assert there's *some* pointer to the new workflow once it lands.
-    # Until the cross-slice ticket lands this is a soft expectation.
-    _ = text
+def test_public_operate_guide_verifies_and_rolls_back_the_compose_pin() -> None:
+    text = OPERATE_GUIDE.read_text()
+    assert "x-core-image" in text
+    assert "cosign verify" in text
+    assert "docker compose up -d --wait" in text
+    assert "previous pin" in text

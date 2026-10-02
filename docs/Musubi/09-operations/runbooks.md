@@ -38,10 +38,6 @@ Install with `docs/guide/install.md`: prepare the host, fill in `.env`, then
 `curl -fsS http://127.0.0.1:8100/v1/ops/health` returns `{"status":"ok",…}`,
 `/v1/ops/status` reports every component healthy, and the canary passes.
 
-`deploy/runbooks/first-deploy.md` is an older operator runbook for a different,
-host-provisioned layout with its own gateway. It is not the public install path; keep it as
-context only.
-
 ## Core down
 
 **Alert:** `core_down`
@@ -193,8 +189,7 @@ Not a page. A failing lifecycle job tick posts an `ops-alerts` Thought.
 ## Restore from snapshot
 
 See [[09-operations/backup-restore]]: it is the authoritative procedure (cold restore of
-the whole set, or one Qdrant collection from a snapshot). Do not use
-`deploy/backup/restore.yml`; it does not work.
+the whole set, or one Qdrant collection from a snapshot).
 
 ## Planned compose update
 
@@ -286,8 +281,7 @@ Cycle through one operations drill each quarter so recovery paths stay fresh:
 1. Q1 — `Qdrant down`: stop Qdrant on a scratch stack, follow the runbook above, and
    verify `/v1/ops/status`.
 2. Q2 — `Restore from snapshot`: restore the latest cold backup set into a scratch stack
-   ([[09-operations/backup-restore]]) and run the canary. Do not use `restore.yml` or
-   `drill.yml`: `restore.yml` does not work today.
+   ([[09-operations/backup-restore]]) and run the canary.
 3. Q3 — `Backup failure 24h`: break the backup target on purpose and verify the alert and
    the manual backup path.
 4. Q4 — `First deploy`: rehearse the install from `docs/guide/install.md` on a disposable

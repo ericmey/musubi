@@ -9272,8 +9272,7 @@ _READINESS_PATHS = ("/readyz", "/healthz", "/readiness")
 
 
 def _worker_healthcheck_test(compose_text: str) -> object:
-    """The lifecycle-worker healthcheck ``test:`` from the REAL ansible compose template. Jinja
-    expressions are neutralized so PyYAML can load; the worker healthcheck itself is jinja-free."""
+    """The lifecycle-worker healthcheck ``test:`` from the public Compose stack."""
     doc = yaml.safe_load(re.sub(r"{{.*?}}", "JINJA", compose_text))
     return doc["services"]["lifecycle-worker"]["healthcheck"]["test"]
 
@@ -9297,7 +9296,7 @@ _P0C_T2_REASON = (
 
 
 def test_p0c_worker_healthcheck_consumes_readiness_signal() -> None:
-    template = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
+    template = (_P0C_REPO_ROOT / "docker-compose.yml").read_text()
     test_cmd = _worker_healthcheck_test(template)
     if not _healthcheck_consumes_readiness(test_cmd):
         raise DefectStillPresent(
@@ -9335,9 +9334,7 @@ def test_p0c_readiness_probe_rule_discriminates() -> None:
     assert not _healthcheck_consumes_readiness(metrics_only)
     assert _healthcheck_consumes_readiness(gauge_probe)
     assert _healthcheck_consumes_readiness(readyz_probe)
-    real = _worker_healthcheck_test(
-        (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
-    )
+    real = _worker_healthcheck_test((_P0C_REPO_ROOT / "docker-compose.yml").read_text())
     assert _healthcheck_consumes_readiness(real)
 
 
@@ -9664,7 +9661,7 @@ def _coordinator_db_path_expr(func: ast.AST, type_name: str) -> str | None:
     return None
 
 
-# ---- TASK 5: config-drift NAMED BLOCKER (§E — ansible-dir vs root-compose-file) ------------------- #
+# ---- TASK 5: config-drift guard across the public Compose settings ------------------- #
 
 #: Documented FLIP mechanism (§E): a deployment surface may be excluded from the parity set ONLY by
 #: naming it here (with a rationale + this appendix pointer, e.g. proven non-production / out-of-scope).
@@ -9686,27 +9683,14 @@ def _compose_lifecycle_host_path(text: str) -> str | None:
     return named.group(1) if named else None
 
 
-def _first_lifecycle_sqlite(text: str) -> str | None:
-    m = re.search(r"(/var/lib/musubi/lifecycle[\w./-]*\.sqlite)", text)
-    return m.group(1) if m else None
-
-
 def _lifecycle_storage_surfaces() -> dict[str, str | None]:
     r = _P0C_REPO_ROOT
     return {
-        "ansible-compose": _compose_lifecycle_host_path(
-            (r / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
-        ),
-        "ansible-env-production": _env_lifecycle_path(
-            (r / "deploy/ansible/templates/env.production.j2").read_text()
-        ),
-        "ansible-restore": _first_lifecycle_sqlite((r / "deploy/backup/restore.yml").read_text()),
         "root-compose": _compose_lifecycle_host_path((r / "docker-compose.yml").read_text()),
         "env-example": _env_lifecycle_path((r / ".env.example").read_text()),
         "docker-env-production-example": _env_lifecycle_path(
             (r / "deploy/docker/.env.production.example").read_text()
         ),
-        "backup": _first_lifecycle_sqlite((r / "deploy/backup/backup.yml").read_text()),
     }
 
 
@@ -9785,16 +9769,12 @@ def test_p0c_active_storage_parity_rule_discriminates() -> None:
 #   canonical active-storage unit  = the DIRECTORY /var/lib/musubi/lifecycle bind-mounted, DB           #
 #                                     /var/lib/musubi/lifecycle/work.sqlite.                            #
 #   retired (to be aligned away)    = the bare FILE /var/lib/musubi/lifecycle-work.sqlite.              #
-# TASK 1 = one strict-xfail per DRIFT surface (RED today, flips green when the surface aligns to DIR).  #
-# TASK 2 = unmarked preserve-green CONTROLS on the DIR ANCHOR surfaces (fail loudly on a FILE regress). #
-# TASK 3 = migration CONTRACT spec (reference-candidate red-proof) + an "unbuilt" strict-xfail. The     #
+# TASK 1 = checks on the public Compose and environment surfaces.                                      #
+# TASK 2 = migration CONTRACT spec (reference-candidate red-proof) + an "unbuilt" strict-xfail. The     #
 #          migration is DOWNSTREAM + R20-gated: these tests encode its CONTRACT only, never execute it. #
 # ==================================================================================================== #
 
-#: The one locked active-storage family every surface must resolve to.
-_CANONICAL_DIR_FAMILY = "DIR:/var/lib/musubi/lifecycle/work.sqlite"
-#: The canonical DB FILE every DB-bearing surface must name EXACTLY (env / backup source / runbook restore
-#: destination / restore target). Not "some path under the DIR" — a wrong child is a different DB.
+#: The canonical DB FILE every environment surface must name EXACTLY.
 _CANONICAL_DIR_DB = "/var/lib/musubi/lifecycle/work.sqlite"
 #: The canonical DIRECTORY a compose host MOUNT must name EXACTLY (the bind-mounted unit shared by core +
 #: worker). Not "some path under it" — a wrong child is a different mount.
@@ -9825,91 +9805,7 @@ def _has_lifecycle_worker_service(text: str) -> bool:
     return re.search(r"(?m)^\s{1,4}lifecycle-worker:\s*$", text) is not None
 
 
-def _all_lifecycle_host_mounts(text: str) -> list[str]:
-    """Every host side of a ``/var/lib/musubi/lifecycle...:<container>`` bind mount in a compose/j2 file."""
-    return re.findall(r"-\s*(/var/lib/musubi/lifecycle[\w./-]*)\s*:/var/lib/musubi/lifecycle", text)
-
-
-def _runbook_restore_dest(text: str) -> str | None:
-    """The destination the manual-recovery runbook restores the DIR snapshot ``$SNAP/sqlite/work.sqlite``
-    INTO (`sudo cp -a "$SNAP/sqlite/work.sqlite" <dest>`)."""
-    m = re.search(r'cp -a\s+"\$SNAP/sqlite/work\.sqlite"\s+(\S+)', text)
-    return m.group(1) if m else None
-
-
-_LIFECYCLE_BACKUP_TASK_NAME = "Back up sqlite lifecycle ledger"
-
-
-def _sqlite_backup_command_src(playbook_text: str) -> str | None:
-    """The SOURCE DB path of the sqlite ``.backup`` command in the task NAMED EXACTLY
-    ``Back up sqlite lifecycle ledger`` (Yua ruling) — bound to THAT task's name, NOT the first ``.backup``
-    anywhere. An unrelated canonical ``.backup`` earlier in the file must not mask this task reading the
-    retired FILE. Parsed from the actual command via the YAML task structure. Fails CLOSED (None) on zero,
-    duplicate, or malformed named lifecycle-backup tasks (each → not-canonical → the drift red stays RED)."""
-    named = [t for t in _yaml_tasks(playbook_text) if t.get("name") == _LIFECYCLE_BACKUP_TASK_NAME]
-    if len(named) != 1:
-        return None  # zero or duplicate named lifecycle-backup task -> fail closed
-    cmd = named[0].get("ansible.builtin.command") or named[0].get("command")
-    cmd_str = cmd.get("cmd") if isinstance(cmd, dict) else cmd
-    if not isinstance(cmd_str, str):
-        return None  # malformed named task -> fail closed
-    m = re.search(r'sqlite3\s+(\S+)\s+"?\.backup\b', cmd_str)
-    return m.group(1) if m else None
-
-
-def _readme_stores_section_lines(text: str) -> list[str]:
-    """The lines under the README's ``## Stores`` heading, up to the next heading (any level). Code fences
-    are tracked so a ``#`` inside a fenced block cannot be misread as a heading and prematurely end it."""
-    out: list[str] = []
-    in_section = False
-    in_fence = False
-    for line in text.splitlines():
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
-            if in_section:
-                out.append(line)
-            continue
-        if not in_fence and re.match(r"^#{1,6}\s", line):
-            # EXACT heading text (Yua round-3 ruling): the normalized heading must be precisely "Stores"
-            # (case-insensitive policy) — a prefix/suffix lookalike ("Stores history", "Stores-old") is NOT
-            # the ## Stores section.
-            heading = re.sub(r"^#{1,6}\s+", "", line.strip()).strip()
-            in_section = heading.casefold() == "stores"
-            continue
-        if in_section:
-            out.append(line)
-    return out
-
-
-def _readme_operational_storage_line(text: str) -> str | None:
-    """The SINGLE operational lifecycle-storage bullet in the README's ``## Stores`` section (Yua ruling):
-    a bullet naming the lifecycle sqlite copy. ONLY the Stores section binds the active-storage unit —
-    historical/migration prose or any other section is NOT inspected, so a History line naming the DIR
-    elsewhere cannot green a Stores bullet that still names the retired FILE. Fails CLOSED (None) on zero,
-    duplicate, or ambiguous Stores bullets naming a lifecycle db."""
-    bullets = [
-        ln
-        for ln in _readme_stores_section_lines(text)
-        if re.match(r"^\s*[-*]\s", ln) and "work.sqlite" in ln
-    ]
-    return bullets[0] if len(bullets) == 1 else None
-
-
-def _readme_resolves_dir(text: str) -> bool:
-    """True iff the backup README's OPERATIONAL storage statement (the hourly-copy 'Stores' bullet) names
-    the canonical DIR DB ``lifecycle/work.sqlite`` and NOT the bare retired FILE ``lifecycle-work.sqlite``.
-    A historical/migration mention of the retired FILE ELSEWHERE in the README does NOT trip the red — only
-    the operational line is inspected, so we ban the FILE in the current-storage statement, not the filename
-    anywhere in the document."""
-    line = _readme_operational_storage_line(text)
-    if line is None:
-        return False
-    names_file = re.search(r"lifecycle-work\.sqlite", line) is not None
-    names_dir = re.search(r"lifecycle/work\.sqlite", line) is not None
-    return names_dir and not names_file
-
-
-# ---- TASK 1: drift reds (one strict-xfail per drift surface; DEDICATED DefectStillPresent each) ----- #
+# ---- TASK 1: public Compose and environment surfaces ------------------------------------------------- #
 
 
 def test_p0c_drift_root_compose_dir_mount_and_worker() -> None:
@@ -9945,298 +9841,7 @@ def test_p0c_drift_docker_env_production_example() -> None:
         )
 
 
-def test_p0c_drift_backup_yml() -> None:
-    # Bind to the SOURCE of the actual sqlite `.backup` command, not the first lifecycle path anywhere in
-    # the file, so a comment/migration reference to the DIR cannot mask a command that still reads the FILE.
-    path = _sqlite_backup_command_src((_P0C_REPO_ROOT / "deploy/backup/backup.yml").read_text())
-    if not _resolves_canonical_dir_db(path):
-        raise DefectStillPresent(
-            f"deploy/backup/backup.yml's sqlite `.backup` command reads {path!r}, not the canonical DIR DB "
-            f"{_CANONICAL_DIR_DB!r} (it reads the retired FILE {_RETIRED_FILE_DB!r}); the offsite backup "
-            "must source the same DIR DB the live scheduler + restore.yml use."
-        )
-
-
-def test_p0c_drift_manual_recovery_runbook() -> None:
-    dest = _runbook_restore_dest(
-        (_P0C_REPO_ROOT / "deploy/runbooks/manual-recovery.md").read_text()
-    )
-    if not _resolves_canonical_dir_db(dest):
-        raise DefectStillPresent(
-            f"deploy/runbooks/manual-recovery.md restores the DIR snapshot $SNAP/sqlite/work.sqlite INTO "
-            f"{dest!r}, not the canonical DIR DB {_CANONICAL_DIR_DB!r} (it targets the retired FILE "
-            f"{_RETIRED_FILE_DB!r})."
-        )
-
-
-def test_p0c_drift_backup_readme() -> None:
-    text = (_P0C_REPO_ROOT / "deploy/backup/README.md").read_text()
-    if not _readme_resolves_dir(text):
-        raise DefectStillPresent(
-            "deploy/backup/README.md still names the retired FILE 'lifecycle-work.sqlite' for the hourly "
-            "SQLite copy instead of the canonical DIR DB 'lifecycle/work.sqlite'."
-        )
-
-
-def test_p0c_drift_parsers_discriminate() -> None:
-    """GREEN mechanism proof: every TASK-1 drift parser distinguishes the LOCKED DIR unit from the retired
-    FILE unit — AND, crucially, rejects a WRONG CHILD under the canonical parent (a DB-bearing surface must
-    name EXACTLY ``…/lifecycle/work.sqlite``, a mount EXACTLY ``…/lifecycle``). A family-membership check
-    would wave ``…/lifecycle/wrong.sqlite`` / ``…/lifecycle/sub`` through and flip a red falsely green;
-    exact-equality predicates catch it. Without this, a mis-parse could make a drift red pass (or an aligned
-    surface still fail) silently."""
-    wrong_child_db = "/var/lib/musubi/lifecycle/wrong.sqlite"
-    wrong_child_mount = "/var/lib/musubi/lifecycle/sub"
-
-    # env parser (shared by .env.example + docker/.env.production.example) — DB-bearing, EXACT DB.
-    assert _resolves_canonical_dir_db(
-        _env_lifecycle_path("LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite")
-    )
-    assert not _resolves_canonical_dir_db(
-        _env_lifecycle_path("LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle-work.sqlite")
-    )
-    assert not _resolves_canonical_dir_db(  # wrong child under the DIR is a DIFFERENT db — REJECTED
-        _env_lifecycle_path(f"LIFECYCLE_SQLITE_PATH={wrong_child_db}")
-    )
-
-    # root-compose mount + worker service — mount is EXACT DIR (not a wrong child), plus a worker service.
-    dir_compose = (
-        "services:\n  core:\n    volumes:\n"
-        "      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle\n"
-        "  lifecycle-worker:\n    image: x\n"
-    )
-    file_compose = (
-        "services:\n  core:\n    volumes:\n"
-        "      - /var/lib/musubi/lifecycle-work.sqlite:/var/lib/musubi/lifecycle-work.sqlite\n"
-    )
-    child_compose = (
-        "services:\n  core:\n    volumes:\n"
-        "      - /var/lib/musubi/lifecycle/sub:/var/lib/musubi/lifecycle\n"
-        "  lifecycle-worker:\n    image: x\n"
-    )
-    assert _resolves_canonical_mount(
-        _compose_lifecycle_host_path(dir_compose)
-    ) and _has_lifecycle_worker_service(dir_compose)
-    assert not (
-        _resolves_canonical_mount(_compose_lifecycle_host_path(file_compose))
-        and _has_lifecycle_worker_service(file_compose)
-    )
-    assert not _resolves_canonical_mount(  # wrong child mount — REJECTED even with a worker service
-        _compose_lifecycle_host_path(child_compose)
-    )
-    assert _compose_lifecycle_host_path(child_compose) == wrong_child_mount
-
-    # backup.yml NAMED sqlite `.backup` command source — bound to the command, not the first path anywhere.
-    dir_backup = (
-        "- hosts: all\n  tasks:\n    - name: Back up sqlite lifecycle ledger\n"
-        "      ansible.builtin.command:\n"
-        '        cmd: sqlite3 /var/lib/musubi/lifecycle/work.sqlite ".backup /mnt/x.sqlite"\n'
-    )
-    file_backup = (
-        "- hosts: all\n  tasks:\n    - name: Back up sqlite lifecycle ledger\n"
-        "      ansible.builtin.command:\n"
-        '        cmd: sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup /mnt/x.sqlite"\n'
-    )
-    # WRONG: a comment mentions the DIR, but the actual command still reads the FILE -> still RED.
-    comment_dir_command_file = (
-        "- hosts: all\n  tasks:\n"
-        "    # migrate to /var/lib/musubi/lifecycle/work.sqlite (the canonical DIR DB) later\n"
-        "    - name: Back up sqlite lifecycle ledger\n"
-        "      ansible.builtin.command:\n"
-        '        cmd: sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup /mnt/x.sqlite"\n'
-    )
-    assert _resolves_canonical_dir_db(_sqlite_backup_command_src(dir_backup))
-    assert not _resolves_canonical_dir_db(_sqlite_backup_command_src(file_backup))
-    assert _sqlite_backup_command_src(comment_dir_command_file) == _RETIRED_FILE_DB
-    assert not _resolves_canonical_dir_db(_sqlite_backup_command_src(comment_dir_command_file))
-    assert not _resolves_canonical_dir_db(  # wrong child in the command source — REJECTED
-        _sqlite_backup_command_src(
-            "- hosts: all\n  tasks:\n    - name: b\n      ansible.builtin.command:\n"
-            f'        cmd: sqlite3 {wrong_child_db} ".backup /mnt/x.sqlite"\n'
-        )
-    )
-
-    # runbook restore destination — DB-bearing, EXACT DB.
-    assert _resolves_canonical_dir_db(
-        _runbook_restore_dest(
-            'cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle/work.sqlite'
-        )
-    )
-    assert not _resolves_canonical_dir_db(
-        _runbook_restore_dest(
-            'cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle-work.sqlite'
-        )
-    )
-    assert not _resolves_canonical_dir_db(  # wrong child restore target — REJECTED
-        _runbook_restore_dest(f'cp -a "$SNAP/sqlite/work.sqlite" {wrong_child_db}')
-    )
-
-    # backup README — the OPERATIONAL storage statement is inspected, not the filename anywhere.
-    assert _readme_resolves_dir(
-        "## Stores\n- `lifecycle/work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
-    )
-    assert not _readme_resolves_dir(
-        "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
-    )
-    # MIXED: a historical/migration mention of the retired FILE, but the OPERATIONAL line names the DIR
-    # -> PASSES (the history does not trip the red).
-    assert _readme_resolves_dir(
-        "## History\nBefore the DIR cutover the ledger lived at `lifecycle-work.sqlite`.\n\n"
-        "## Stores\n- `lifecycle/work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
-    )
-    # Inverse MIXED: an operational FILE statement is RED even if the DIR name appears in history prose.
-    assert not _readme_resolves_dir(
-        "## History\nThe canonical DIR DB is `lifecycle/work.sqlite`.\n\n"
-        "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
-    )
-    assert _readme_operational_storage_line("no operational storage statement here") is None
-
-    # ---- Yua exact-review near-misses (round 2): LITERAL equality, NAMED task, Stores section ----
-    # (1) a TRAILING SLASH is NOT canonical — rstrip normalization would false-green an invalid filename
-    assert not _resolves_canonical_dir_db("/var/lib/musubi/lifecycle/work.sqlite/")
-    assert not _resolves_canonical_mount("/var/lib/musubi/lifecycle/")
-    assert _resolves_canonical_dir_db("/var/lib/musubi/lifecycle/work.sqlite")  # exact still passes
-    assert _resolves_canonical_mount("/var/lib/musubi/lifecycle")
-    # (2) an UNRELATED canonical `.backup` FIRST must not mask the NAMED task reading the retired FILE
-    unrelated_first = (
-        "- hosts: all\n  tasks:\n"
-        "    - name: Unrelated pre-backup\n      ansible.builtin.command:\n"
-        '        cmd: sqlite3 /var/lib/musubi/lifecycle/work.sqlite ".backup /tmp/x.sqlite"\n'
-        "    - name: Back up sqlite lifecycle ledger\n      ansible.builtin.command:\n"
-        '        cmd: sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup /mnt/x.sqlite"\n'
-    )
-    assert (
-        _sqlite_backup_command_src(unrelated_first) == _RETIRED_FILE_DB
-    )  # the NAMED task, not the first
-    assert not _resolves_canonical_dir_db(_sqlite_backup_command_src(unrelated_first))
-    # zero/duplicate named lifecycle-backup tasks fail CLOSED (None -> not canonical)
-    assert (
-        _sqlite_backup_command_src(
-            "- hosts: all\n  tasks:\n    - name: other\n      command: echo x\n"
-        )
-        is None
-    )
-    assert (
-        _sqlite_backup_command_src(
-            unrelated_first + unrelated_first.split("- hosts: all\n  tasks:\n")[1]
-        )
-        is None
-    )
-    # (3) a History line naming the DIR *with hourly* BEFORE a Stores bullet naming the FILE is still RED
-    assert not _readme_resolves_dir(
-        "## History\n- previously `lifecycle/work.sqlite` copied hourly (pre-cutover)\n\n"
-        "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
-    )
-    # zero / duplicate Stores lifecycle bullets fail CLOSED (None)
-    assert _readme_operational_storage_line("## Stores\n- artifact blobs rsync hourly") is None
-    assert (
-        _readme_operational_storage_line(
-            "## Stores\n- `lifecycle/work.sqlite` copy hourly\n- `lifecycle-work.sqlite` copy hourly"
-        )
-        is None
-    )
-    # Yua exact-review (round 3): the heading must be EXACTLY '## Stores' — a prefix/suffix lookalike is NOT
-    # the Stores section, so its DIR bullet must NOT green the README (the real Stores bullet still names FILE).
-    assert not _readme_resolves_dir("## Stores history\n- `lifecycle/work.sqlite` copy hourly")
-    assert not _readme_resolves_dir("## Stores-old\n- `lifecycle/work.sqlite` copy hourly")
-    # exact '## Stores' (case-insensitive) still binds
-    assert _readme_resolves_dir("## stores\n- `lifecycle/work.sqlite` copy hourly")
-    assert (
-        _readme_operational_storage_line("## Stores history\n- `lifecycle/work.sqlite` copy hourly")
-        is None
-    )
-
-
-# ---- TASK 2: preserve-green anchor CONTROLS (UNMARKED — pass today, fail loudly on a FILE regress) -- #
-
-
-def _yaml_tasks(playbook_text: str) -> list[dict[str, Any]]:
-    """Every task mapping across every play in an Ansible playbook document."""
-    doc = yaml.safe_load(playbook_text)
-    tasks: list[dict[str, Any]] = []
-    for play in doc if isinstance(doc, list) else []:
-        for task in play.get("tasks", []) if isinstance(play, dict) else []:
-            if isinstance(task, dict):
-                tasks.append(task)
-    return tasks
-
-
-def _bash_scalar(text: str, name: str) -> str | None:
-    m = re.search(rf'{name}="([^"]+)"', text)
-    return m.group(1) if m else None
-
-
-def test_p0c_anchor_ansible_compose_dir_mount_and_worker() -> None:
-    """ANCHOR CONTROL: the production ansible compose template already binds the DIRECTORY
-    /var/lib/musubi/lifecycle for BOTH core (:16) and worker (:52) and declares a lifecycle-worker service.
-    A regress of either mount to the bare FILE, or dropping the worker, fails this loudly."""
-    text = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
-    mounts = _all_lifecycle_host_mounts(text)
-    assert len(mounts) >= 2, f"expected core+worker lifecycle mounts, got {mounts!r}"
-    assert all(_resolves_canonical_mount(m) for m in mounts), (
-        f"ansible compose lifecycle mounts regressed off the exact DIR mount: {mounts!r}"
-    )
-    assert _has_lifecycle_worker_service(text), (
-        "ansible compose template dropped the lifecycle-worker service"
-    )
-
-
-def test_p0c_anchor_ansible_env_production_dir() -> None:
-    """ANCHOR CONTROL: env.production.j2:13 already sets LIFECYCLE_SQLITE_PATH to the canonical DIR DB."""
-    path = _env_lifecycle_path(
-        (_P0C_REPO_ROOT / "deploy/ansible/templates/env.production.j2").read_text()
-    )
-    assert _resolves_canonical_dir_db(path), (
-        f"env.production.j2 LIFECYCLE_SQLITE_PATH regressed off the exact DIR DB: {path!r}"
-    )
-    assert path == _CANONICAL_DIR_DB
-
-
-def test_p0c_anchor_bootstrap_creates_lifecycle_dir_with_musubi_0750() -> None:
-    """ANCHOR CONTROL: bootstrap.yml:130 'Create Musubi data directories' owns musubi_data_dirs — which
-    includes /var/lib/musubi/lifecycle — as musubi:musubi mode 0750. The canonical unit is a DIRECTORY, so
-    this perms task IS the lock: a regress that drops the DIR from musubi_data_dirs, or loosens owner/mode,
-    fails loudly."""
-    group_vars = yaml.safe_load((_P0C_REPO_ROOT / "deploy/ansible/group_vars/all.yml").read_text())
-    assert group_vars["musubi_service_user"] == "musubi"
-    assert group_vars["musubi_service_group"] == "musubi"
-    data_dirs = group_vars["musubi_data_dirs"]
-    assert "/var/lib/musubi/lifecycle" in data_dirs, (
-        f"lifecycle DIR dropped from musubi_data_dirs: {data_dirs!r}"
-    )
-
-    tasks = _yaml_tasks((_P0C_REPO_ROOT / "deploy/ansible/bootstrap.yml").read_text())
-    mkdir = next((t for t in tasks if t.get("name") == "Create Musubi data directories"), None)
-    assert mkdir is not None, "bootstrap.yml lost the 'Create Musubi data directories' task"
-    spec = mkdir["ansible.builtin.file"]
-    assert spec["state"] == "directory"
-    assert spec["owner"] == "{{ musubi_service_user }}"
-    assert spec["group"] == "{{ musubi_service_group }}"
-    assert str(spec["mode"]) == "0750"
-    assert mkdir["loop"] == "{{ musubi_data_dirs }}"
-
-
-def test_p0c_anchor_live_scheduler_backup_dir() -> None:
-    """ANCHOR CONTROL: the LIVE backup scheduler musubi-backup.sh:211 sources the canonical DIR DB."""
-    src = _bash_scalar(
-        (_P0C_REPO_ROOT / "deploy/backup/musubi-backup.sh").read_text(), "SQLITE_SRC"
-    )
-    assert _resolves_canonical_dir_db(src), (
-        f"musubi-backup.sh SQLITE_SRC regressed off the exact DIR DB: {src!r}"
-    )
-    assert src == _CANONICAL_DIR_DB
-
-
-def test_p0c_anchor_restore_yml_dir() -> None:
-    """ANCHOR CONTROL: restore.yml (paired with the live scheduler) restores into the canonical DIR DB."""
-    path = _first_lifecycle_sqlite((_P0C_REPO_ROOT / "deploy/backup/restore.yml").read_text())
-    assert _resolves_canonical_dir_db(path), (
-        f"restore.yml lifecycle restore target regressed off the exact DIR DB: {path!r}"
-    )
-    assert path == _CANONICAL_DIR_DB
-
-
-# ---- TASK 3: migration CONTRACT spec (reference-candidate red-proof) — CONTRACT ONLY, R20-gated ----- #
+# ---- TASK 2: migration CONTRACT spec (reference-candidate red-proof) — CONTRACT ONLY, R20-gated ----- #
 # The FILE->DIR storage migration is DOWNSTREAM and R20-gated. Nothing here executes it; these tests
 # encode the fail-closed CONTRACT the downstream task must satisfy, exercised against real tmp_path SQLite.
 

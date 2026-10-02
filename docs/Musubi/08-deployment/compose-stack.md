@@ -62,10 +62,7 @@ does not deploy to any host. Operators review and apply pins themselves.
 ## Backups
 
 All named volumes must be backed up and restored as one consistent set.
-The scripts and playbooks under `deploy/backup/` target a different host
-layout (`/var/lib/musubi` bind mounts) and are not this stack's backup
-procedure; `deploy/backup/restore.yml` and `drill.yml` do not work (see
-[[09-operations/backup-restore]]). Back up cold: stop the
+See [[09-operations/backup-restore]] for the full procedure. Back up cold: stop the
 stack (`docker compose stop`), archive all six volumes at the same point
 in time, then start it again (`docker compose up -d --wait`). Restore all
 six from one backup set, never a mix. The GPU override's `tei-models` and

@@ -40,8 +40,8 @@ Musubi has a single maintainer, so response is best-effort rather than SLA-backe
 ### In scope
 
 - The Musubi Core service (the Python code under `src/musubi/`, the published container image at `ghcr.io/sourceblender/musubi-core`, and the published SDK).
-- The Ansible deployment playbooks under `deploy/ansible/`, to the extent they configure Musubi itself.
-- The HTTP and gRPC API surfaces.
+- The public Compose files (`docker-compose.yml` and `deploy/docker/`), to the extent they configure Musubi itself.
+- The HTTP API surface.
 - Auth / session / token handling.
 - Anything that affects data integrity across the episodic, concept, curated, or thoughts planes.
 
