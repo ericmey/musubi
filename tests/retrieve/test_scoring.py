@@ -244,7 +244,7 @@ def test_score_components_exposed_on_result() -> None:
         "recency",
         "importance",
         "provenance",
-        "reinforce",
+        "reinforcement",
     }
 
 
@@ -375,3 +375,35 @@ def test_hypothesis_swapping_weights_reorders_results_consistently_with_the_math
 
     assert relevance_order == (relevance_a >= relevance_b)
     assert recency_order == (recency_a >= recency_b)
+
+
+def test_as_dict_components_survive_global_calibration() -> None:
+    """A components dict from ``as_dict()`` keeps its reinforcement when rescored.
+
+    ``calibrate_global_relevance`` reads dict components by the API key
+    ``reinforcement``. If ``as_dict()`` spelled it any other way, the rescored
+    reinforcement would silently drop to 0.
+    """
+    from dataclasses import dataclass as _dataclass
+
+    from musubi.retrieve.scoring import ScoreComponents, calibrate_global_relevance
+
+    @_dataclass(frozen=True)
+    class _Candidate:
+        raw_rrf_score: float | None
+        raw_rerank_score: float | None
+        score: float
+        score_components: dict[str, float]
+
+    components = ScoreComponents(
+        relevance=0.5, recency=0.5, importance=0.5, provenance=0.5, reinforce=0.9
+    ).as_dict()
+    (rescored,) = calibrate_global_relevance(
+        [
+            _Candidate(
+                raw_rrf_score=1.0, raw_rerank_score=None, score=0.0, score_components=components
+            )
+        ]
+    )
+
+    assert rescored.score_components["reinforcement"] == 0.9
