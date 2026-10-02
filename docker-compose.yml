@@ -2,8 +2,8 @@
 # For local GPU inference, also use deploy/docker/compose.local-gpu.yml.
 name: musubi
 
-x-core-image: &core-image ghcr.io/sourceblender/musubi-core@sha256:887a4b8af778da49c7795fbfe1332465521de37b436caa9f94462b9d43e10af9
-x-core-version: &core-version v1.27.12
+x-core-image: &core-image ghcr.io/sourceblender/musubi-core@sha256:67e9a432f505cad0a44dd0b83a6884bcb43246c4fa4c12af6e5b30877cc9a418
+x-core-version: &core-version v1.29.0
 x-core-env: &core-env
   QDRANT_HOST: qdrant
   QDRANT_PORT: "6333"
