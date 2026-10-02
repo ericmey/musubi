@@ -1,16 +1,9 @@
-"""Test contract for the alerts surface in
-[[09-operations/alerts]].
+"""Test contract for the alerts surface in [[09-operations/alerts]].
 
-Reduced scope as of 2026-05-03 per [[13-decisions/0033-centralize-observability-on-shiori]]:
-
-- The alert *rules* themselves (`deploy/grafana/alerts/musubi-alerts.yml`)
-  + the overview dashboard JSON were removed. Tests that depend on those
-  files were deleted with them. Equivalent rule/dashboard hygiene tests
-  will live shiori-side in the operator vault.
-- The Alertmanager *config* file (`deploy/prometheus/alertmanager.yml`)
-  is retained pending a follow-up decision on whether local alertmanager
-  is fully obsolete (it was never deployed; tests below verify shape only).
-- The chaos-drill bullet is unchanged — still skipped pending live test loop.
+Musubi ships no alert rules and runs no Alertmanager. What it does ship is an
+example routing file, `deploy/prometheus/alertmanager.yml`, that operators copy
+into the Alertmanager they run. These tests check that example's shape, and
+that it does not send alerts anywhere they would be lost or exposed.
 """
 
 from __future__ import annotations
@@ -58,3 +51,19 @@ def test_alertmanager_routes_email_severity_to_email() -> None:
     ]
     assert email_routes, "no email-routing rule found in alertmanager config"
     assert email_routes[0]["receiver"] == "email"
+
+
+def test_alertmanager_example_sends_nothing_to_core() -> None:
+    """Core serves no alert-receiving route, so a webhook to it drops alerts."""
+    cfg = yaml.safe_load(_ALERTMANAGER_FILE.read_text())
+    urls = [w["url"] for r in cfg.get("receivers", []) for w in r.get("webhook_configs", [])]
+    assert urls, "the example should still show a webhook receiver"
+    for url in urls:
+        assert "musubi-core" not in url and "/v1/" not in url, url
+    assert cfg["route"]["receiver"] in {r["name"] for r in cfg["receivers"]}
+
+
+def test_alertmanager_example_names_no_public_ntfy_topic() -> None:
+    """A topic on the public ntfy.sh server is readable by anyone who knows its name."""
+    text = _ALERTMANAGER_FILE.read_text()
+    assert "ntfy.sh/" not in text
