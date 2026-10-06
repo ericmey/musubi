@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import os
 import runpy
 import sys
 from collections.abc import Mapping, Sequence
@@ -30,6 +31,14 @@ _EXPORTS = {
     "redaction": ("redact_pii",),
     "slow_thinker": ("SlowThinker",),
 }
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_published_plugin_when_ci_requests_it() -> None:
+    # Local full-suite runs may omit this optional adapter; the compatibility
+    # lane must not turn a missing published artifact into successful skips.
+    if os.environ.get("MUSUBI_REQUIRE_LIVEKIT_COMPAT") == "1":
+        importlib.import_module("musubi_livekit")
 
 
 def _shim_path(module: str) -> Path:
